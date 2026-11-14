@@ -1,0 +1,11 @@
+# Internal planning notes (Spanish, contain personal contact details) - not part of the public submission
+docs/
+
+# Working place files; the final frozen copy is committed as game.rbxl at the repo root
+place/
+*.rbxl.lock
+*.rbxlx.lock
+
+# Tooling output
+sourcemap.json
+.vscode/
