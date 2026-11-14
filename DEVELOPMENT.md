@@ -77,7 +77,7 @@ Tested in Studio:
 - The antenna was aligned with a real key press.
 - A 45 s warning appeared for a replay of the real X5.1 flare of 11 November 2025.
 
-**17:00 – Stage 3: the base reacts and guides.**
+**16:53 – Stage 3: the base reacts and guides.**
 - Power decisions are visible in the world:
   - Greenhouse grow lights (magenta, like real red and blue LEDs) dim or brighten with its cells.
   - The air maker fan and light speed up with life support.
