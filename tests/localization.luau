@@ -111,6 +111,16 @@ local EXPECTED: { [string]: { string } } = {
 	["prompt.repair"] = {},
 	["prompt.antenna"] = {},
 	["prompt.console"] = {},
+	["tip.day1_plan"] = {},
+	["tip.day1_science"] = {},
+	["tip.greenhouse_tomorrow"] = {},
+	["tip.day1_shift"] = {},
+	["tip.find_ice"] = {},
+	["tip.antenna"] = {},
+	["tip.day2_greenhouse"] = {},
+	["tip.storm_follow"] = {},
+	["tip.suit_home"] = {},
+	["marker.task"] = {},
 	["fact.gravity"] = { "percent" },
 	["fact.light_delay"] = { "moon" },
 	["fact.mars_delay"] = { "min", "max" },
@@ -228,7 +238,7 @@ end
 
 -- 3. Every full key quoted in the game source exists (scan src/ for quoted keys). Keys built at
 -- run time from a quoted prefix ending in "." (for example "ui.system." .. name) are skipped.
-local KEY_PREFIXES = { "cause", "error", "event", "carl", "ui", "prompt", "fact", "src" }
+local KEY_PREFIXES = { "cause", "error", "event", "carl", "ui", "prompt", "fact", "src", "tip", "marker" }
 
 local function luauFiles(dir: string, out: { string })
 	if not fs.isDir(dir) then

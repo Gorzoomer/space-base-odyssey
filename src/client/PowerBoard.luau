@@ -3,6 +3,7 @@
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local MissionData = require(Shared:WaitForChild("MissionData"))
@@ -12,19 +13,36 @@ local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
 
 type TextRef = Store.TextRef
-type SystemId = "LifeSupport" | "Greenhouse" | "Science"
+export type SystemId = "LifeSupport" | "Greenhouse" | "Science"
 
 local SYSTEMS: { SystemId } = { "LifeSupport", "Greenhouse", "Science" }
 local START_COOLDOWN = 1
+-- Onboarding guide look (visual tuning only).
+local GUIDE_ICON = "👉"
+local LATER_ICON = "⏳"
+local PULSE_SPEED = 5 -- radians per second
+local STROKE_NORMAL = 3
+local STROKE_PULSE = 6
 
 local PowerBoard = {}
+
+-- Onboarding hook: `highlight` rows pulse with a pointer; `later` rows show the "food comes
+-- tomorrow" hint. Both stay fully usable. nil clears the guide.
+export type Guide = {
+	highlight: { SystemId }?,
+	later: { SystemId }?,
+}
 
 export type PowerBoardView = {
 	setVisible: (visible: boolean) -> (),
 	render: () -> (),
+	setGuide: (guide: Guide?) -> (),
 }
 
 type Row = {
+	frame: Frame,
+	stroke: UIStroke?,
+	pointer: TextLabel,
 	name: TextLabel,
 	hint: TextLabel,
 	slots: { TextLabel },
@@ -193,7 +211,27 @@ function PowerBoard.new(
 			end
 		end)
 
-		rows[system] = { name = name, hint = hint, slots = slots, minus = minus, plus = plus }
+		-- Onboarding pointer, just left of the row (hidden unless the guide highlights this row).
+		local pointer = Ui.icon(rowFrame, GUIDE_ICON, {
+			name = "GuidePointer",
+			size = UDim2.fromScale(0.05, 0.6),
+			position = UDim2.fromScale(-0.055, 0.5),
+			anchor = Vector2.new(0, 0.5),
+			aspect = 1,
+			zindex = 3,
+			visible = false,
+		})
+
+		rows[system] = {
+			frame = rowFrame,
+			stroke = rowFrame:FindFirstChildOfClass("UIStroke"),
+			pointer = pointer,
+			name = name,
+			hint = hint,
+			slots = slots,
+			minus = minus,
+			plus = plus,
+		}
 	end
 
 	-- Power left: cell icons on top, the number once in the text below (no icons when it is 0).
@@ -242,14 +280,79 @@ function PowerBoard.new(
 		Store.send({ type = "StartShift" })
 	end)
 
+	local highlighted: { [SystemId]: boolean } = {}
+	local later: { [SystemId]: boolean } = {}
+	local pulseConnection: RBXScriptConnection? = nil
+
+	local function renderGuide()
+		for _, system in SYSTEMS do
+			local row = rows[system]
+			local on = highlighted[system] == true
+			row.pointer.Visible = on
+			if not on then
+				row.pointer.Position = UDim2.fromScale(-0.055, 0.5)
+				if row.stroke then
+					row.stroke.Color = Ui.COLORS.outline
+					row.stroke.Thickness = STROKE_NORMAL
+				end
+			end
+			if later[system] then
+				row.hint.Text = `{LATER_ICON} {Store.t("tip.greenhouse_tomorrow")}`
+				row.hint.TextColor3 = Ui.COLORS.accent
+			else
+				row.hint.Text = Store.t("ui.system_hint." .. system)
+				row.hint.TextColor3 = Ui.COLORS.textSoft
+			end
+		end
+	end
+
+	local function pulse()
+		local wave = (math.sin(os.clock() * PULSE_SPEED) + 1) / 2
+		for _, system in SYSTEMS do
+			if highlighted[system] then
+				local row = rows[system]
+				if row.stroke then
+					row.stroke.Color = Ui.COLORS.outline:Lerp(Ui.COLORS.accent, 0.4 + 0.6 * wave)
+					row.stroke.Thickness = STROKE_NORMAL + (STROKE_PULSE - STROKE_NORMAL) * wave
+				end
+				row.pointer.Position = UDim2.fromScale(-0.065 + 0.02 * wave, 0.5)
+			end
+		end
+	end
+
+	local function updatePulse()
+		local wanted = screen.Visible and next(highlighted) ~= nil
+		if wanted and not pulseConnection then
+			pulseConnection = RunService.Heartbeat:Connect(pulse)
+		elseif not wanted and pulseConnection then
+			pulseConnection:Disconnect()
+			pulseConnection = nil
+		end
+	end
+
+	local function setGuide(guide: Guide?)
+		table.clear(highlighted)
+		table.clear(later)
+		if guide then
+			for _, system in guide.highlight or {} do
+				highlighted[system] = true
+			end
+			for _, system in guide.later or {} do
+				later[system] = true
+			end
+		end
+		renderGuide()
+		updatePulse()
+	end
+
 	local function render()
 		local snap = Store.getSnapshot()
 		startButton.Text = `{Ui.ICONS.rocket} {Store.t("ui.start_shift")}`
 		for _, system in SYSTEMS do
 			local row = rows[system]
 			row.name.Text = Store.t("ui.system." .. system)
-			row.hint.Text = Store.t("ui.system_hint." .. system)
 		end
+		renderGuide()
 		if not snap then
 			return
 		end
@@ -280,10 +383,11 @@ function PowerBoard.new(
 
 	local function setVisible(visible: boolean)
 		screen.Visible = visible
+		updatePulse()
 	end
 
 	render()
-	return { setVisible = setVisible, render = render }
+	return { setVisible = setVisible, render = render, setGuide = setGuide }
 end
 
 return PowerBoard

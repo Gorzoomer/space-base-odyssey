@@ -9,6 +9,7 @@ local Workspace = game:GetService("Workspace")
 
 export type ArrayRef = { model: Model, panel: BasePart, prompt: ProximityPrompt }
 export type StormStage = "none" | "warning" | "storm"
+export type SystemAllocation = { LifeSupport: number, Greenhouse: number, Science: number }
 
 export type World = {
 	spawn: SpawnLocation,
@@ -20,11 +21,15 @@ export type World = {
 	leak: { part: BasePart, prompt: ProximityPrompt },
 	antenna: { model: Model, dish: BasePart, prompt: ProximityPrompt },
 	console: { part: BasePart, prompt: ProximityPrompt },
+	-- Workspace.Base.Markers: invisible guidance points (see MARKER_NAMES).
+	markers: Folder?,
 	setArrayDusty: (index: number, dusty: boolean) -> (),
 	setLeakActive: (active: boolean) -> (),
 	setAntennaLinked: (linked: boolean) -> (),
 	setStormVisuals: (stage: StormStage) -> (),
 	setShiftPromptsEnabled: (enabled: boolean) -> (),
+	-- Shows today's power plan on the base: greenhouse grow lights, air maker, science rover.
+	setSystemVisuals: (allocation: SystemAllocation) -> (),
 }
 
 type Style = {
@@ -80,6 +85,39 @@ local STORM_RED = Color3.fromRGB(255, 40, 40)
 local LAMP_OFF = Color3.fromRGB(60, 60, 64)
 local ICE_GLOW = Color3.fromRGB(170, 232, 255)
 local MARKER_AMBER = Color3.fromRGB(255, 180, 60)
+-- Real plant LEDs mix red and blue, so they look magenta-pink.
+local GROW_PINK = Color3.fromRGB(255, 80, 205)
+local GROW_DIM = Color3.fromRGB(175, 55, 145)
+local PLANT_GREEN = Color3.fromRGB(78, 188, 88)
+local PLANT_GREY = Color3.fromRGB(124, 140, 116)
+local AIR_OK = Color3.fromRGB(70, 255, 190)
+local AIR_WINDOW_ON = Color3.fromRGB(70, 170, 255)
+local AIR_WINDOW_HIGH = Color3.fromRGB(130, 215, 255)
+local AIR_WINDOW_OFF = Color3.fromRGB(40, 56, 84)
+local INTERIOR_LIGHT = Color3.fromRGB(255, 238, 214)
+
+-- Visual tuning for the system animations (not gameplay numbers). Index = brightness step + 1.
+local GROW_BRIGHTNESS = { 0, 1.2, 2.4 }
+local GROW_RANGE = { 8, 11, 15 }
+local FAN_SPEED_RAD = { 0, 7, 19 }
+local AIR_PULSE_PERIOD = { 0, 2.2, 0.9 }
+local ROVER_SPEED = { 0, 2.5, 5 } -- studs per second along its loop
+local ROVER_LOOP_RADIUS = 11
+local ROVER_RIM_RADIUS = 85 -- middle of the flat rim band (70 to 100)
+local PULSE_UPDATE_SECONDS = 0.05
+
+-- Invisible guidance points in Workspace.Base.Markers (client contract).
+local MARKER_NAMES = table.freeze({
+	"ShelterDoor",
+	"HabitatDoor",
+	"Antenna",
+	"IceSite",
+	"Processor",
+	"Console",
+	"Leak",
+	"Greenhouse",
+	"Arrays",
+})
 
 -- Module state shared between applyEnvironment and build.
 local earthPosition: Vector3? = nil
@@ -213,6 +251,34 @@ local function zone(parent: Instance, name: string, a: Vector3, b: Vector3): Par
 	p.Transparency = 1
 	p.Size = maxV - minV
 	p.CFrame = CFrame.new((minV + maxV) / 2)
+	p.Parent = parent
+	return p
+end
+
+-- Welds parts to an anchored root so moving the root's CFrame moves the whole group (no physics:
+-- the assembly stays anchored, and only the root's CFrame has to replicate).
+local function weldTo(root: BasePart, parts: { BasePart })
+	for _, p in parts do
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = root
+		weld.Part1 = p
+		weld.Parent = p
+		p.Massless = true
+		p.Anchored = false
+	end
+end
+
+local function markerPart(parent: Instance, name: string, position: Vector3): Part
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	p.Transparency = 1
+	p.Size = Vector3.new(1, 1, 1)
+	p.CFrame = CFrame.new(position)
 	p.Parent = parent
 	return p
 end
@@ -392,7 +458,9 @@ function WorldBuilder.applyEnvironment(data: any)
 	Lighting.ClockTime = clock
 	Lighting.Brightness = 3.5
 	Lighting.ExposureCompensation = 0.6
-	Lighting.Ambient = Color3.fromRGB(46, 46, 54)
+	-- Ambient only lights places the sky cannot see (habitat, shelter), so it brightens the rooms
+	-- without washing out the sunlit ground or the shadowed crater floor (OutdoorAmbient).
+	Lighting.Ambient = Color3.fromRGB(64, 64, 74)
 	Lighting.OutdoorAmbient = Color3.fromRGB(78, 78, 88)
 	Lighting.EnvironmentDiffuseScale = 0.3
 	Lighting.EnvironmentSpecularScale = 0.2
@@ -410,6 +478,18 @@ function WorldBuilder.applyEnvironment(data: any)
 		newBloom.Size = 28
 		newBloom.Threshold = 1.5
 		newBloom.Parent = Lighting
+	end
+
+	-- Roblox tints a low Sun orange as if light crossed an atmosphere. The Moon has none: sunlight
+	-- is white and the regolith grey, so desaturate and cool the image slightly.
+	local grade = Lighting:FindFirstChild("SBO_MoonGrade")
+	if not grade then
+		local newGrade = Instance.new("ColorCorrectionEffect")
+		newGrade.Name = "SBO_MoonGrade"
+		newGrade.Saturation = -0.45
+		newGrade.TintColor = Color3.fromRGB(228, 234, 255)
+		newGrade.Contrast = 0.08
+		newGrade.Parent = Lighting
 	end
 
 	local tint = Lighting:FindFirstChild("SBO_StormTint")
@@ -470,8 +550,9 @@ local function buildGround(base: Instance, rng: Random)
 	fillGround(ground, rng, hx1, GROUND_HALF, hz0, hz1)
 end
 
--- Builds the crater pit with its rim, ramp and ice nodes; returns the model and the ice node refs.
-local function buildCrater(base: Instance, rng: Random): (Model, { { part: BasePart, prompt: ProximityPrompt } })
+-- Builds the crater pit with its rim, ramp and ice nodes; returns the model, the ice node refs and
+-- the ramp's angle around the crater.
+local function buildCrater(base: Instance, rng: Random): (Model, { { part: BasePart, prompt: ProximityPrompt } }, number)
 	local crater = model(base, "Crater")
 	local segments = 36
 	local step = math.rad(360 / segments)
@@ -578,7 +659,7 @@ local function buildCrater(base: Instance, rng: Random): (Model, { { part: BaseP
 		table.insert(iceNodes, { part = main :: BasePart, prompt = prompt })
 	end
 
-	return crater, iceNodes
+	return crater, iceNodes, rampAngle
 end
 
 local function buildRidge(base: Instance, rng: Random): Model
@@ -779,6 +860,20 @@ type HabitatRefs = {
 	leakPrompt: ProximityPrompt,
 	leakEmitters: { ParticleEmitter },
 	leakLight: PointLight,
+	lifeSupport: LifeSupportRefs,
+	rackLight: Part,
+	rackPointLight: PointLight,
+	rackPlants: { Part },
+	processorInlet: Part,
+}
+
+type LifeSupportRefs = {
+	window: Part,
+	windowLight: PointLight,
+	status: Part,
+	statusLight: PointLight,
+	fanRoot: Part,
+	fanCFrame: CFrame,
 }
 
 local function buildHabitat(base: Instance): HabitatRefs
@@ -791,7 +886,20 @@ local function buildHabitat(base: Instance): HabitatRefs
 
 	box(hab, "Floor", v(-30, 0, -20), v(30, 0.5, 20), { color = Color3.fromRGB(170, 174, 180), material = Enum.Material.DiamondPlate })
 	windowWall(hab, "WallBack", v(-30, 0, -20), v(30, 18, -18), 4, hull)
-	windowWall(hab, "WallWest", v(-30, 0, -18), v(-28, 18, 18), 3, hull)
+	-- West wall: a glass hatch looks into the greenhouse module next door.
+	windowWall(hab, "WallWestSouth", v(-30, 0, -18), v(-28, 18, -4), 1, hull)
+	windowWall(hab, "WallWestNorth", v(-30, 0, 4), v(-28, 18, 18), 1, hull)
+	box(hab, "WallWestLintel", v(-30, 10, -4), v(-28, 18, 4), hull)
+	box(hab, "GreenhouseHatch", v(-29.3, 0.5, -4), v(-28.7, 10, 4), {
+		color = Color3.fromRGB(205, 236, 232),
+		material = Enum.Material.Glass,
+		transparency = 0.6,
+		shadow = false,
+	})
+	local hatchFrame: Style = { color = Color3.fromRGB(245, 200, 40), material = Enum.Material.SmoothPlastic }
+	box(hab, "HatchFrame", v(-28, 0.5, -4.8), v(-27.4, 10.8, -4), hatchFrame)
+	box(hab, "HatchFrame", v(-28, 0.5, 4), v(-27.4, 10.8, 4.8), hatchFrame)
+	box(hab, "HatchFrame", v(-28, 10, -4), v(-27.4, 10.8, 4), hatchFrame)
 	windowWall(hab, "WallEast", v(28, 0, -18), v(30, 18, 18), 3, hull)
 	windowWall(hab, "WallFrontWest", v(-30, 0, 18), v(-4, 18, 20), 2, hull)
 	windowWall(hab, "WallFrontEast", v(4, 0, 18), v(30, 18, 20), 2, hull)
@@ -828,14 +936,34 @@ local function buildHabitat(base: Instance): HabitatRefs
 	spot.Color = Color3.fromRGB(255, 232, 200)
 	spot.Parent = doorLamp
 
-	-- Ceiling lights.
+	-- Ceiling lights. Players spawn in here, so the room must be bright. Every interior light casts
+	-- shadows, so none of it leaks through the walls onto the ground outside.
 	for _, z in { -8, 8 } do
 		local strip = box(hab, "CeilingLight", v(-20, 17.4, z - 0.5), v(20, 18, z + 0.5), {
 			color = Color3.fromRGB(255, 240, 215),
 			material = Enum.Material.Neon,
 			shadow = false,
 		})
-		pointLight(strip, Color3.fromRGB(255, 236, 210), 40, 1.3, true)
+		pointLight(strip, INTERIOR_LIGHT, 40, 1.6, true)
+		local wash = Instance.new("SurfaceLight")
+		wash.Face = Enum.NormalId.Bottom
+		wash.Angle = 120
+		wash.Range = 20
+		wash.Brightness = 1.4
+		wash.Color = INTERIOR_LIGHT
+		wash.Shadows = true
+		wash.Parent = strip
+	end
+	-- Corner lamps fill the far ends of the room.
+	for _, x in { -24, 24 } do
+		for _, z in { -14, 14 } do
+			local lamp = box(hab, "CornerLamp", v(x - 1, 17.2, z - 1), v(x + 1, 18, z + 1), {
+				color = Color3.fromRGB(255, 240, 215),
+				material = Enum.Material.Neon,
+				shadow = false,
+			})
+			pointLight(lamp, INTERIOR_LIGHT, 20, 1, true)
+		end
 	end
 
 	-- Power board console.
@@ -852,11 +980,39 @@ local function buildHabitat(base: Instance): HabitatRefs
 	-- Water processor: melts ice and splits water into oxygen with electricity.
 	box(hab, "ProcessorBase", v(14, 0.5, -17), v(22, 1.5, -10), { color = DARK_METAL, material = Enum.Material.Metal })
 	vcylinder(hab, "ProcessorTank", 8, 5, v(18, 5.5, -14), { color = Color3.fromRGB(200, 205, 212), material = Enum.Material.Metal })
-	box(hab, "ProcessorWindow", v(17.2, 3.2, -11.6), v(18.8, 7.8, -11.3), {
-		color = Color3.fromRGB(70, 170, 255),
+	local processorWindow = box(hab, "ProcessorWindow", v(17.2, 3.2, -11.6), v(18.8, 7.8, -11.3), {
+		color = AIR_WINDOW_ON,
 		material = Enum.Material.Neon,
 		shadow = false,
 	})
+	local processorGlow = pointLight(processorWindow, AIR_WINDOW_ON, 12, 1, false)
+
+	-- Air maker beside it: electricity splits water into oxygen. Its fan and status light show
+	-- how much power life support gets today.
+	box(hab, "AirMaker", v(9.5, 0.5, -17), v(13.5, 7, -13), { color = Color3.fromRGB(214, 218, 224), material = Enum.Material.SmoothPlastic })
+	local towardRoom = CFrame.Angles(0, math.rad(90), 0) -- cylinder axis along world Z
+	cylinder(hab, "FanHousing", 0.2, 3.4, CFrame.new(v(11.5, 4, -12.9)) * towardRoom, {
+		color = DARK_METAL,
+		material = Enum.Material.Metal,
+	})
+	local fanCFrame = CFrame.new(v(11.5, 4, -12.65))
+	local bladeStyle: Style = { color = Color3.fromRGB(200, 204, 210), material = Enum.Material.Metal, collide = false, shadow = false }
+	local fanRoot = part(hab, "FanBlades", Vector3.new(0.45, 3, 0.1), fanCFrame, bladeStyle)
+	local fanCross = part(hab, "FanBlades", Vector3.new(3, 0.45, 0.1), fanCFrame, bladeStyle)
+	local fanHub = cylinder(hab, "FanHub", 0.3, 0.8, fanCFrame * CFrame.new(0, 0, 0.1) * towardRoom, {
+		color = HULL_TRIM,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+		shadow = false,
+	})
+	weldTo(fanRoot, { fanCross, fanHub })
+	local airStatus = ball(hab, "AirStatusLight", 1, v(11.5, 7.5, -15), {
+		color = AIR_OK,
+		material = Enum.Material.Neon,
+		shadow = false,
+	})
+	local airStatusLight = pointLight(airStatus, AIR_OK, 10, 1.5, false)
+	cylinder(hab, "AirMakerPipe", 2.6, 0.6, CFrame.new(v(14.6, 5.8, -15)), { color = METAL, material = Enum.Material.Metal })
 	zcylinder(hab, "ProcessorPipe", 5, 0.8, v(18, 9.2, -16.5), { color = METAL, material = Enum.Material.Metal })
 	local inlet = box(hab, "ProcessorInlet", v(16.5, 1.5, -11), v(19.5, 4, -9.4), {
 		color = HULL_TRIM,
@@ -866,19 +1022,23 @@ local function buildHabitat(base: Instance): HabitatRefs
 
 	-- Greenhouse rack under a grow light.
 	box(hab, "PlantRack", v(-7, 0.5, -17.8), v(7, 3, -15), { color = Color3.fromRGB(235, 235, 240), material = Enum.Material.SmoothPlastic })
+	local rackPlants: { Part } = {}
 	for i = 0, 3 do
 		local x = -5.5 + i * 3.7
-		box(hab, "Plant", v(x - 1.2, 3, -17.3), v(x + 1.2, 4.6, -15.5), {
-			color = Color3.fromRGB(80, 190, 90),
-			material = Enum.Material.Grass,
-		})
+		table.insert(
+			rackPlants,
+			box(hab, "Plant", v(x - 1.2, 3, -17.3), v(x + 1.2, 4.6, -15.5), {
+				color = PLANT_GREEN,
+				material = Enum.Material.Grass,
+			})
+		)
 	end
 	local grow = box(hab, "GrowLight", v(-7, 7.5, -17.4), v(7, 7.9, -15.4), {
-		color = Color3.fromRGB(255, 110, 220),
+		color = GROW_PINK,
 		material = Enum.Material.Neon,
 		shadow = false,
 	})
-	pointLight(grow, Color3.fromRGB(255, 120, 220), 10, 1, false)
+	local growPoint = pointLight(grow, GROW_PINK, 10, 1, false)
 
 	-- Crew table.
 	box(hab, "TableLeg", v(-1, 0.5, -5), v(1, 3, -3), { color = METAL, material = Enum.Material.Metal })
@@ -942,7 +1102,221 @@ local function buildHabitat(base: Instance): HabitatRefs
 		leakPrompt = leakPrompt,
 		leakEmitters = { gas, sparks },
 		leakLight = leakLight,
+		lifeSupport = {
+			window = processorWindow,
+			windowLight = processorGlow,
+			status = airStatus,
+			statusLight = airStatusLight,
+			fanRoot = fanRoot,
+			fanCFrame = fanCFrame,
+		},
+		rackLight = grow,
+		rackPointLight = growPoint,
+		rackPlants = rackPlants,
+		processorInlet = inlet,
 	}
+end
+
+------------------------------------------------------------------------------------------------
+-- Greenhouse module (glass, attached to the habitat's west wall)
+------------------------------------------------------------------------------------------------
+
+type GreenhouseRefs = { strips: { Part }, stripLights: { PointLight }, plants: { Part }, centre: Vector3 }
+
+local GREENHOUSE_GLASS: Style = {
+	color = Color3.fromRGB(205, 236, 232),
+	material = Enum.Material.Glass,
+	transparency = 0.62,
+	shadow = false,
+}
+
+local function buildGreenhouse(base: Instance): GreenhouseRefs
+	local gh = model(base, "Greenhouse")
+	local o = HABITAT_CENTRE
+	local function v(x: number, y: number, z: number): Vector3
+		return o + Vector3.new(x, y, z)
+	end
+	-- Own random stream so the rest of the base keeps its layout.
+	local rng = Random.new(2015)
+	local x0, x1 = -44, -30 -- x1 is the habitat's outer west wall
+	local z0, z1 = -12, 12
+	local eaveY, ridgeY = 9, 12.5
+	local ridgeX = (x0 + x1) / 2
+	local halfSpan = (x1 - x0) / 2
+	local rise = ridgeY - eaveY
+	local hull: Style = { color = WHITE_HULL, material = Enum.Material.SmoothPlastic }
+	local frame: Style = { color = METAL, material = Enum.Material.Metal }
+
+	box(gh, "Floor", v(x0, 0, z0), v(x1, 0.5, z1), { color = Color3.fromRGB(176, 180, 186), material = Enum.Material.DiamondPlate })
+	box(gh, "KerbWest", v(x0, 0.5, z0), v(x0 + 0.6, 2, z1), hull)
+	box(gh, "KerbSouth", v(x0 + 0.6, 0.5, z0), v(x1, 2, z0 + 0.6), hull)
+	box(gh, "KerbNorth", v(x0 + 0.6, 0.5, z1 - 0.6), v(x1, 2, z1), hull)
+	box(gh, "GlassWest", v(x0 + 0.1, 2, z0 + 0.6), v(x0 + 0.5, eaveY, z1 - 0.6), GREENHOUSE_GLASS)
+	box(gh, "GlassSouth", v(x0 + 0.6, 2, z0 + 0.1), v(x1, eaveY, z0 + 0.5), GREENHOUSE_GLASS)
+	box(gh, "GlassNorth", v(x0 + 0.6, 2, z1 - 0.5), v(x1, eaveY, z1 - 0.1), GREENHOUSE_GLASS)
+
+	local posts = {
+		Vector2.new(x0 + 0.3, z0 + 0.3),
+		Vector2.new(x0 + 0.3, z1 - 0.3),
+		Vector2.new(x0 + 0.3, -6),
+		Vector2.new(x0 + 0.3, 0),
+		Vector2.new(x0 + 0.3, 6),
+		Vector2.new(ridgeX, z0 + 0.3),
+		Vector2.new(ridgeX, z1 - 0.3),
+	}
+	for _, post in posts do
+		box(gh, "Post", v(post.X - 0.3, 0.5, post.Y - 0.3), v(post.X + 0.3, eaveY, post.Y + 0.3), frame)
+	end
+	box(gh, "Eave", v(x0, eaveY - 0.3, z0), v(x0 + 0.8, eaveY + 0.3, z1), frame)
+	box(gh, "WallTop", v(x0, eaveY - 0.3, z0), v(x1, eaveY + 0.3, z0 + 0.6), frame)
+	box(gh, "WallTop", v(x0, eaveY - 0.3, z1 - 0.6), v(x1, eaveY + 0.3, z1), frame)
+	box(gh, "RidgeBeam", v(ridgeX - 0.3, ridgeY - 0.2, z0), v(ridgeX + 0.3, ridgeY + 0.3, z1), frame)
+
+	-- Pitched glass roof and its two triangular gable ends.
+	local slopeLength = math.sqrt(halfSpan * halfSpan + rise * rise)
+	local tilt = math.atan2(rise, halfSpan)
+	local roofSize = Vector3.new(slopeLength, 0.3, z1 - z0)
+	part(gh, "RoofWest", roofSize, CFrame.new(v(x0 + halfSpan / 2, eaveY + rise / 2, 0)) * CFrame.Angles(0, 0, tilt), GREENHOUSE_GLASS)
+	part(gh, "RoofEast", roofSize, CFrame.new(v(x1 - halfSpan / 2, eaveY + rise / 2, 0)) * CFrame.Angles(0, 0, -tilt), GREENHOUSE_GLASS)
+	for _, gz in { z0 + 0.15, z1 - 0.15 } do
+		local westPos = v(x0 + halfSpan / 2, eaveY + rise / 2, gz)
+		wedge(gh, "Gable", Vector3.new(0.3, rise, halfSpan), CFrame.lookAt(westPos, westPos - Vector3.xAxis), GREENHOUSE_GLASS)
+		local eastPos = v(x1 - halfSpan / 2, eaveY + rise / 2, gz)
+		wedge(gh, "Gable", Vector3.new(0.3, rise, halfSpan), CFrame.lookAt(eastPos, eastPos + Vector3.xAxis), GREENHOUSE_GLASS)
+	end
+
+	-- Three planter rows, each under a hanging grow light.
+	local strips: { Part } = {}
+	local stripLights: { PointLight } = {}
+	local plants: { Part } = {}
+	local function roofHeightAt(x: number): number
+		return eaveY + rise * (1 - math.abs(x - ridgeX) / halfSpan)
+	end
+	for _, bx in { x0 + 3.2, ridgeX, x1 - 3.2 } do
+		box(gh, "Planter", v(bx - 1.3, 0.5, -10), v(bx + 1.3, 1.6, 10), {
+			color = Color3.fromRGB(236, 236, 240),
+			material = Enum.Material.SmoothPlastic,
+		})
+		box(gh, "Soil", v(bx - 1.1, 1.6, -9.8), v(bx + 1.1, 1.8, 9.8), {
+			color = Color3.fromRGB(92, 70, 52),
+			material = Enum.Material.Ground,
+		})
+		for i = 0, 5 do
+			local d = rng:NextNumber(1.5, 1.95)
+			local pz = -8.4 + i * 3.36 + rng:NextNumber(-0.3, 0.3)
+			table.insert(
+				plants,
+				ball(gh, "Plant", d, v(bx + rng:NextNumber(-0.2, 0.2), 1.8 + d * 0.32, pz), {
+					color = PLANT_GREEN,
+					material = Enum.Material.Grass,
+					collide = false,
+				})
+			)
+		end
+		local stripY = 7.6
+		local strip = box(gh, "GrowLight", v(bx - 0.35, stripY, -9.5), v(bx + 0.35, stripY + 0.3, 9.5), {
+			color = GROW_PINK,
+			material = Enum.Material.Neon,
+			collide = false,
+			shadow = false,
+		})
+		table.insert(strips, strip)
+		table.insert(stripLights, pointLight(strip, GROW_PINK, GROW_RANGE[3], GROW_BRIGHTNESS[3], false))
+		local top = roofHeightAt(bx) - 0.1
+		for _, hz in { -6, 6 } do
+			box(gh, "Hanger", v(bx - 0.05, stripY + 0.3, hz - 0.05), v(bx + 0.05, top, hz + 0.05), {
+				color = DARK_METAL,
+				material = Enum.Material.Metal,
+				collide = false,
+				shadow = false,
+			})
+		end
+	end
+
+	return { strips = strips, stripLights = stripLights, plants = plants, centre = v(ridgeX, 3, 0) }
+end
+
+------------------------------------------------------------------------------------------------
+-- Science rover (drives a loop on the crater rim while Science has power)
+------------------------------------------------------------------------------------------------
+
+type RoverRefs = {
+	root: Part,
+	centre: Vector3,
+	headlights: { Part },
+	spot: SpotLight,
+	beacon: Part,
+	startAngle: number,
+}
+
+local ROVER_RIDE_HEIGHT = 1.5 -- body centre above the ground (wheel radius plus half the body)
+
+local function angleGap(a: number, b: number): number
+	local d = (a - b) % (2 * math.pi)
+	return math.min(d, 2 * math.pi - d)
+end
+
+-- Where the rover is on its loop at `angle`, facing along the loop.
+local function roverPose(centre: Vector3, angle: number): CFrame
+	local position = centre + Vector3.new(math.sin(angle), 0, math.cos(angle)) * ROVER_LOOP_RADIUS
+	local tangent = Vector3.new(math.cos(angle), 0, -math.sin(angle))
+	return CFrame.lookAt(position, position + tangent)
+end
+
+local function buildRover(base: Instance, rampAngle: number): RoverRefs
+	local rover = model(base, "ScienceRover")
+	-- On the flat rim band, on the base's side of the crater, away from the ramp so it never sits
+	-- on the way down to the ice.
+	local sideA, sideB = math.pi - 0.6, math.pi + 0.6
+	local side = if angleGap(sideA, rampAngle) >= angleGap(sideB, rampAngle) then sideA else sideB
+	local centre = CRATER_CENTRE + dirFromAngle(side) * ROVER_RIM_RADIUS + Vector3.new(0, CRATER_RIM_Y + ROVER_RIDE_HEIGHT, 0)
+	local startAngle = side -- the point of the loop nearest the crater's outer edge
+	local cf = roverPose(centre, startAngle)
+
+	local function style(color: Color3, material: Enum.Material): Style
+		return { color = color, material = material, collide = false }
+	end
+	local root = part(rover, "Body", Vector3.new(3.4, 1, 5.4), cf, style(WHITE_HULL, Enum.Material.SmoothPlastic))
+	local attached: { BasePart } = {}
+	local function add(p: BasePart)
+		table.insert(attached, p)
+	end
+	local wheelStyle = style(Color3.fromRGB(44, 46, 52), Enum.Material.Rubber)
+	for _, wx in { -2.05, 2.05 } do
+		for _, wz in { -2, 0, 2 } do
+			add(cylinder(rover, "Wheel", 0.6, 1.5, cf * CFrame.new(wx, -0.75, wz), wheelStyle))
+		end
+		add(part(rover, "Bogie", Vector3.new(0.2, 0.2, 5.2), cf * CFrame.new(wx * 0.85, -0.35, 0), style(DARK_METAL, Enum.Material.Metal)))
+	end
+	add(part(rover, "SolarDeck", Vector3.new(3.8, 0.15, 4.2), cf * CFrame.new(0, 0.6, 0.5), {
+		color = PANEL_CLEAN,
+		material = Enum.Material.Glass,
+		reflectance = 0.1,
+		collide = false,
+	}))
+	add(part(rover, "Trim", Vector3.new(3.5, 0.3, 0.3), cf * CFrame.new(0, 0.2, -2.75), style(HULL_TRIM, Enum.Material.SmoothPlastic)))
+	add(part(rover, "Mast", Vector3.new(0.3, 2.2, 0.3), cf * CFrame.new(0, 1.7, -1.9), style(METAL, Enum.Material.Metal)))
+	add(part(rover, "CameraHead", Vector3.new(1.3, 0.6, 0.7), cf * CFrame.new(0, 3, -1.9), style(WHITE_HULL, Enum.Material.SmoothPlastic)))
+	local beacon = ball(rover, "Beacon", 0.4, (cf * CFrame.new(0, 3.5, -1.9)).Position, style(LAMP_OFF, Enum.Material.SmoothPlastic))
+	add(beacon)
+	local headlights: { Part } = {}
+	for _, hx in { -1, 1 } do
+		local lamp = part(rover, "Headlight", Vector3.new(0.6, 0.35, 0.1), cf * CFrame.new(hx, 0, -2.75), style(LAMP_OFF, Enum.Material.SmoothPlastic))
+		add(lamp)
+		table.insert(headlights, lamp)
+	end
+	local spot = Instance.new("SpotLight")
+	spot.Face = Enum.NormalId.Front
+	spot.Range = 18
+	spot.Angle = 70
+	spot.Brightness = 2
+	spot.Color = Color3.fromRGB(255, 240, 215)
+	spot.Shadows = false
+	spot.Enabled = false
+	spot.Parent = root
+	weldTo(root, attached)
+
+	return { root = root, centre = centre, headlights = headlights, spot = spot, beacon = beacon, startAngle = startAngle }
 end
 
 ------------------------------------------------------------------------------------------------
@@ -1184,11 +1558,32 @@ function WorldBuilder.build(data: any): World
 	buildGround(base, rng)
 	local habitat = buildHabitat(base)
 	local shelter = buildShelter(base)
-	local _, iceNodes = buildCrater(base, rng)
+	local _, iceNodes, rampAngle = buildCrater(base, rng)
 	buildRidge(base, rng)
 	local arrays, arrayVisuals = buildArrays(base, data)
 	local antenna = buildAntenna(base)
 	buildDecor(base, rng)
+	local greenhouse = buildGreenhouse(base)
+	local rover = buildRover(base, rampAngle)
+
+	-- Guidance markers for the client (C.A.R.L.'s beam, task arrows, tips).
+	local markers = Instance.new("Folder")
+	markers.Name = "Markers"
+	local markerPositions: { [string]: Vector3 } = {
+		ShelterDoor = SHELTER_CENTRE + Vector3.new(0, 3, 33), -- tunnel mouth is at +30
+		HabitatDoor = HABITAT_CENTRE + Vector3.new(0, 3, 23),
+		Antenna = ANTENNA_BASE + Vector3.new(0, 1, 0),
+		IceSite = CRATER_CENTRE + Vector3.new(0, CRATER_FLOOR_Y + 1, 0),
+		Processor = habitat.processorInlet.Position + Vector3.new(0, 0, 1.5),
+		Console = habitat.console.Position + Vector3.new(0, 0, 3),
+		Leak = habitat.leakPart.Position + Vector3.new(2, 0, 0),
+		Greenhouse = greenhouse.centre,
+		Arrays = Vector3.new(RIDGE_CENTRE.X, RIDGE_TOP_Y + 1, RIDGE_CENTRE.Z),
+	}
+	for _, name in MARKER_NAMES do
+		markerPart(markers, name, markerPositions[name])
+	end
+	markers.Parent = base
 
 	-- Live state behind the setters.
 	local shiftEnabled = false
@@ -1323,7 +1718,103 @@ function WorldBuilder.build(data: any): World
 		refreshPrompts()
 	end
 
+	-- Today's power plan, shown on the base. Each system gets a step: 0 (off), 1 or 2.
+	local maxCells: number = math.max(1, (data.POWER and data.POWER.MAX_CELLS_PER_SYSTEM) or 2)
+	local growStrips = table.clone(greenhouse.strips)
+	table.insert(growStrips, habitat.rackLight)
+	local growLights = table.clone(greenhouse.stripLights)
+	table.insert(growLights, habitat.rackPointLight)
+	local plants = table.clone(greenhouse.plants)
+	for _, plant in habitat.rackPlants do
+		table.insert(plants, plant)
+	end
+	local life = habitat.lifeSupport
+	local lifeStep = 0
+	local scienceStep = 0
+
+	local function stepOf(allocation: any, key: string): number
+		local value = if type(allocation) == "table" then allocation[key] else nil
+		if type(value) ~= "number" or value ~= value or value <= 0 then
+			return 0
+		end
+		return math.clamp(math.ceil(value / maxCells * 2), 1, 2)
+	end
+
+	local function setSystemVisuals(allocation: SystemAllocation)
+		local grow = stepOf(allocation, "Greenhouse")
+		lifeStep = stepOf(allocation, "LifeSupport")
+		scienceStep = stepOf(allocation, "Science")
+
+		-- Greenhouse: grow lights at 0, 1 or 2 steps; plants look tired without light.
+		for _, strip in growStrips do
+			strip.Material = if grow > 0 then Enum.Material.Neon else Enum.Material.SmoothPlastic
+			strip.Color = if grow >= 2 then GROW_PINK elseif grow == 1 then GROW_DIM else LAMP_OFF
+		end
+		for _, light in growLights do
+			light.Enabled = grow > 0
+			light.Brightness = GROW_BRIGHTNESS[grow + 1]
+			light.Range = GROW_RANGE[grow + 1]
+		end
+		for _, plant in plants do
+			plant.Color = if grow > 0 then PLANT_GREEN else PLANT_GREY
+		end
+
+		-- Life support: the processor glows and the air maker's light turns red without power.
+		life.window.Material = if lifeStep > 0 then Enum.Material.Neon else Enum.Material.SmoothPlastic
+		life.window.Color = if lifeStep >= 2 then AIR_WINDOW_HIGH elseif lifeStep == 1 then AIR_WINDOW_ON else AIR_WINDOW_OFF
+		life.windowLight.Enabled = lifeStep > 0
+		life.windowLight.Brightness = lifeStep
+		local statusColour = if lifeStep > 0 then AIR_OK else STORM_RED
+		life.status.Color = statusColour
+		life.status.Transparency = 0
+		life.statusLight.Color = statusColour
+		life.statusLight.Brightness = 1.5
+
+		-- Science: the rover drives with its lights on, or parks dark.
+		local driving = scienceStep > 0
+		for _, lamp in rover.headlights do
+			lamp.Material = if driving then Enum.Material.Neon else Enum.Material.SmoothPlastic
+			lamp.Color = if driving then Color3.fromRGB(255, 240, 215) else LAMP_OFF
+		end
+		rover.spot.Enabled = driving
+		rover.beacon.Material = if driving then Enum.Material.Neon else Enum.Material.SmoothPlastic
+		rover.beacon.Color = if driving then HULL_TRIM else LAMP_OFF
+	end
+
+	-- One cheap Heartbeat drives every system animation; it stops when the base is rebuilt.
+	local fanAngle = 0
+	local roverAngle = rover.startAngle
+	local pulseClock = 0
+	local pulseAccumulator = 0
+	local animation: RBXScriptConnection? = nil
+	animation = RunService.Heartbeat:Connect(function(rawDt: number)
+		if base.Parent == nil then
+			if animation then
+				animation:Disconnect()
+			end
+			return
+		end
+		local dt = math.min(rawDt, 0.1)
+		if lifeStep > 0 then
+			fanAngle = (fanAngle + FAN_SPEED_RAD[lifeStep + 1] * dt) % (2 * math.pi)
+			life.fanRoot.CFrame = life.fanCFrame * CFrame.Angles(0, 0, fanAngle)
+			pulseClock += dt
+			pulseAccumulator += dt
+			if pulseAccumulator >= PULSE_UPDATE_SECONDS then
+				pulseAccumulator = 0
+				local wave = 0.5 + 0.5 * math.sin(pulseClock * 2 * math.pi / AIR_PULSE_PERIOD[lifeStep + 1])
+				life.statusLight.Brightness = 0.6 + 1.6 * wave
+				life.status.Transparency = 0.35 * (1 - wave)
+			end
+		end
+		if scienceStep > 0 then
+			roverAngle = (roverAngle + ROVER_SPEED[scienceStep + 1] / ROVER_LOOP_RADIUS * dt) % (2 * math.pi)
+			rover.root.CFrame = roverPose(rover.centre, roverAngle)
+		end
+	end)
+
 	refreshPrompts()
+	setSystemVisuals({ LifeSupport = 0, Greenhouse = 0, Science = 0 })
 
 	return {
 		spawn = habitat.spawn,
@@ -1335,11 +1826,13 @@ function WorldBuilder.build(data: any): World
 		leak = { part = habitat.leakPart :: BasePart, prompt = habitat.leakPrompt },
 		antenna = { model = antenna.model, dish = antenna.dish :: BasePart, prompt = antenna.prompt },
 		console = { part = habitat.console :: BasePart, prompt = habitat.consolePrompt },
+		markers = markers,
 		setArrayDusty = setArrayDusty,
 		setLeakActive = setLeakActive,
 		setAntennaLinked = setAntennaLinked,
 		setStormVisuals = setStormVisuals,
 		setShiftPromptsEnabled = setShiftPromptsEnabled,
+		setSystemVisuals = setSystemVisuals,
 	}
 end
 

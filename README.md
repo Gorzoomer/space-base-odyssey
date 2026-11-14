@@ -47,7 +47,7 @@ Every number and its source is listed in [DATA_SOURCES.md](DATA_SOURCES.md).
 - [x] Project setup, verified data sources
 - [x] Stage 1: playable mission loop on the Moon
 - [x] Stage 2: live NASA data, real-data screen, Earth link
-- [ ] Stage 3: base reacts to decisions, guided first days, C.A.R.L. drone (in progress)
+- [x] Stage 3: base reacts to decisions, guided first days, task markers, C.A.R.L. drone
 - [ ] Playtests with people outside the team
 - [ ] Public release
 

@@ -1,5 +1,7 @@
 --!strict
 -- Space Base Odyssey - C.A.R.L. assistant speech bubble: shows server and local TextRefs for a few seconds.
+-- Two queues: messages (server events, errors) come first; onboarding tips wait until no message is
+-- pending, always get the full time on screen, and are dropped if their phase has passed.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Store = require(script.Parent.Store)
@@ -10,11 +12,14 @@ type TextRef = Store.TextRef
 local SHOW_SECONDS = 5
 local SHOW_SECONDS_BUSY = 2.5 -- shorter when more messages are waiting
 local MAX_QUEUE = 4
+local MAX_TIPS = 6
 
 local Messages = {}
 
 export type MessagesView = {
 	show: (ref: TextRef) -> (),
+	-- Low-priority tip; `phase` (optional) drops it if that phase is over before it can be shown.
+	showTip: (ref: TextRef, phase: string?) -> (),
 	render: () -> (),
 	setPhase: (phase: string) -> (), -- moves the bubble where it hides the least for that screen
 }
@@ -88,7 +93,11 @@ function Messages.new(root: Frame): MessagesView
 	})
 
 	local queue: { TextRef } = {}
+	local tips: { { ref: TextRef, phase: string? } } = {}
 	local current: TextRef? = nil
+	local currentIsTip = false
+	local currentTipPhase: string? = nil
+	local currentSince = 0
 	local token = 0
 
 	local function render()
@@ -102,10 +111,21 @@ function Messages.new(root: Frame): MessagesView
 		token += 1
 		local myToken = token
 		current = table.remove(queue, 1)
+		currentIsTip = false
+		currentTipPhase = nil
+		while current == nil and #tips > 0 do
+			local tip = table.remove(tips, 1)
+			if tip and (tip.phase == nil or tip.phase == Store.phase()) then
+				current = tip.ref
+				currentIsTip = true
+				currentTipPhase = tip.phase
+			end
+		end
 		if not current then
 			bubble.Visible = false
 			return
 		end
+		currentSince = os.clock()
 		render()
 		bubble.Visible = true
 		local seconds = if #queue > 0 then SHOW_SECONDS_BUSY else SHOW_SECONDS
@@ -132,6 +152,25 @@ function Messages.new(root: Frame): MessagesView
 		end
 		if not current then
 			showNext()
+		elseif currentIsTip and current then
+			-- A real event beats a tip. A tip cut short comes back later; one mostly read does not.
+			if os.clock() - currentSince < SHOW_SECONDS_BUSY then
+				table.insert(tips, 1, { ref = current, phase = currentTipPhase })
+			end
+			showNext()
+		end
+	end
+
+	local function showTip(ref: TextRef, phase: string?)
+		if type(ref) ~= "table" or type(ref.key) ~= "string" then
+			return
+		end
+		table.insert(tips, { ref = ref, phase = phase })
+		while #tips > MAX_TIPS do
+			table.remove(tips, 1)
+		end
+		if not current then
+			showNext()
 		end
 	end
 
@@ -149,7 +188,7 @@ function Messages.new(root: Frame): MessagesView
 	end
 
 	render()
-	return { show = show, render = render, setPhase = setPhase }
+	return { show = show, showTip = showTip, render = render, setPhase = setPhase }
 end
 
 return Messages

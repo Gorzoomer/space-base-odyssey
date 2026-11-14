@@ -15,6 +15,7 @@ export type Action = Types.Action
 export type LiveWeather = Types.LiveWeather
 export type Language = "en" | "es"
 export type ChangeKind = "snapshot" | "stats" | "language"
+export type StormStage = "none" | "warning" | "storm"
 
 local Store = {}
 
@@ -80,6 +81,39 @@ end
 
 function Store.phase(): string
 	return if snapshot then snapshot.phase else "Briefing"
+end
+
+-- Storm stage of the current shift, from server time: "warning" between the flare and the arrival
+-- of particles, "storm" while particles are here. A false-alarm flare never reaches "storm".
+function Store.stormStage(): StormStage
+	local snap = snapshot
+	if not snap or snap.phase ~= "Shift" or not snap.shift then
+		return "none"
+	end
+	local shift = snap.shift
+	local now = workspace:GetServerTimeNow()
+	local warningAt = shift.stormWarningAt
+	local arrivesAt = shift.stormArrivesAt
+	local endsAt = shift.stormEndsAt
+	if warningAt ~= nil and arrivesAt ~= nil and now >= warningAt and now < arrivesAt then
+		return "warning"
+	end
+	local particlesExpected = not (snap.spaceWeather ~= nil and snap.spaceWeather.particles == false)
+	if particlesExpected and arrivesAt ~= nil and endsAt ~= nil and now >= arrivesAt and now < endsAt then
+		return "storm"
+	end
+	return "none"
+end
+
+-- A guidance marker Part built by the server in Workspace.Base.Markers (nil until it exists).
+function Store.findMarker(name: string): BasePart?
+	local base = workspace:FindFirstChild("Base")
+	local folder = if base then base:FindFirstChild("Markers") else nil
+	local marker = if folder then folder:FindFirstChild(name) else nil
+	if marker and marker:IsA("BasePart") then
+		return marker
+	end
+	return nil
 end
 
 return Store

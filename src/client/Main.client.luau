@@ -22,6 +22,10 @@ local Report = require(Client:WaitForChild("Report"))
 local Sprint = require(Client:WaitForChild("Sprint"))
 local Prompts = require(Client:WaitForChild("Prompts"))
 local Sources = require(Client:WaitForChild("Sources"))
+local Markers = require(Client:WaitForChild("Markers"))
+local CarlDrone = require(Client:WaitForChild("CarlDrone"))
+local Onboarding = require(Client:WaitForChild("Onboarding"))
+local DemoKeys = require(Client:WaitForChild("DemoKeys"))
 
 print(`[SpaceBaseOdyssey] client started, build {Version.BUILD}`)
 
@@ -112,6 +116,15 @@ end)
 showPhase("Briefing")
 renderAll()
 Prompts.start()
+-- Guidance: task markers, the C.A.R.L. drone and the first-days tips follow the Store by themselves.
+Markers.start()
+CarlDrone.start()
+Onboarding.start({
+	show = messages.show,
+	showTip = messages.showTip,
+	setGuide = powerBoard.setGuide,
+})
+DemoKeys.start()
 
 -- Countdowns use server time, refreshed a few times per second.
 local sinceTick = 0

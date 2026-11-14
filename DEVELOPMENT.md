@@ -77,11 +77,23 @@ Tested in Studio:
 - The antenna was aligned with a real key press.
 - A 45 s warning appeared for a replay of the real X5.1 flare of 11 November 2025.
 
-**About 16:40 – Stage 3 in progress.**
-- The base reacts visibly to power decisions: greenhouse lights, air maker, rover.
-- Guided first two days.
-- Task markers.
-- The C.A.R.L. drone, which points to the shelter during storms.
+**17:00 – Stage 3: the base reacts and guides.**
+- Power decisions are visible in the world:
+  - Greenhouse grow lights (magenta, like real red and blue LEDs) dim or brighten with its cells.
+  - The air maker fan and light speed up with life support.
+  - A six-wheeled rover drives the crater rim only while science has power.
+- Guided first two days: the power board points at the systems to try first, and the greenhouse is introduced on day 2 ("plants feed you tomorrow").
+- Floating markers show every active task during a shift.
+- The C.A.R.L. drone follows the astronaut. Its core turns yellow for urgent tasks and purple during storms, and a beam points to the shelter.
+- A colour grade keeps the low Sun white and the regolith grey, because the Moon has no atmosphere to tint sunlight orange.
+- F8 and F9 shortcuts (Studio only) force a storm or end a shift for recording the demo.
+
+Tested in Studio:
+- The guided highlights.
+- Task markers on the antenna, a dusty panel and the ice nodes.
+- The greenhouse lights.
+- F9 and F8 by key press.
+- A 15 s storm warning without the antenna, with the drone beam to the shelter and the replay label for the real X3.9 flare of 10 May 2024.
 
 ## Decisions
 

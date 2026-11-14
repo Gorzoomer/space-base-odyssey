@@ -90,6 +90,7 @@ local dusty: { boolean } = {}
 local iceUsed: { boolean } = {}
 local iceTransparency: { number } = {}
 local applied: { dusty: { [number]: boolean }, leak: boolean?, linked: boolean?, storm: string? } = { dusty = {} }
+local appliedAllocation: Simulation.Allocation? = nil -- last plan shown on the base (setSystemVisuals)
 
 local actionWindows: { [Player]: { start: number, count: number } } = {}
 
@@ -220,6 +221,27 @@ end
 ----------------------------------------------------------------------------------------------------
 -- World sync
 
+-- Shows today's power plan on the base (grow lights, air maker, rover). Only calls the world when
+-- the plan changed, unless `force` (a mission starts or a day begins).
+local function syncSystemVisuals(force: boolean?)
+	if world == nil then
+		return
+	end
+	local a = state.allocation
+	local last = appliedAllocation
+	if
+		not force
+		and last ~= nil
+		and last.LifeSupport == a.LifeSupport
+		and last.Greenhouse == a.Greenhouse
+		and last.Science == a.Science
+	then
+		return
+	end
+	appliedAllocation = table.clone(a)
+	worldCall("setSystemVisuals", table.clone(a))
+end
+
 -- Keeps the dusty-array flags in line with Simulation's clean array count.
 local function reconcileDust()
 	local wanted = MissionData.POWER.ARRAYS - state.cleanArrays
@@ -300,6 +322,7 @@ local function refreshWorld()
 		applied.storm = storm
 		worldCall("setStormVisuals", storm)
 	end
+	syncSystemVisuals()
 
 	local inShift = phase == "Shift" and shift ~= nil
 	worldCall("setShiftPromptsEnabled", inShift)
@@ -347,12 +370,14 @@ local function resetMission(seed: number)
 	dayStartBackup = nil
 	table.clear(dusty)
 	reconcileDust()
+	syncSystemVisuals(true)
 end
 
 local function beginNextDay()
 	dayStartBackup = deepCopy(state)
 	Simulation.beginDay(state, MissionData)
 	reconcileDust()
+	syncSystemVisuals(true)
 end
 
 local function planningHintKey(): string
@@ -714,6 +739,7 @@ local function debugForceEvent(event: EventId)
 		state.schedule[backup.day + 1] = event
 		Simulation.beginDay(state, MissionData)
 		reconcileDust()
+		syncSystemVisuals(true)
 		enterPlanning()
 		say(planningHintKey())
 		refreshWorld()
@@ -778,6 +804,7 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 		end
 		local ok, errorKey = Simulation.setAllocation(state, MissionData, system :: SystemId, cells)
 		if ok then
+			syncSystemVisuals()
 			broadcast()
 		elseif errorKey then
 			sayTo(player, errorKey)

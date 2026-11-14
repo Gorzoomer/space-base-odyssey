@@ -1,0 +1,41 @@
+--!strict
+-- Space Base Odyssey - demo keys for recording the video. Only in Studio or for the place owner:
+--   F8: force today's event to a solar storm (the server accepts it in the lobby or while planning).
+--   F9: end the current shift now.
+-- No UI. The server validates both debug actions again (Studio or place owner only).
+-- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local Store = require(script.Parent.Store)
+
+local DemoKeys = {}
+
+local started = false
+
+local function allowed(): boolean
+	return RunService:IsStudio() or Players.LocalPlayer.UserId == game.CreatorId
+end
+
+function DemoKeys.start()
+	if started or not allowed() then
+		return
+	end
+	started = true
+	UserInputService.InputBegan:Connect(function(input: InputObject, _gameProcessed: boolean)
+		-- Ignore keys typed into a text box (chat). Other "processed" input still counts, because
+		-- function keys may be marked as processed by the core scripts.
+		if input.UserInputType ~= Enum.UserInputType.Keyboard or UserInputService:GetFocusedTextBox() then
+			return
+		end
+		if input.KeyCode == Enum.KeyCode.F8 then
+			Store.send({ type = "DebugForceEvent", event = "SolarStorm" })
+		elseif input.KeyCode == Enum.KeyCode.F9 then
+			Store.send({ type = "DebugEndShift" })
+		end
+	end)
+end
+
+return DemoKeys
