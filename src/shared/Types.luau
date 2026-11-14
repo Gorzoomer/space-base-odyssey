@@ -35,6 +35,19 @@ export type SpaceWeather = {
 	fetchedAt: string?, -- ISO time of the live query, when source == "live"
 }
 
+-- Summary of the server's live NASA / CCMC DONKI query (last 30 days), shown on the Sources screen.
+-- nil in a Snapshot while the query is still running. "unavailable": HTTP is off, the request
+-- failed or timed out; the game then uses only the saved archive.
+export type LiveWeather = {
+	status: "live" | "unavailable",
+	fetchedAt: string?, -- ISO time of the query (UTC), when status == "live"
+	flaresLast30Days: number?,
+	strongestClass: string?,
+	strongestDate: string?, -- YYYY-MM-DD
+	latestClass: string?,
+	latestDate: string?, -- YYYY-MM-DD
+}
+
 -- Live state of the current shift (nil outside the Shift phase).
 export type ShiftState = {
 	endsAt: number, -- workspace:GetServerTimeNow() value
@@ -63,6 +76,7 @@ export type Snapshot = {
 	history: { DayRecord },
 	shift: ShiftState?,
 	spaceWeather: SpaceWeather?,
+	liveWeather: LiveWeather?,
 }
 
 -- Per-player data, sent only to that player.

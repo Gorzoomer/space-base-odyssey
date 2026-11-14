@@ -20,7 +20,8 @@ export type ReportView = {
 	render: () -> (),
 }
 
-function Report.new(root: Frame): ReportView
+-- `addSourcesButton` comes from Sources: it places the "Real NASA data" button on this screen.
+function Report.new(root: Frame, addSourcesButton: (parent: Instance, props: Ui.Props) -> TextButton): ReportView
 	local screen = Ui.frame(root, {
 		name = "Report",
 		color = Ui.COLORS.backdrop,
@@ -106,6 +107,14 @@ function Report.new(root: Frame): ReportView
 		lastPress = os.clock()
 		Store.send({ type = "Restart" })
 	end)
+
+	-- Bottom-right, mirroring the C.A.R.L. bubble on the bottom-left; Restart sits between them.
+	addSourcesButton(screen, {
+		size = UDim2.fromScale(0.25, 0.1),
+		position = UDim2.fromScale(0.985, 0.865),
+		anchor = Vector2.new(1, 0),
+		zindex = 2,
+	})
 
 	local rows: { Frame } = {}
 

@@ -3,5 +3,5 @@
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 return table.freeze({
-	BUILD = "0.1.0-stage1",
+	BUILD = "0.2.0-stage2",
 })

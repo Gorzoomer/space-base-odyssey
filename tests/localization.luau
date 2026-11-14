@@ -1,8 +1,9 @@
 --!strict
 -- Space Base Odyssey - localization tests. Run with: lune run tests/localization
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
--- Fails if a key is missing in English or Spanish, a string has more than 8 words (after
--- removing {placeholders}), placeholders differ between languages, or the lookup API misbehaves.
+-- Fails if a key is missing in English or Spanish, a string has too many words (after removing
+-- {placeholders}: 8 for gameplay text, 10 for "fact." and "src." lines on the Sources screen),
+-- placeholders differ between languages, a source file uses an unknown key, or the API misbehaves.
 
 local fs = require("@lune/fs")
 local process = require("@lune/process")
@@ -10,6 +11,16 @@ local process = require("@lune/process")
 local Localization = require("../src/shared/Localization")
 
 local MAX_WORDS = 8
+local MAX_WORDS_LONG = 10 -- Sources screen: "fact." and "src." keys
+local LONG_PREFIXES = { "fact", "src" }
+
+local function maxWords(key: string): number
+	local prefix = string.match(key, "^([%a_]+)%.")
+	if prefix and table.find(LONG_PREFIXES, prefix) then
+		return MAX_WORDS_LONG
+	end
+	return MAX_WORDS
+end
 
 -- The agreed key list with the placeholders each key must carry.
 local EXPECTED: { [string]: { string } } = {
@@ -44,6 +55,18 @@ local EXPECTED: { [string]: { string } } = {
 	["ui.outcome.EarlyReturnFood"] = {},
 	["ui.outcome.EarlyReturnDose"] = {},
 	["ui.outcome.InProgress"] = {},
+	["ui.sources_button"] = {},
+	["ui.sources_title"] = {},
+	["ui.close"] = {},
+	["ui.weather_live"] = { "n" },
+	["ui.weather_latest"] = { "class", "date" },
+	["ui.weather_offline"] = {},
+	["ui.weather_archive"] = { "date" },
+	["ui.weather_checked"] = { "time" },
+	["ui.flare_source_live"] = { "date" },
+	["ui.flare_source_archive"] = { "date" },
+	["ui.earth_link_on"] = {},
+	["ui.earth_link_off"] = {},
 	["event.None"] = {},
 	["event.Dust"] = {},
 	["event.SolarStorm"] = {},
@@ -56,6 +79,7 @@ local EXPECTED: { [string]: { string } } = {
 	["carl.leak_fixed"] = {},
 	["carl.panel_clean"] = {},
 	["carl.antenna_linked"] = {},
+	["carl.earth_delay"] = { "moon", "mars" },
 	["carl.storm_warning"] = { "class", "date" },
 	["carl.storm_now"] = {},
 	["carl.storm_over"] = {},
@@ -87,6 +111,32 @@ local EXPECTED: { [string]: { string } } = {
 	["prompt.repair"] = {},
 	["prompt.antenna"] = {},
 	["prompt.console"] = {},
+	["fact.gravity"] = { "percent" },
+	["fact.light_delay"] = { "moon" },
+	["fact.mars_delay"] = { "min", "max" },
+	["fact.oxygen"] = { "kg" },
+	["fact.water"] = { "kg" },
+	["fact.food"] = { "kcal" },
+	["fact.lettuce"] = { "days" },
+	["fact.dose_moon"] = { "msv" },
+	["fact.dose_earth"] = { "msv" },
+	["fact.shelter"] = {},
+	["fact.sep"] = { "min" },
+	["fact.sunlight"] = { "days" },
+	["fact.cold"] = { "k" },
+	["fact.ice"] = { "percent" },
+	["fact.flare_vs_storm"] = {},
+	["fact.career_limit"] = { "msv" },
+	["src.donki"] = {},
+	["src.bvad"] = {},
+	["src.lro"] = {},
+	["src.lcross"] = {},
+	["src.veggie"] = {},
+	["src.change4"] = {},
+	["src.nasa_std"] = {},
+	["src.nasa_science"] = {},
+	["src.epa"] = {},
+	["src.list"] = {},
 }
 
 local failures = 0
@@ -153,7 +203,10 @@ for _, lang in Localization.LANGUAGES do
 		check(type(text) == "string" and #text > 0, lang .. " is missing key: " .. key)
 		if type(text) == "string" then
 			local words = wordCount(text)
-			check(words >= 1 and words <= MAX_WORDS, string.format("%s %s has %d words: %s", lang, key, words, text))
+			check(
+				words >= 1 and words <= maxWords(key),
+				string.format("%s %s has %d words (max %d): %s", lang, key, words, maxWords(key), text)
+			)
 			check(
 				placeholders(text) == sortedJoin(expectedParams),
 				string.format("%s %s placeholders {%s} expected {%s}", lang, key, placeholders(text), sortedJoin(expectedParams))
@@ -173,16 +226,34 @@ for key in EXPECTED do
 	end
 end
 
--- 3. Keys the simulation uses all exist (scan the shared source for quoted keys).
-local KEY_PREFIXES = { "cause", "error", "event", "carl", "ui", "prompt" }
-for _, file in { "src/shared/Simulation.luau", "src/shared/MissionData.luau" } do
-	if fs.isFile(file) then
-		local source = fs.readFile(file)
-		for quoted in string.gmatch(source, '"([%a_]+%.[%w_.]+)"') do
-			local prefix = string.match(quoted, "^([%a_]+)%.")
-			if prefix and table.find(KEY_PREFIXES, prefix) then
-				check(inKeys[quoted] == true, file .. " uses a key that is not localized: " .. quoted)
-			end
+-- 3. Every full key quoted in the game source exists (scan src/ for quoted keys). Keys built at
+-- run time from a quoted prefix ending in "." (for example "ui.system." .. name) are skipped.
+local KEY_PREFIXES = { "cause", "error", "event", "carl", "ui", "prompt", "fact", "src" }
+
+local function luauFiles(dir: string, out: { string })
+	if not fs.isDir(dir) then
+		return
+	end
+	for _, name in fs.readDir(dir) do
+		local path = dir .. "/" .. name
+		if fs.isDir(path) then
+			luauFiles(path, out)
+		elseif string.sub(name, -5) == ".luau" and name ~= "Localization.luau" then
+			table.insert(out, path)
+		end
+	end
+end
+
+local sourceFiles: { string } = {}
+luauFiles("src", sourceFiles)
+table.sort(sourceFiles)
+check(table.find(sourceFiles, "src/shared/Simulation.luau") ~= nil, "source scan finds Simulation.luau")
+for _, file in sourceFiles do
+	local source = fs.readFile(file)
+	for quoted in string.gmatch(source, '"([%a_]+%.[%w_.]+)"') do
+		local prefix = string.match(quoted, "^([%a_]+)%.")
+		if prefix and table.find(KEY_PREFIXES, prefix) and string.sub(quoted, -1) ~= "." then
+			check(inKeys[quoted] == true, file .. " uses a key that is not localized: " .. quoted)
 		end
 	end
 end
@@ -194,6 +265,15 @@ check(Localization.t("ui.day", nil, "en") == "Day {day} of {total}", "t leaves p
 check(Localization.t("ui.day", { day = 3 }, "en") == "Day 3 of {total}", "t keeps unknown placeholders")
 check(Localization.t("ui.power_left", { n = "50%" }, "en") == "50% power left", "t inserts values literally")
 check(Localization.t("no.such.key", nil, "es") == "no.such.key", "t falls back to the key")
+check(
+	Localization.t("carl.earth_delay", { moon = 1.3, mars = 22 }, "en")
+		== "Signal to Earth: 1.3 seconds. Mars: up to 22 minutes!",
+	"t fills carl.earth_delay"
+)
+check(
+	Localization.t("fact.gravity", { percent = 16.5 }, "en") == "Moon gravity is only 16.5% of Earth's.",
+	"t fills fact.gravity"
+)
 check(Localization.t("ui.run", nil, "fr" :: any) == Localization.t("ui.run"), "t ignores unknown languages")
 
 check(Localization.detect("es-mx") == "es", "detect es-mx")

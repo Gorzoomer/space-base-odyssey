@@ -50,7 +50,19 @@ local function powerLeft(): number
 end
 
 -- `showMessage` lets the board explain locally why a press did nothing (the server validates too).
-function PowerBoard.new(root: Frame, showMessage: (ref: TextRef) -> ()): PowerBoardView
+-- `addSourcesButton` comes from Sources: it places the "Real NASA data" button on this screen.
+--
+-- Screen layout (fractions of the screen):
+--   y 0.02-0.13  day label 0.18-0.46, event 0.48-0.79, language button 0.815-0.985 (Main)
+--   y 0.115-0.185 sources button 0.815-0.985 (right edge, under the language button)
+--   y 0.15-0.26  meters 0.04-0.80
+--   y 0.29-0.77  three system rows 0.05-0.95
+--   y 0.80-0.95  power left 0.05-0.30 | C.A.R.L. bubble 0.315-0.585 (Messages) | Start 0.60-0.95
+function PowerBoard.new(
+	root: Frame,
+	showMessage: (ref: TextRef) -> (),
+	addSourcesButton: (parent: Instance, props: Ui.Props) -> TextButton
+): PowerBoardView
 	local maxCells: number = MissionData.POWER.MAX_CELLS_PER_SYSTEM
 
 	local screen = Ui.frame(root, {
@@ -80,8 +92,15 @@ function PowerBoard.new(root: Frame, showMessage: (ref: TextRef) -> ()): PowerBo
 	})
 
 	local meters = Meters.new(screen, {
-		size = UDim2.fromScale(0.8, 0.11),
-		position = UDim2.fromScale(0.1, 0.15),
+		size = UDim2.fromScale(0.76, 0.11),
+		position = UDim2.fromScale(0.04, 0.15),
+	})
+
+	addSourcesButton(screen, {
+		size = UDim2.fromScale(0.17, 0.07),
+		position = UDim2.fromScale(0.985, 0.115),
+		anchor = Vector2.new(1, 0),
+		zindex = 2,
 	})
 
 	local rows: { [SystemId]: Row } = {}
@@ -177,9 +196,10 @@ function PowerBoard.new(root: Frame, showMessage: (ref: TextRef) -> ()): PowerBo
 		rows[system] = { name = name, hint = hint, slots = slots, minus = minus, plus = plus }
 	end
 
+	-- Power left: cell icons on top, the number once in the text below (no icons when it is 0).
 	local powerPanel = Ui.frame(screen, {
 		name = "PowerLeft",
-		size = UDim2.fromScale(0.42, 0.15),
+		size = UDim2.fromScale(0.25, 0.15),
 		position = UDim2.fromScale(0.05, 0.8),
 		color = Ui.COLORS.panel,
 		corner = 0.25,
@@ -188,26 +208,29 @@ function PowerBoard.new(root: Frame, showMessage: (ref: TextRef) -> ()): PowerBo
 	})
 	local powerIcons = Ui.label(powerPanel, {
 		name = "Cells",
-		size = UDim2.fromScale(0.3, 0.8),
-		position = UDim2.fromScale(0.03, 0.5),
-		anchor = Vector2.new(0, 0.5),
-		maxText = 48,
+		size = UDim2.fromScale(0.9, 0.46),
+		position = UDim2.fromScale(0.5, 0.06),
+		anchor = Vector2.new(0.5, 0),
+		maxText = 44,
 	})
+	local TEXT_BELOW_SIZE = UDim2.fromScale(0.9, 0.4)
+	local TEXT_BELOW_POSITION = UDim2.fromScale(0.5, 0.54)
+	local TEXT_ALONE_SIZE = UDim2.fromScale(0.9, 0.7)
+	local TEXT_ALONE_POSITION = UDim2.fromScale(0.5, 0.15)
 	local powerText = Ui.label(powerPanel, {
 		name = "Text",
-		size = UDim2.fromScale(0.64, 0.8),
-		position = UDim2.fromScale(0.34, 0.5),
-		anchor = Vector2.new(0, 0.5),
-		alignX = Enum.TextXAlignment.Left,
+		size = TEXT_BELOW_SIZE,
+		position = TEXT_BELOW_POSITION,
+		anchor = Vector2.new(0.5, 0),
 		textColor = Ui.COLORS.cell,
-		maxText = 44,
+		maxText = 32,
 	})
 
 	local lastStart = 0
 	local startButton = Ui.button(screen, {
 		name = "StartShift",
-		size = UDim2.fromScale(0.44, 0.15),
-		position = UDim2.fromScale(0.51, 0.8),
+		size = UDim2.fromScale(0.35, 0.15),
+		position = UDim2.fromScale(0.6, 0.8),
 		color = Ui.COLORS.go,
 		stroke = 4,
 		maxText = 52,
@@ -247,7 +270,11 @@ function PowerBoard.new(root: Frame, showMessage: (ref: TextRef) -> ()): PowerBo
 			Ui.setButtonLook(row.minus, cells > 0, Ui.COLORS.minus)
 			Ui.setButtonLook(row.plus, cells < maxCells and left > 0, Ui.COLORS.plus)
 		end
-		powerIcons.Text = if left > 0 then string.rep(Ui.ICONS.cell, left) else "0"
+		local hasCells = left > 0
+		powerIcons.Visible = hasCells
+		powerIcons.Text = if hasCells then string.rep(Ui.ICONS.cell, left) else ""
+		powerText.Size = if hasCells then TEXT_BELOW_SIZE else TEXT_ALONE_SIZE
+		powerText.Position = if hasCells then TEXT_BELOW_POSITION else TEXT_ALONE_POSITION
 		powerText.Text = Store.t("ui.power_left", { n = left })
 	end
 

@@ -292,14 +292,15 @@ local function buildSkyBodies()
 	sky.Name = "SkyBodies"
 	sky.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
 
-	local glow: Style = { color = Color3.fromRGB(60, 120, 225), material = Enum.Material.Neon, collide = false, shadow = false }
+	-- SmoothPlastic, not Neon: Neon plus bloom turned the Earth into a glowing cyan disc.
+	local glow: Style = { color = Color3.fromRGB(38, 92, 196), material = Enum.Material.SmoothPlastic, collide = false, shadow = false }
 	local position = earthPosition or defaultEarthPosition()
 	local centre = position
 	ball(sky, "Earth", EARTH_DIAMETER, centre, glow)
 	ball(sky, "EarthHalo", EARTH_DIAMETER * 1.06, centre, {
 		color = Color3.fromRGB(150, 200, 255),
 		material = Enum.Material.Neon,
-		transparency = 0.82,
+		transparency = 0.93,
 		collide = false,
 		shadow = false,
 	})
@@ -324,7 +325,7 @@ local function buildSkyBodies()
 		local capCentre = centre + dir * (radius - size * 0.42)
 		ball(sky, "EarthDetail" .. i, size, capCentre, {
 			color = cap.c,
-			material = Enum.Material.Neon,
+			material = Enum.Material.SmoothPlastic,
 			collide = false,
 			shadow = false,
 		})
@@ -356,6 +357,8 @@ function WorldBuilder.applyEnvironment(data: any)
 	Workspace.Gravity = data.WORLD.MOON_GRAVITY_STUDS
 	StarterPlayer.CharacterUseJumpPower = true
 	StarterPlayer.CharacterJumpPower = data.WORLD.JUMP_POWER
+	-- LeftShift is the Run key; turn off Shift Lock so the two do not fight.
+	StarterPlayer.EnableMouseLockOption = false
 	StarterPlayer.CharacterWalkSpeed = data.WORLD.WALK_SPEED
 
 	-- No atmosphere and no clouds on the Moon.

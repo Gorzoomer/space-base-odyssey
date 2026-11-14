@@ -1,5 +1,6 @@
 --!strict
--- Space Base Odyssey - Shift HUD: meters, shift timer, event banner, storm countdown, suit oxygen and ice.
+-- Space Base Odyssey - Shift HUD: meters, shift timer, event banner, storm countdown (with the flare's
+-- data source), Earth-link indicator, suit oxygen and ice.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -13,6 +14,17 @@ local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
 
 local Hud = {}
+
+local EARTH_LINK_ICON = "📡"
+local FLARE_SOURCE_ICON = "🛰️"
+
+-- "2024-05-10T06:54Z" -> "2024-05-10".
+local function shortDate(value: string): string
+	if string.match(value, "^%d%d%d%d%-%d%d%-%d%d") then
+		return string.sub(value, 1, 10)
+	end
+	return value
+end
 
 export type HudView = {
 	setVisible: (visible: boolean) -> (),
@@ -60,6 +72,38 @@ function Hud.new(root: Frame): HudView
 		maxText = 64,
 		visible = false,
 	})
+	-- Under the countdown: says honestly whether the flare is live NASA data or an archive replay.
+	-- Ends at y 0.49, above the C.A.R.L. bubble (y 0.5) and clear of the Run button (x >= 0.77).
+	local flareSource = Ui.iconText(screen, {
+		name = "FlareSource",
+		size = UDim2.fromScale(0.44, 0.05),
+		position = UDim2.fromScale(0.5, 0.44),
+		anchor = Vector2.new(0.5, 0),
+		color = Ui.COLORS.panel,
+		transparency = 0.1,
+		stroke = 2,
+		maxText = 24,
+		visible = false,
+	})
+	-- A wide, short pill: keep the icon narrow so the text gets the room.
+	flareSource.icon.Size = UDim2.fromScale(0.08, 0.86)
+	flareSource.icon.Position = UDim2.fromScale(0.02, 0.5)
+	flareSource.label.Size = UDim2.fromScale(0.88, 0.86)
+	flareSource.label.Position = UDim2.fromScale(0.11, 0.5)
+
+	-- Right edge, under the language button and clear of the meters (which end at x 0.78).
+	local earthLink = Ui.iconText(screen, {
+		name = "EarthLink",
+		size = UDim2.fromScale(0.17, 0.065),
+		position = UDim2.fromScale(0.985, 0.115),
+		anchor = Vector2.new(1, 0),
+		color = Ui.COLORS.panel,
+		transparency = 0.15,
+		stroke = 2,
+		maxText = 22,
+		visible = false,
+	})
+
 	local stormNow = Ui.iconText(screen, {
 		name = "StormNow",
 		size = UDim2.fromScale(0.5, 0.14),
@@ -127,6 +171,13 @@ function Hud.new(root: Frame): HudView
 		if snap then
 			eventBanner.set(Ui.EVENT_ICONS[snap.todayEvent] or "", Store.t("event." .. snap.todayEvent))
 		end
+		local shift = if snap then snap.shift else nil
+		earthLink.frame.Visible = shift ~= nil
+		if shift then
+			local linked = shift.antennaLinked
+			earthLink.set(EARTH_LINK_ICON, Store.t(if linked then "ui.earth_link_on" else "ui.earth_link_off"))
+			earthLink.frame.BackgroundColor3 = if linked then Ui.COLORS.go else Ui.COLORS.panel
+		end
 		if stats then
 			iceBadge.set(Ui.ICONS.ice, Store.t("ui.carrying_ice"))
 			iceBadge.frame.Visible = stats.carryingIce
@@ -152,6 +203,7 @@ function Hud.new(root: Frame): HudView
 		local shift = if snap then snap.shift else nil
 		if not snap or not shift then
 			countdown.frame.Visible = false
+			flareSource.frame.Visible = false
 			stormNow.frame.Visible = false
 			return
 		end
@@ -179,6 +231,13 @@ function Hud.new(root: Frame): HudView
 			-- Pulse twice a second to grab attention (text and icon carry the meaning, not the colour).
 			local pulse = math.floor(now * 2) % 2 == 0
 			countdown.frame.BackgroundColor3 = if pulse then Ui.COLORS.warning else Ui.COLORS.accent
+		end
+
+		local weather = snap.spaceWeather
+		flareSource.frame.Visible = warning and weather ~= nil
+		if warning and weather then
+			local key = if weather.source == "live" then "ui.flare_source_live" else "ui.flare_source_archive"
+			flareSource.set(FLARE_SOURCE_ICON, Store.t(key, { date = shortDate(weather.flareDate) }))
 		end
 
 		stormNow.frame.Visible = storming

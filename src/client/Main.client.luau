@@ -21,6 +21,7 @@ local Hud = require(Client:WaitForChild("Hud"))
 local Report = require(Client:WaitForChild("Report"))
 local Sprint = require(Client:WaitForChild("Sprint"))
 local Prompts = require(Client:WaitForChild("Prompts"))
+local Sources = require(Client:WaitForChild("Sources"))
 
 print(`[SpaceBaseOdyssey] client started, build {Version.BUILD}`)
 
@@ -34,10 +35,11 @@ Store.setLanguage(Localization.detect(player.LocaleId))
 local _gui, root = Ui.createRoot(playerGui)
 
 local messages = Messages.new(root)
-local briefing = Briefing.new(root)
-local powerBoard = PowerBoard.new(root, messages.show)
+local sources = Sources.new(root)
+local briefing = Briefing.new(root, sources.addButton)
+local powerBoard = PowerBoard.new(root, messages.show, sources.addButton)
 local hud = Hud.new(root)
-local report = Report.new(root)
+local report = Report.new(root, sources.addButton)
 local sprint = Sprint.new(root)
 
 -- Language toggle (top right): shows the current language; a tap switches EN <-> ES.
@@ -69,6 +71,8 @@ local function showPhase(phase: string)
 	report.setVisible(phase == "Report")
 	sprint.setVisible(phase == "Shift")
 	messages.setPhase(phase)
+	-- A new phase needs the player's attention (e.g. the shift clock starts): close the panel.
+	sources.close()
 	shownPhase = phase
 end
 
@@ -79,6 +83,7 @@ local function renderAll()
 	report.render()
 	sprint.render()
 	messages.render()
+	sources.render()
 	renderLanguageButton()
 end
 
@@ -99,6 +104,7 @@ Store.onChanged(function(kind: Store.ChangeKind)
 		powerBoard.render()
 		hud.render()
 		report.render()
+		sources.render() -- the live space-weather summary can arrive after the first snapshot
 	end
 	hud.tick()
 end)

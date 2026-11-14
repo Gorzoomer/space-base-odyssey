@@ -14,7 +14,8 @@ export type BriefingView = {
 	render: () -> (),
 }
 
-function Briefing.new(root: Frame): BriefingView
+-- `addSourcesButton` comes from Sources: it places the "Real NASA data" button on this screen.
+function Briefing.new(root: Frame, addSourcesButton: (parent: Instance, props: Ui.Props) -> TextButton): BriefingView
 	local screen = Ui.frame(root, {
 		name = "Briefing",
 		color = Ui.COLORS.backdrop,
@@ -91,6 +92,14 @@ function Briefing.new(root: Frame): BriefingView
 		lastPress = os.clock()
 		Store.send({ type = "StartMission" })
 	end)
+
+	-- Under the Start button, clear of the C.A.R.L. bubble (bottom-left) and the Earth (top-right).
+	addSourcesButton(screen, {
+		size = UDim2.fromScale(0.26, 0.08),
+		position = UDim2.fromScale(0.5, 0.82),
+		anchor = Vector2.new(0.5, 0),
+		zindex = 12,
+	})
 
 	local function render()
 		title.Text = `{Ui.ICONS.moon} {Store.t("ui.title")}`

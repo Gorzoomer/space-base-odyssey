@@ -12,6 +12,7 @@ export type Snapshot = Types.Snapshot
 export type PlayerStats = Types.PlayerStats
 export type TextRef = Types.TextRef
 export type Action = Types.Action
+export type LiveWeather = Types.LiveWeather
 export type Language = "en" | "es"
 export type ChangeKind = "snapshot" | "stats" | "language"
 

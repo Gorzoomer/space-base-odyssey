@@ -19,10 +19,17 @@ export type MessagesView = {
 	setPhase: (phase: string) -> (), -- moves the bubble where it hides the least for that screen
 }
 
--- Bubble placement per phase: bottom-left on full-screen menus, middle-left while playing.
+-- Bubble placement per phase, chosen so it never covers a button or a meter:
+-- * Briefing and Report: bottom-left, beside the centred Start / Restart button.
+-- * Planning: bottom row of the power board, in the gap between the power-left box (x 0.05-0.30)
+--   and the Start button (x 0.60-0.95); its top (with the name tag) stays below the last system
+--   row, which ends at y 0.77. See the layout table in PowerBoard.luau.
+-- * Shift: middle-left, below the storm countdown and its flare-source line (which end at y 0.49).
 local MENU_POSITION = UDim2.fromScale(0.02, 0.8)
 local MENU_SIZE = UDim2.fromScale(0.26, 0.18)
-local PLAY_POSITION = UDim2.fromScale(0.02, 0.44)
+local PLANNING_POSITION = UDim2.fromScale(0.315, 0.795)
+local PLANNING_SIZE = UDim2.fromScale(0.27, 0.18)
+local PLAY_POSITION = UDim2.fromScale(0.02, 0.5)
 local PLAY_SIZE = UDim2.fromScale(0.36, 0.19)
 
 -- ISO dates from the flare archive ("2024-05-10T06:54Z") read better as "2024-05-10".
@@ -129,9 +136,16 @@ function Messages.new(root: Frame): MessagesView
 	end
 
 	local function setPhase(phase: string)
-		local playing = phase == "Planning" or phase == "Shift"
-		bubble.Position = if playing then PLAY_POSITION else MENU_POSITION
-		bubble.Size = if playing then PLAY_SIZE else MENU_SIZE
+		if phase == "Planning" then
+			bubble.Position = PLANNING_POSITION
+			bubble.Size = PLANNING_SIZE
+		elseif phase == "Shift" then
+			bubble.Position = PLAY_POSITION
+			bubble.Size = PLAY_SIZE
+		else
+			bubble.Position = MENU_POSITION
+			bubble.Size = MENU_SIZE
+		end
 	end
 
 	render()

@@ -12,10 +12,14 @@ local MissionData = require(Shared:WaitForChild("MissionData"))
 local WorldBuilder = require(script.Parent:WaitForChild("WorldBuilder"))
 local CrewService = require(script.Parent:WaitForChild("CrewService"))
 local MissionService = require(script.Parent:WaitForChild("MissionService"))
+local SpaceWeatherService = require(script.Parent:WaitForChild("SpaceWeatherService"))
 
 local RESPAWN_DELAY_SECONDS = 3
 
 print(`[SpaceBaseOdyssey] server started, build {Version.BUILD}`)
+
+-- Live NASA space weather is fetched in the background while the base is built; nothing waits for it.
+SpaceWeatherService.start()
 
 -- Turn off auto-loading first: applyEnvironment and build yield, and a player who joins meanwhile
 -- must not spawn before Moon gravity and the base exist.

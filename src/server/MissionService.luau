@@ -13,6 +13,8 @@ local Simulation = require(Shared:WaitForChild("Simulation"))
 local SpaceWeatherArchive = require(Shared:WaitForChild("SpaceWeatherArchive"))
 local Types = require(Shared:WaitForChild("Types"))
 
+local SpaceWeatherService = require(script.Parent:WaitForChild("SpaceWeatherService"))
+
 type MissionState = Simulation.MissionState
 type ShiftResult = Simulation.ShiftResult
 type EventId = Simulation.EventId
@@ -21,6 +23,7 @@ type Phase = Types.Phase
 type Snapshot = Types.Snapshot
 type ShiftState = Types.ShiftState
 type SpaceWeather = Types.SpaceWeather
+type LiveWeather = Types.LiveWeather
 type TextRef = Types.TextRef
 type ArchivedFlare = SpaceWeatherArchive.ArchivedFlare
 type Params = { [string]: string | number }
@@ -76,6 +79,7 @@ local pendingSeed: number? = nil
 local dayStartBackup: MissionState? = nil -- state just before today's beginDay (DebugForceEvent)
 local random = Random.new()
 local stormFlaresUsed = 0
+local flaresReplayed: { [string]: boolean } = {} -- flare IDs already replayed this mission
 
 local shift: ShiftState? = nil
 local shiftData: ShiftData? = nil
@@ -203,6 +207,7 @@ local function buildSnapshot(): Snapshot
 		history = deepCopy(state.history),
 		shift = shiftCopy,
 		spaceWeather = weatherCopy,
+		liveWeather = SpaceWeatherService.getLive(),
 	}
 end
 
@@ -338,6 +343,7 @@ local function resetMission(seed: number)
 	state = Simulation.newMission(MissionData, seed)
 	random = Random.new(seed)
 	stormFlaresUsed = 0
+	table.clear(flaresReplayed)
 	dayStartBackup = nil
 	table.clear(dusty)
 	reconcileDust()
@@ -367,19 +373,12 @@ local function enterReport()
 end
 
 -- The first storm of a mission always brings particles; later ones may be real false alarms.
-local function pickFlare(): ArchivedFlare
-	local flares = SpaceWeatherArchive.FLARES
-	local pool: { ArchivedFlare } = {}
-	for _, flare in flares do
-		if stormFlaresUsed > 0 or flare.particles then
-			table.insert(pool, flare)
-		end
-	end
-	if #pool == 0 then
-		pool = table.clone(flares)
-	end
+-- SpaceWeatherService prefers a strong flare from today's live DONKI query, else the archive.
+local function pickFlare(): (ArchivedFlare, "live" | "archive")
+	local flare, source = SpaceWeatherService.pickFlare(stormFlaresUsed == 0, random, flaresReplayed)
 	stormFlaresUsed += 1
-	return pool[random:NextInteger(1, #pool)]
+	flaresReplayed[flare.id] = true
+	return flare, source
 end
 
 -- Stops the running shift without scoring it (debug only).
@@ -439,7 +438,7 @@ local function finishShift()
 end
 
 local function spotFlare(currentShift: ShiftState, data: ShiftData, t: number)
-	local flare = pickFlare()
+	local flare, source = pickFlare()
 	data.flare = flare
 	data.stage = "warning"
 	local lead = if currentShift.antennaLinked
@@ -448,12 +447,18 @@ local function spotFlare(currentShift: ShiftState, data: ShiftData, t: number)
 	currentShift.stormWarningAt = t
 	currentShift.stormArrivesAt = t + lead
 	currentShift.stormEndsAt = t + lead + MissionData.STORM.DURATION_SECONDS
+	-- "live" only for a flare from this server's own live query; fetchedAt says when it ran.
+	local fetchedAt = if source == "live" then SpaceWeatherService.getFetchedAt() else nil
+	if source == "live" and fetchedAt == nil then
+		source = "archive" -- cannot happen; never call data live without a query time
+	end
 	spaceWeather = {
-		source = "archive",
+		source = source,
 		flareId = flare.id,
 		flareClass = flare.class,
 		flareDate = flare.date,
 		particles = flare.particles,
+		fetchedAt = fetchedAt,
 	}
 	say("carl.storm_warning", flareParams(flare))
 	refreshWorld()
@@ -608,6 +613,10 @@ local function onAntennaAligned()
 	end
 	shift.antennaLinked = true
 	say("carl.antenna_linked")
+	say("carl.earth_delay", {
+		moon = MissionData.REAL.MOON_EARTH_LIGHT_TIME_S,
+		mars = MissionData.REAL.MARS_LIGHT_TIME_MAX_MIN,
+	})
 	refreshWorld()
 	broadcast()
 end
@@ -876,6 +885,11 @@ function MissionService.start(worldRefs: any, crewService: Crew)
 	resetMission(takeSeed())
 	connectPrompts()
 	refreshWorld()
+
+	-- The live DONKI query finishes in the background; push its result to everyone.
+	SpaceWeatherService.onChanged(function(_: LiveWeather)
+		broadcast()
+	end)
 
 	remoteEvents.action.OnServerEvent:Connect(function(player: Player, action: any)
 		if rateLimited(player) then
