@@ -457,10 +457,10 @@ function WorldBuilder.applyEnvironment(data: any)
 	Lighting.GeographicLatitude = latitude
 	Lighting.ClockTime = clock
 	Lighting.Brightness = 3.5
-	Lighting.ExposureCompensation = 0.6
+	Lighting.ExposureCompensation = 0.3
 	-- Ambient only lights places the sky cannot see (habitat, shelter), so it brightens the rooms
 	-- without washing out the sunlit ground or the shadowed crater floor (OutdoorAmbient).
-	Lighting.Ambient = Color3.fromRGB(64, 64, 74)
+	Lighting.Ambient = Color3.fromRGB(38, 38, 46)
 	Lighting.OutdoorAmbient = Color3.fromRGB(78, 78, 88)
 	Lighting.EnvironmentDiffuseScale = 0.3
 	Lighting.EnvironmentSpecularScale = 0.2
@@ -470,13 +470,23 @@ function WorldBuilder.applyEnvironment(data: any)
 	Lighting.FogStart = 100000
 	Lighting.FogEnd = 100000
 
+	-- The Baseplate template ships its own Bloom; two blooms together washed the habitat out.
+	local templateBloom = Lighting:FindFirstChild("Bloom")
+	if templateBloom and templateBloom:IsA("BloomEffect") then
+		templateBloom.Enabled = false
+	end
+	local templateBlur = Lighting:FindFirstChild("DepthOfField")
+	if templateBlur and templateBlur:IsA("DepthOfFieldEffect") then
+		templateBlur.Enabled = false
+	end
+
 	local bloom = Lighting:FindFirstChild("SBO_Bloom")
 	if not bloom then
 		local newBloom = Instance.new("BloomEffect")
 		newBloom.Name = "SBO_Bloom"
-		newBloom.Intensity = 0.6
-		newBloom.Size = 28
-		newBloom.Threshold = 1.5
+		newBloom.Intensity = 0.35
+		newBloom.Size = 20
+		newBloom.Threshold = 2.2
 		newBloom.Parent = Lighting
 	end
 
@@ -1565,6 +1575,22 @@ function WorldBuilder.build(data: any): World
 	buildDecor(base, rng)
 	local greenhouse = buildGreenhouse(base)
 	local rover = buildRover(base, rampAngle)
+
+	-- Keep the habitat interior readable: many overlapping long-range lights burned it to white.
+	local habitatFolder = base:FindFirstChild("Habitat")
+	if habitatFolder then
+		for _, item in habitatFolder:GetDescendants() do
+			if item:IsA("PointLight") then
+				item.Range = math.min(item.Range, 16)
+				item.Brightness = math.min(item.Brightness, 0.9)
+			elseif item:IsA("SurfaceLight") then
+				item.Brightness = 0.5
+				item.Range = 14
+			elseif item:IsA("SpotLight") then
+				item.Brightness = math.min(item.Brightness, 1.2)
+			end
+		end
+	end
 
 	-- Guidance markers for the client (C.A.R.L.'s beam, task arrows, tips).
 	local markers = Instance.new("Folder")

@@ -29,6 +29,7 @@ Roblox (Luau) game for NASA Space Apps 2026, challenge "Build a Junior Astronaut
   - DONKI events were observed near Earth. Say "what if a storm like this reached your base", never that it did.
 - Never present archived data as live.
 - No NASA logos, insignia or mission patches. Credit sources as text ("NASA / CCMC DONKI"). Roblox does not allow external links inside an experience.
-- No Toolbox or Marketplace assets.
+- No Toolbox or Marketplace assets. The only image assets are the team-uploaded Tabler icons (MIT) listed in `src/shared/Icons.luau`; tint them with `src/shared/Theme.luau` colours. Never use emoji in the UI.
+- Visual identity "Lunar Sunrise": use `Theme.ROLE` colours and `Theme.FONT` fonts everywhere (UI, lights, base accents).
 - Every code file starts with `--!strict` and an SI disclosure line. The hackathon rules require disclosing AI use.
 - Everything committed is in English. `docs/` (Spanish planning notes) is git-ignored.
