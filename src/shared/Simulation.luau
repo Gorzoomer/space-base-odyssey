@@ -28,6 +28,7 @@ export type ShiftResult = {
 	exposedAstronauts: number, -- players outside the shelter when particles arrived
 	leakRepaired: boolean,
 	suitRefills: number, -- full suit refills taken inside the habitat
+	falseAlarm: boolean?, -- the day's flare brought no particle storm (real DONKI example)
 }
 
 export type DayRecord = {
@@ -179,6 +180,9 @@ local function pickCause(state: MissionState, data: any, result: ShiftResult, be
 	elseif state.outcome == "EarlyReturnFood" then
 		return "cause.food_empty"
 	end
+	if state.todayEvent == "SolarStorm" and result.falseAlarm then
+		return "cause.false_alarm"
+	end
 	if state.todayEvent == "SolarStorm" then
 		return if result.exposedAstronauts > 0 then "cause.storm_exposed" else "cause.storm_sheltered"
 	end
@@ -229,7 +233,7 @@ function Simulation.endDay(state: MissionState, data: any, result: ShiftResult)
 	-- Radiation dose only ever goes up. The meter is the crew average.
 	local exposedShare = if result.playerCount > 0 then clamp(result.exposedAstronauts / result.playerCount, 0, 1) else 0
 	local doseGain = meters.DOSE_BACKGROUND_PER_DAY
-	if state.todayEvent == "SolarStorm" then
+	if state.todayEvent == "SolarStorm" and not result.falseAlarm then
 		doseGain += exposedShare * meters.DOSE_PER_EXPOSED_ASTRONAUT
 	end
 	state.dose = math.min(meters.DOSE_LIMIT, state.dose + doseGain)

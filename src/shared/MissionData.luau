@@ -90,6 +90,9 @@ MissionData.SUIT = table.freeze({
 	MAX = 100,
 	DRAIN_WALK_PER_SECOND = 1.0,
 	DRAIN_RUN_PER_SECOND = 2.0,
+	DRAIN_IDLE_PER_SECOND = 0.5,
+	RUN_SPEED_THRESHOLD = 18, -- studs/s measured on the server; above this counts as running
+	RESCUE_REFILL = 60, -- C.A.R.L. brings an astronaut with an empty suit back inside
 	REFILL_PER_SECOND = 15,
 })
 
@@ -99,6 +102,7 @@ MissionData.STORM = table.freeze({
 	WARNING_SECONDS_WITH_LINK = 45,
 	WARNING_SECONDS_NO_LINK = 15,
 	DURATION_SECONDS = 25,
+	FLARE_AT_SECONDS = 40, -- seconds into the shift when the flare is spotted
 })
 
 -- Event schedule (GAME). Days 1-2 are fixed for onboarding; days 3-7 are shuffled on replay.

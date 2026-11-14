@@ -13,6 +13,7 @@ export type MeterId = Simulation.MeterId
 export type Outcome = Simulation.Outcome
 export type Allocation = Simulation.Allocation
 export type DayRecord = Simulation.DayRecord
+export type ShiftResult = Simulation.ShiftResult
 
 -- Briefing: lobby and guided intro. Planning: power board, no clock. Shift: real-time work outside.
 -- Report: timeline of the mission with causes and stars.
@@ -75,6 +76,7 @@ export type PlayerStats = {
 -- Client -> server requests.
 export type Action =
 	{ type: "SetCells", system: SystemId, cells: number }
+	| { type: "StartMission" }
 	| { type: "StartShift" }
 	| { type: "Restart" }
 	| { type: "SetLanguage", language: "en" | "es" }
@@ -82,6 +84,7 @@ export type Action =
 	| { type: "DebugForceEvent", event: EventId }
 	| { type: "DebugSkipToDay", day: number }
 	| { type: "DebugSeed", seed: number }
+	| { type: "DebugEndShift" }
 
 -- Names of the RemoteEvents the server creates in ReplicatedStorage.Remotes.
 local Remotes = table.freeze({
