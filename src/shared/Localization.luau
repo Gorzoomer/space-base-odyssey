@@ -1,0 +1,298 @@
+--!strict
+-- Space Base Odyssey - every player-facing string in English and Mexican Spanish, looked up by key.
+-- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
+-- Pure Luau (no Roblox APIs) so it also runs in Lune tests. Strings use {name} placeholders.
+-- Science notes kept true in the text: the shelter protects by mass (regolith), not power; dose
+-- never goes down; plants take time (food tomorrow); oxygen is made from water with electricity;
+-- storm warnings come from forecasters on Earth; a big flare does not always bring particles.
+
+export type Language = "en" | "es"
+export type Params = { [string]: string | number }
+
+local Localization = {}
+
+-- Every key, in a stable order. Tests check that both languages define exactly these.
+local KEYS: { string } = {
+	"ui.title",
+	"ui.pitch",
+	"ui.start_mission",
+	"ui.start_shift",
+	"ui.day",
+	"ui.power_left",
+	"ui.shift_time",
+	"ui.system.LifeSupport",
+	"ui.system.Greenhouse",
+	"ui.system.Science",
+	"ui.system_hint.LifeSupport",
+	"ui.system_hint.Greenhouse",
+	"ui.system_hint.Science",
+	"ui.meter.air",
+	"ui.meter.food",
+	"ui.meter.dose",
+	"ui.meter.suit",
+	"ui.carrying_ice",
+	"ui.run",
+	"ui.stars",
+	"ui.restart",
+	"ui.report_title",
+	"ui.language",
+	"ui.storm_in",
+	"ui.storm_now",
+	"ui.assistant_name",
+	"ui.outcome.Completed",
+	"ui.outcome.EarlyReturnAir",
+	"ui.outcome.EarlyReturnFood",
+	"ui.outcome.EarlyReturnDose",
+	"ui.outcome.InProgress",
+	"event.None",
+	"event.Dust",
+	"event.SolarStorm",
+	"event.EquipmentFailure",
+	"carl.welcome",
+	"carl.plan_hint",
+	"carl.shift_start",
+	"carl.dust",
+	"carl.leak",
+	"carl.leak_fixed",
+	"carl.panel_clean",
+	"carl.antenna_linked",
+	"carl.storm_warning",
+	"carl.storm_now",
+	"carl.storm_over",
+	"carl.false_alarm",
+	"carl.suit_low",
+	"carl.rescued",
+	"carl.ice_picked",
+	"carl.ice_delivered",
+	"carl.shift_over",
+	"cause.dose_limit",
+	"cause.air_empty",
+	"cause.food_empty",
+	"cause.storm_exposed",
+	"cause.storm_sheltered",
+	"cause.false_alarm",
+	"cause.leak_unrepaired",
+	"cause.dusty_panels",
+	"cause.no_greenhouse",
+	"cause.air_falling",
+	"cause.ice_delivered",
+	"cause.big_science",
+	"cause.smooth_day",
+	"error.unknown_system",
+	"error.cells_range",
+	"error.no_power_left",
+	"prompt.clean",
+	"prompt.drill",
+	"prompt.deliver",
+	"prompt.repair",
+	"prompt.antenna",
+	"prompt.console",
+}
+
+local EN: { [string]: string } = {
+	["ui.title"] = "Space Base Odyssey",
+	["ui.pitch"] = "Run a Moon base. Every choice costs something.",
+	["ui.start_mission"] = "Start mission",
+	["ui.start_shift"] = "Start shift",
+	["ui.day"] = "Day {day} of {total}",
+	["ui.power_left"] = "{n} power left",
+	["ui.shift_time"] = "{seconds} s left",
+	["ui.system.LifeSupport"] = "Life support",
+	["ui.system.Greenhouse"] = "Greenhouse",
+	["ui.system.Science"] = "Science",
+	["ui.system_hint.LifeSupport"] = "Makes air from water using power",
+	["ui.system_hint.Greenhouse"] = "Grows food. Plants feed you tomorrow.",
+	["ui.system_hint.Science"] = "Experiments that send discoveries to Earth",
+	["ui.meter.air"] = "Air",
+	["ui.meter.food"] = "Food",
+	["ui.meter.dose"] = "Radiation",
+	["ui.meter.suit"] = "Suit air",
+	["ui.carrying_ice"] = "Carrying ice",
+	["ui.run"] = "Run",
+	["ui.stars"] = "Stars: {n}",
+	["ui.restart"] = "Try another plan",
+	["ui.report_title"] = "Mission report",
+	["ui.language"] = "Language: English",
+	["ui.storm_in"] = "Storm in {seconds} s! Go to the shelter!",
+	["ui.storm_now"] = "Storm now! Stay in the shelter!",
+	["ui.assistant_name"] = "C.A.R.L.",
+	["ui.outcome.Completed"] = "Mission complete!",
+	["ui.outcome.EarlyReturnAir"] = "Back home early: the air ran out",
+	["ui.outcome.EarlyReturnFood"] = "Back home early: the food ran out",
+	["ui.outcome.EarlyReturnDose"] = "Back home early: too much radiation",
+	["ui.outcome.InProgress"] = "Mission in progress",
+	["event.None"] = "Calm day",
+	["event.Dust"] = "Dust on the solar panels",
+	["event.SolarStorm"] = "Solar storm watch",
+	["event.EquipmentFailure"] = "Something broke: air leak",
+	["carl.welcome"] = "Hi! I'm C.A.R.L., your base helper.",
+	["carl.plan_hint"] = "Share the power. It can't run everything.",
+	["carl.shift_start"] = "Shift started! Go do your tasks.",
+	["carl.dust"] = "Dust covers the solar panels. Clean them!",
+	["carl.leak"] = "Air is leaking out! Fix the pipe!",
+	["carl.leak_fixed"] = "Leak fixed! Great job!",
+	["carl.panel_clean"] = "Panel clean! Sunlight reaches it again.",
+	["carl.antenna_linked"] = "Antenna linked with Earth!",
+	["carl.storm_warning"] = "Forecasters on Earth: {class} flare ({date})! Shelter now!",
+	["carl.storm_now"] = "Particles are here! Stay in the shelter!",
+	["carl.storm_over"] = "Storm over. You can go outside.",
+	["carl.false_alarm"] = "The {class} flare ({date}) brought no particles. It happens!",
+	["carl.suit_low"] = "Suit air is low! Go inside!",
+	["carl.rescued"] = "Suit air ran out! I brought you back.",
+	["carl.ice_picked"] = "Got ice! Take it to the water machine.",
+	["carl.ice_delivered"] = "Ice delivered! Ice makes water and air.",
+	["carl.shift_over"] = "Shift over! Let's see how we did.",
+	["cause.dose_limit"] = "Too much radiation. The crew went home.",
+	["cause.air_empty"] = "The air ran out. The crew went home.",
+	["cause.food_empty"] = "The food ran out. The crew went home.",
+	["cause.storm_exposed"] = "Outside in the storm: dose went up.",
+	["cause.storm_sheltered"] = "The thick dirt shelter kept everyone safe.",
+	["cause.false_alarm"] = "Big flare, but no storm came. Good practice!",
+	["cause.leak_unrepaired"] = "The leak was not fixed. Air escaped.",
+	["cause.dusty_panels"] = "Dusty panels made less power.",
+	["cause.no_greenhouse"] = "No power for plants. Less food later.",
+	["cause.air_falling"] = "Too little life support. Air went down.",
+	["cause.ice_delivered"] = "Ice from the crater made more water.",
+	["cause.big_science"] = "Lots of power to science. Great discoveries!",
+	["cause.smooth_day"] = "A calm day. Everything worked.",
+	["error.unknown_system"] = "That system does not exist.",
+	["error.cells_range"] = "That many cells won't fit there.",
+	["error.no_power_left"] = "No power left. Take some from another.",
+	["prompt.clean"] = "Clean panel",
+	["prompt.drill"] = "Drill ice",
+	["prompt.deliver"] = "Deliver ice",
+	["prompt.repair"] = "Fix leak",
+	["prompt.antenna"] = "Point at Earth",
+	["prompt.console"] = "Power board",
+}
+
+local ES: { [string]: string } = {
+	["ui.title"] = "Odisea de la Base Espacial",
+	["ui.pitch"] = "Dirige una base lunar. Cada decisión cuesta algo.",
+	["ui.start_mission"] = "Empezar misión",
+	["ui.start_shift"] = "Empezar turno",
+	["ui.day"] = "Día {day} de {total}",
+	["ui.power_left"] = "Queda energía: {n}",
+	["ui.shift_time"] = "Quedan {seconds} s",
+	["ui.system.LifeSupport"] = "Soporte vital",
+	["ui.system.Greenhouse"] = "Invernadero",
+	["ui.system.Science"] = "Ciencia",
+	["ui.system_hint.LifeSupport"] = "Hace aire del agua con electricidad",
+	["ui.system_hint.Greenhouse"] = "Cultiva comida. Las plantas alimentan mañana.",
+	["ui.system_hint.Science"] = "Experimentos que mandan descubrimientos a la Tierra",
+	["ui.meter.air"] = "Aire",
+	["ui.meter.food"] = "Comida",
+	["ui.meter.dose"] = "Radiación",
+	["ui.meter.suit"] = "Aire del traje",
+	["ui.carrying_ice"] = "Llevas hielo",
+	["ui.run"] = "Correr",
+	["ui.stars"] = "Estrellas: {n}",
+	["ui.restart"] = "Prueba otro plan",
+	["ui.report_title"] = "Reporte de la misión",
+	["ui.language"] = "Idioma: Español",
+	["ui.storm_in"] = "¡Tormenta en {seconds} s! ¡Ve al refugio!",
+	["ui.storm_now"] = "¡Tormenta ahora! ¡Quédate en el refugio!",
+	["ui.assistant_name"] = "C.A.R.L.",
+	["ui.outcome.Completed"] = "¡Misión cumplida!",
+	["ui.outcome.EarlyReturnAir"] = "Regreso temprano: se acabó el aire",
+	["ui.outcome.EarlyReturnFood"] = "Regreso temprano: se acabó la comida",
+	["ui.outcome.EarlyReturnDose"] = "Regreso temprano: demasiada radiación",
+	["ui.outcome.InProgress"] = "Misión en curso",
+	["event.None"] = "Día tranquilo",
+	["event.Dust"] = "Polvo en los paneles solares",
+	["event.SolarStorm"] = "Alerta de tormenta solar",
+	["event.EquipmentFailure"] = "Algo se rompió: fuga de aire",
+	["carl.welcome"] = "¡Hola! Soy C.A.R.L., tu ayudante de base.",
+	["carl.plan_hint"] = "Reparte la energía. No alcanza para todo.",
+	["carl.shift_start"] = "¡Empezó el turno! Ve a hacer tus tareas.",
+	["carl.dust"] = "Hay polvo en los paneles. ¡Límpialos!",
+	["carl.leak"] = "¡Se está saliendo el aire! ¡Arregla el tubo!",
+	["carl.leak_fixed"] = "¡Fuga arreglada! ¡Buen trabajo!",
+	["carl.panel_clean"] = "¡Panel limpio! Ya le llega el Sol.",
+	["carl.antenna_linked"] = "¡Antena conectada con la Tierra!",
+	["carl.storm_warning"] = "Pronóstico desde la Tierra: llamarada {class} ({date}). ¡Al refugio!",
+	["carl.storm_now"] = "¡Llegaron las partículas! ¡Quédate en el refugio!",
+	["carl.storm_over"] = "Ya pasó la tormenta. Puedes salir.",
+	["carl.false_alarm"] = "La llamarada {class} ({date}) no trajo partículas. ¡A veces pasa!",
+	["carl.suit_low"] = "¡Queda poco aire en el traje! ¡Entra!",
+	["carl.rescued"] = "¡Sin aire! Te regresé a la base.",
+	["carl.ice_picked"] = "¡Tienes hielo! Llévalo a la máquina de agua.",
+	["carl.ice_delivered"] = "¡Hielo entregado! Da agua y aire.",
+	["carl.shift_over"] = "¡Terminó el turno! Veamos cómo nos fue.",
+	["cause.dose_limit"] = "Demasiada radiación. La tripulación volvió a casa.",
+	["cause.air_empty"] = "Se acabó el aire. La tripulación volvió.",
+	["cause.food_empty"] = "Se acabó la comida. La tripulación volvió.",
+	["cause.storm_exposed"] = "Afuera en la tormenta: subió la dosis.",
+	["cause.storm_sheltered"] = "El grueso refugio de tierra los protegió.",
+	["cause.false_alarm"] = "Gran llamarada, pero no llegó tormenta. ¡Buena práctica!",
+	["cause.leak_unrepaired"] = "No arreglaron la fuga. Se escapó aire.",
+	["cause.dusty_panels"] = "Paneles con polvo dieron menos energía.",
+	["cause.no_greenhouse"] = "Sin energía para plantas. Menos comida después.",
+	["cause.air_falling"] = "Poco soporte vital. Bajó el aire.",
+	["cause.ice_delivered"] = "El hielo del cráter dio más agua.",
+	["cause.big_science"] = "Mucha energía a la ciencia. ¡Grandes descubrimientos!",
+	["cause.smooth_day"] = "Un día tranquilo. Todo funcionó.",
+	["error.unknown_system"] = "Ese sistema no existe.",
+	["error.cells_range"] = "Esa cantidad de celdas no cabe ahí.",
+	["error.no_power_left"] = "No queda energía. Quítale a otro sistema.",
+	["prompt.clean"] = "Limpiar panel",
+	["prompt.drill"] = "Perforar hielo",
+	["prompt.deliver"] = "Entregar hielo",
+	["prompt.repair"] = "Arreglar fuga",
+	["prompt.antenna"] = "Apuntar a la Tierra",
+	["prompt.console"] = "Tablero de energía",
+}
+
+local STRINGS: { [Language]: { [string]: string } } = {
+	en = table.freeze(EN),
+	es = table.freeze(ES),
+}
+
+local currentLanguage: Language = "en"
+
+local function isLanguage(value: any): boolean
+	return value == "en" or value == "es"
+end
+
+-- Translates `key` into `lang` (default: the current language), filling {name} placeholders.
+-- Falls back to English, then to the key itself. Unknown placeholders are left as written.
+function Localization.t(key: string, params: Params?, lang: Language?): string
+	local language: Language = if lang ~= nil and isLanguage(lang) then lang else currentLanguage
+	local text = STRINGS[language][key] or STRINGS.en[key] or key
+	if params == nil then
+		return text
+	end
+	local filled = string.gsub(text, "{([%w_]+)}", function(name: string): string?
+		local value = params[name]
+		if value == nil then
+			return nil
+		end
+		return tostring(value)
+	end)
+	return filled
+end
+
+-- "es", "es-mx", "es_ES", ... -> "es"; anything else (or nil) -> "en".
+function Localization.detect(localeId: string?): Language
+	if type(localeId) == "string" and string.lower(string.sub(localeId, 1, 2)) == "es" then
+		return "es"
+	end
+	return "en"
+end
+
+-- Sets the language used when `t` is called without `lang`. Unknown values are ignored.
+function Localization.setLanguage(lang: Language)
+	if isLanguage(lang) then
+		currentLanguage = lang
+	end
+end
+
+function Localization.getLanguage(): Language
+	return currentLanguage
+end
+
+Localization.KEYS = table.freeze(KEYS)
+Localization.LANGUAGES = table.freeze({ "en", "es" } :: { Language })
+Localization.STRINGS = table.freeze(STRINGS)
+
+return Localization
