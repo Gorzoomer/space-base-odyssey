@@ -7,12 +7,17 @@
 -- (BasePanel.luau: skills, tool upgrades, pets) opens only when the player uses the Lab's prompt
 -- ("LabPrompt") and closes when they walk away. Exploration scans show an ExploreCard. The vehicle
 -- HUD (VehicleClient.luau) starts here too.
+-- Fix 8 (playtest): Roblox's tool bar (backpack hotbar, bottom centre) covered our boxes. It is hidden
+-- while a full-screen panel is open (mission select, power board, report, Lab, Wardrobe and the other
+-- modal screens), and the C.A.R.L. bubble moves with the screen mode (Messages.setMode) so it never
+-- sits at the bottom centre while the player walks around with tools.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
 local ProximityPromptService = game:GetService("ProximityPromptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Version = require(Shared:WaitForChild("Version"))
@@ -207,11 +212,38 @@ do
 		end
 		return false
 	end
+	-- Roblox's tool bar draws over our panels' bottom buttons: hide it while one is open (the tools
+	-- stay in the backpack; the number keys work again once the panel closes).
+	local hotbarOn: boolean? = nil
+	local function setHotbar(on: boolean)
+		if on == hotbarOn then
+			return
+		end
+		local ok = pcall(function()
+			StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Backpack, on)
+		end)
+		if ok then
+			hotbarOn = on
+		end
+	end
+	-- Small cards that pop up while playing keep the hotbar: hiding it would put away the tool in
+	-- hand (the tablet right after a scan).
+	local KEEP_HOTBAR: { [string]: boolean } = { ExploreCard = true, FindCard = true }
+	local function bigPanelOpen(): boolean
+		for _, name in MODAL_PANELS do
+			local panel = root:FindFirstChild(name)
+			if not KEEP_HOTBAR[name] and panel and panel:IsA("GuiObject") and panel.Visible then
+				return true
+			end
+		end
+		return false
+	end
 	RunService.Heartbeat:Connect(function()
 		local open = anyOpen()
 		if unlock.Visible ~= open then
 			unlock.Visible = open
 		end
+		setHotbar(not bigPanelOpen())
 	end)
 end
 
@@ -285,6 +317,7 @@ applyView = function()
 		shownMode = mode
 		hud.setMode(mode)
 		topBar.setMode(mode)
+		messages.setMode(mode)
 		sprint.setVisible(mode == "shift" or mode == "roam" or mode == "base")
 	end
 end

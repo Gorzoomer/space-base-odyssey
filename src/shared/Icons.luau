@@ -69,6 +69,7 @@ local Icons = {
 	meteor = "rbxassetid://86135352621535", -- meteor
 	truck = "rbxassetid://116616146253941", -- truck: ice hauler
 	explore = "rbxassetid://140628088698623", -- map-search: exploration sites
+	repairKit = "rbxassetid://115851349850340", -- briefcase-2: the repair kit tool (not the wrench icon)
 }
 
 -- Earth map: NASA Visible Earth "Blue Marble" (public domain, NASA Goddard), 1024x512 equirectangular.

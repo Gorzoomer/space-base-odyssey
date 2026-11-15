@@ -8,16 +8,25 @@
 -- a task is urgent or a storm warning is on, red while storm particles are here (Theme "Lunar
 -- Sunrise" roles). In a storm an orange beam (the shelter colour) points from the mast light to the
 -- shelter door until the player is safe inside.
--- Guidance (Settings: on by default): a cyan beam points to where the next unfinished objective
--- happens (Workspace.Base.Markers, or a build pad for "build_*" objectives); with no such objective
--- during a shift it points to the most useful task (ice to deliver, leak, dusty arrays, antenna,
+-- Guidance (Settings: on by default): a cyan beam points exactly where C.A.R.L.'s words send the
+-- player. First, in every phase:
+--   a) a parts crate in hand: the build PAD waiting for it (Workspace.Base.BuildPads.<id>, never the
+--      structure on it);
+--   b) parts waiting at a pad this player works at (base mode: any pad): that pad, to assemble;
+--   c) the latest C.A.R.L. line with a place (AssistantMessage remote), for up to 45 s or until it
+--      is done: "need a crate" / "build started" / "step done" -> the crate prompt at the lander;
+--      "hold your wrench" / "parts here" -> the pad; "hold the <tool>" -> the task the player just
+--      tried; meteorite and exploring lines -> that site; "build the <id> first" -> that pad.
+-- Then the next unfinished objective (its enabled task prompt, else its Workspace.Base.Markers
+-- part; "clean a panel" is always the cleaning prompt of a DUSTY array, never a clean row); with no
+-- such objective during a shift, the most useful task (ice to deliver, leak, dusty arrays, antenna,
 -- ice). In base mode (Briefing, no mission running), in this order:
 --   1) carried ice: the water machine;
---   2) a build being built in steps (Stage 7: BaseState.inProgress, or the pad attribute SBO_Phase
---      "crate" | "assemble"): the nearest step needing assembly (its pad); a step needing a parts
---      crate: that pad when the player carries one (BaseState.carryingCrate or player attribute
---      SBO_CarryingCrate), else the crate depot at the lander (marker "CrateDepot", or the prompt
---      with TextKey "prompt.take_crate");
+--   2) a build being built in steps (Stage 7: the pad attribute SBO_Phase "crate" | "assemble",
+--      else BaseState.inProgress): the nearest step needing assembly (its pad); a step needing a
+--      parts crate: that pad when the player carries one (BaseState.carryingCrate or player
+--      attribute SBO_CarryingCrate), else the crate depot at the lander (the point of its prompt
+--      "CratePrompt", TextKey "prompt.take_crate"; else the marker "CrateDepot");
 --   3) a fresh meteorite crater (Workspace.Base.Impacts) this player has not scanned yet (impact
 --      attribute SBO_ImpactId vs player attribute SBO_ScannedImpact), when the tablet is unlocked;
 --   4) the cheapest build pad the player can pay for now (Workspace.Base.BuildPads, attributes
@@ -42,6 +51,7 @@ local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local MissionData = require(Shared:WaitForChild("MissionData"))
+local Types = require(Shared:WaitForChild("Types"))
 
 local Store = require(script.Parent.Store)
 local Theme = require(Shared:WaitForChild("Theme"))
@@ -83,7 +93,6 @@ local COLOR_RATE = 4
 local GUIDE_REFRESH_SECONDS = 0.25 -- where the guidance beam points is worked out 4 times a second
 local FILTER_REFRESH_SECONDS = 1
 local SILO_SEARCH_SECONDS = 2
-local PROMPT_SEARCH_SECONDS = 3 -- crate depot search (when there is no marker)
 local POI_SEARCH_SECONDS = 10 -- exploration sites are found again this often
 local POI_GUIDE_RANGE = 250 -- studs: unscanned sites closer than this are worth a detour
 local SEATED_SIDE_OFFSET = 7 -- while driving: beside the vehicle, not inside it
@@ -138,6 +147,71 @@ local PLANNING_OBJECTIVES: { [string]: boolean } = {
 }
 local CRATE_DEPOT_MARKER = "CrateDepot"
 local CRATE_PROMPT_KEY = "prompt.take_crate"
+local CRATE_PROMPT_NAME = "CratePrompt"
+
+-- Task prompts (TextKey) per objective: C.A.R.L. points at the nearest ENABLED one (a disabled
+-- prompt is a task that cannot be done now), else at the objective's marker.
+local CLEAN_PROMPT_KEYS: { [string]: boolean } = { ["prompt.clean"] = true }
+local OBJECTIVE_PROMPTS: { [string]: { [string]: boolean } } = {
+	align_antenna = { ["prompt.antenna"] = true },
+	clean_panel = CLEAN_PROMPT_KEYS,
+	drill_ice = { ["prompt.drill"] = true },
+	repair_leak = { ["prompt.repair"] = true },
+}
+
+-- C.A.R.L.'s spoken instructions (AssistantMessage keys) and where each one sends the player.
+local INSTRUCTION_SECONDS = 45 -- the beam follows the latest instruction this long at most
+local BUILDER_SECONDS = 120 -- a player who worked at a pad this recently is "building" it
+local BUILDER_PAD_RANGE = 30 -- studs: the pad the player stood at when C.A.R.L. answered
+local TOOL_PROMPT_RANGE = 25 -- studs: "hold the <tool>" is about a task right beside the player
+local DEPOT_KEYS: { [string]: boolean } = { -- go and get a parts crate
+	["carl.base.need_crate"] = true,
+	["carl.base.build_started"] = true,
+	["carl.base.step_done"] = true,
+}
+local PAD_KEYS: { [string]: boolean } = { -- the parts are at the pad: assemble them there
+	["carl.base.need_wrench"] = true,
+	["carl.base.crate_delivered"] = true,
+}
+local BUILDER_KEYS: { [string]: boolean } = {
+	["carl.base.need_crate"] = true,
+	["carl.base.build_started"] = true,
+	["carl.base.step_done"] = true,
+	["carl.base.need_wrench"] = true,
+	["carl.base.crate_delivered"] = true,
+	["carl.base.crate_taken"] = true,
+}
+-- "carl.tool.need_<tool>": the task that tool is for (TextKey of its prompt).
+local TOOL_KEY_PREFIX = "carl.tool.need_"
+local TOOL_PROMPT_KEYS: { [string]: { [string]: boolean } } = {
+	drill = { ["prompt.drill"] = true },
+	brush = CLEAN_PROMPT_KEYS,
+	tablet = { ["prompt.antenna"] = true },
+	tablet_scan = { ["prompt.scan"] = true },
+	repair_kit = { ["prompt.repair"] = true },
+}
+local METEOR_KEY_PREFIX = "carl.meteor."
+local EXPLORE_KEY_PREFIX = "carl.explore."
+local EXPLORE_ALL_KEY = "carl.explore.all_sites" -- every site scanned: nowhere to go
+local BUILD_FIRST_PREFIX = "carl.build_first." -- "build the <id> at the glowing pad first"
+local DUST_KEY = "carl.dust"
+local MARKER_KEYS: { [string]: string } = {
+	["carl.leak"] = "Leak",
+	["carl.return_inside"] = "HabitatDoor",
+	["carl.vehicle.need_ice"] = "IceSite",
+}
+-- Lines that say the instruction is done.
+local DONE_KEYS: { [string]: boolean } = {
+	["carl.base.crate_taken"] = true,
+	["carl.base.upgraded"] = true,
+	["carl.panel_clean"] = true,
+	["carl.leak_fixed"] = true,
+	["carl.antenna_linked"] = true,
+	["carl.ice_picked"] = true,
+	["carl.ice_delivered"] = true,
+}
+local BUILT_KEY_PREFIX = "carl.base.built_"
+local UPGRADED_KEY = "carl.base.upgraded"
 
 local CarlDrone = {}
 
@@ -150,6 +224,8 @@ type Puff = { part: BasePart, born: number, velocity: Vector3, alive: boolean }
 
 local player = Players.LocalPlayer
 local started = false
+-- Where the guidance beam points now (a Part or an Attachment), read by Markers.luau.
+local currentGuide: Instance? = nil
 
 local function newPart(parent: Instance, name: string, shape: Enum.PartType, size: Vector3, color: Color3, material: Enum.Material): Part
 	local part = Instance.new("Part")
@@ -237,7 +313,90 @@ local function baseFolder(name: string): Instance?
 	return if base then base:FindFirstChild(name) else nil
 end
 
--- The build pad Part for one structure (Workspace.Base.BuildPads.<id>), or nil.
+-- World position of a guidance target: a Part (marker, pad) or an Attachment (a prompt point).
+local function targetPosition(target: Instance?): Vector3?
+	if target == nil or target.Parent == nil then
+		return nil
+	end
+	if target:IsA("BasePart") then
+		return (target :: BasePart).Position
+	elseif target:IsA("Attachment") then
+		return (target :: Attachment).WorldPosition
+	end
+	return nil
+end
+
+-- Distance from the player to a target (0 without a character, huge when it has no position).
+local function distanceTo(target: Instance): number
+	local position = targetPosition(target)
+	if position == nil then
+		return math.huge
+	end
+	local root = rootPart()
+	return if root then (position - root.Position).Magnitude else 0
+end
+
+-- Where a prompt is in the world: its Attachment or Part (a Model's main part), or nil.
+local function promptPoint(prompt: ProximityPrompt): Instance?
+	local holder = prompt.Parent
+	if holder and holder:IsA("Model") then
+		holder = holder.PrimaryPart or holder:FindFirstChildWhichIsA("BasePart", true)
+	end
+	if holder and (holder:IsA("Attachment") or holder:IsA("BasePart")) then
+		return holder
+	end
+	return nil
+end
+
+-- Every ProximityPrompt in Workspace (filled in CarlDrone.start and kept up to date).
+local knownPrompts: { [ProximityPrompt]: boolean } = {}
+
+local function promptTextKey(prompt: ProximityPrompt): string?
+	local key = prompt:GetAttribute("TextKey")
+	return if type(key) == "string" and key ~= "" then key else nil
+end
+
+-- The nearest ENABLED prompt whose TextKey is in `keys` (within `range` studs of the player when
+-- given), or nil. A disabled prompt is a task that cannot be done now (a clean panel, a fixed leak).
+local function nearestPrompt(keys: { [string]: boolean }, range: number?): ProximityPrompt?
+	local root = rootPart()
+	local best: ProximityPrompt? = nil
+	local bestDistance = range or math.huge
+	for prompt in knownPrompts do
+		if prompt.Parent == nil then
+			knownPrompts[prompt] = nil
+			continue
+		end
+		local key = promptTextKey(prompt)
+		if not prompt.Enabled or key == nil or not keys[key] then
+			continue
+		end
+		local position = targetPosition(promptPoint(prompt))
+		if position == nil then
+			continue
+		end
+		local distance = if root then (position - root.Position).Magnitude else 0
+		if distance <= bestDistance then
+			best = prompt
+			bestDistance = distance
+		end
+	end
+	return best
+end
+
+local function nearestPromptPoint(keys: { [string]: boolean }, range: number?): Instance?
+	local prompt = nearestPrompt(keys, range)
+	return if prompt then promptPoint(prompt) else nil
+end
+
+-- A DUSTY solar array: its cleaning prompt is enabled only while that array is dusty (the server
+-- turns it off on clean arrays), so C.A.R.L. never points at a clean row.
+local function dustyArrayTarget(): Instance?
+	return nearestPromptPoint(CLEAN_PROMPT_KEYS)
+end
+
+-- The build pad Part for one structure (Workspace.Base.BuildPads.<id>), or nil. Always the pad,
+-- never the structure standing on it.
 local function buildPad(id: string): BasePart?
 	local pads = baseFolder("BuildPads")
 	local pad = if pads then pads:FindFirstChild(id) else nil
@@ -308,7 +467,7 @@ local function siloPart(): BasePart?
 	if not (holder and holder:IsA("BasePart")) then
 		local silo = base:FindFirstChild("Silo", true)
 		if silo and silo:IsA("Model") then
-			holder = silo.PrimaryPart or silo:FindFirstChildWhichIsA("BasePart")
+			holder = silo.PrimaryPart or silo:FindFirstChildWhichIsA("BasePart", true)
 		else
 			holder = silo
 		end
@@ -319,53 +478,23 @@ local function siloPart(): BasePart?
 	return siloCache
 end
 
--- The BasePart a prompt sits on (directly, through an Attachment, or a Model's main part).
-local function promptHolder(prompt: Instance): BasePart?
-	local holder = prompt.Parent
-	if holder and holder:IsA("Attachment") then
-		holder = holder.Parent
-	end
-	if holder and holder:IsA("Model") then
-		holder = holder.PrimaryPart or holder:FindFirstChildWhichIsA("BasePart", true)
-	end
-	if holder and holder:IsA("BasePart") then
-		return holder
-	end
-	return nil
-end
-
--- Stage 7: the parts crate depot at the lander's cargo bay: Markers.CrateDepot, else the part with
--- the "take crate" prompt, searched at most every PROMPT_SEARCH_SECONDS.
-local depotCache: BasePart? = nil
-local depotSearchedAt = -math.huge
-local function crateDepotPart(): BasePart?
-	local marker = Store.findMarker(CRATE_DEPOT_MARKER)
-	if marker then
-		return marker
-	end
-	if depotCache and depotCache.Parent ~= nil then
-		return depotCache
-	end
-	local now = os.clock()
-	if now - depotSearchedAt < PROMPT_SEARCH_SECONDS then
-		return nil
-	end
-	depotSearchedAt = now
-	depotCache = nil
-	local base = workspace:FindFirstChild("Base")
-	if not base then
-		return nil
-	end
-	for _, item in base:GetDescendants() do
-		if item:IsA("ProximityPrompt") and item:GetAttribute("TextKey") == CRATE_PROMPT_KEY then
-			local holder = promptHolder(item)
-			if holder then
-				depotCache = holder
+-- Stage 7: the parts crate depot at the lander's cargo bay: the point of its "take crate" prompt
+-- ("CratePrompt", TextKey "prompt.take_crate"), else the guidance marker CrateDepot.
+local depotPrompt: ProximityPrompt? = nil
+local function crateDepotTarget(): Instance?
+	local cached = depotPrompt
+	if cached == nil or cached.Parent == nil then
+		depotPrompt = nil
+		for prompt in knownPrompts do
+			if prompt.Parent ~= nil and (prompt.Name == CRATE_PROMPT_NAME or promptTextKey(prompt) == CRATE_PROMPT_KEY) then
+				depotPrompt = prompt
 				break
 			end
 		end
+		cached = depotPrompt
 	end
-	return depotCache
+	local point = if cached then promptPoint(cached) else nil
+	return point or Store.findMarker(CRATE_DEPOT_MARKER)
 end
 
 -- Is the player carrying a parts crate from the lander?
@@ -389,9 +518,16 @@ local function hasTool(id: string): boolean
 end
 
 -- What the build at this pad needs next while it is built in steps: "crate" (bring parts),
--- "assemble" (the parts are there: use the wrench) or nil (not being built). BaseState.inProgress
--- when the Store has it, else the pad attribute SBO_Phase set by the server.
+-- "assemble" (the parts are there: use the wrench) or nil (not being built). The pad attribute
+-- SBO_Phase set by the server comes first (it replicates at once; "idle" = nothing under way), else
+-- BaseState.inProgress.
 local function stepNeed(id: string, pad: BasePart?): string?
+	local phase = if pad then pad:GetAttribute("SBO_Phase") else nil
+	if phase == "crate" or phase == "assemble" then
+		return phase
+	elseif type(phase) == "string" then
+		return nil
+	end
 	local state = baseState()
 	local list = if state then state.inProgress else nil
 	if type(list) == "table" then
@@ -401,10 +537,6 @@ local function stepNeed(id: string, pad: BasePart?): string?
 		end
 		return if progress.crate == true then "assemble" else "crate"
 	end
-	local phase = if pad then pad:GetAttribute("SBO_Phase") else nil
-	if phase == "crate" or phase == "assemble" then
-		return phase
-	end
 	return nil
 end
 
@@ -413,67 +545,82 @@ local function padIdOf(pad: BasePart): string
 	return if type(id) == "string" then id else pad.Name
 end
 
--- Where to go for the next step of one build (the crate depot first when parts are needed and the
--- player has none, else its pad).
-local function buildStepTarget(id: string): BasePart?
-	local pad = buildPad(id)
-	if stepNeed(id, pad) == "crate" and not carryingCrate() then
-		return crateDepotPart() or pad
+-- A pad whose build needs `need` ("crate" | "assemble") now: `preferred` when it does, else the
+-- nearest such pad, or nil.
+local function padNeeding(need: string, preferred: BasePart?): BasePart?
+	if preferred and preferred.Parent ~= nil and stepNeed(padIdOf(preferred), preferred) == need then
+		return preferred
 	end
-	return pad
-end
-
-local function distanceTo(part: BasePart): number
-	local root = rootPart()
-	return if root then (part.Position - root.Position).Magnitude else 0
-end
-
--- Builds in progress (base mode): the nearest pad waiting for the crate the player carries, else
--- the nearest step to assemble, else the crate depot (a step needs parts), or nil.
-local function stepTarget(): BasePart?
 	local pads = baseFolder("BuildPads")
 	if not pads then
 		return nil
 	end
-	local assemble: BasePart? = nil
-	local assembleDistance = math.huge
-	local deliver: BasePart? = nil
-	local deliverDistance = math.huge
+	local best: BasePart? = nil
+	local bestDistance = math.huge
 	for _, pad in pads:GetChildren() do
-		if not pad:IsA("BasePart") then
-			continue
-		end
-		local need = stepNeed(padIdOf(pad), pad)
-		if need == "assemble" then
+		if pad:IsA("BasePart") and stepNeed(padIdOf(pad), pad) == need then
 			local distance = distanceTo(pad)
-			if distance < assembleDistance then
-				assemble = pad
-				assembleDistance = distance
-			end
-		elseif need == "crate" then
-			local distance = distanceTo(pad)
-			if distance < deliverDistance then
-				deliver = pad
-				deliverDistance = distance
+			if distance < bestDistance then
+				best = pad
+				bestDistance = distance
 			end
 		end
 	end
+	return best
+end
+
+-- The nearest build pad within `range` studs of the player (any phase), or nil.
+local function padNearPlayer(range: number): BasePart?
+	local pads = baseFolder("BuildPads")
+	if not pads then
+		return nil
+	end
+	local best: BasePart? = nil
+	local bestDistance = range
+	for _, pad in pads:GetChildren() do
+		if pad:IsA("BasePart") then
+			local distance = distanceTo(pad)
+			if distance <= bestDistance then
+				best = pad
+				bestDistance = distance
+			end
+		end
+	end
+	return best
+end
+
+-- Where to go for the next step of one build (the crate depot first when parts are needed and the
+-- player has none, else its pad).
+local function buildStepTarget(id: string): Instance?
+	local pad = buildPad(id)
+	if stepNeed(id, pad) == "crate" and not carryingCrate() then
+		return crateDepotTarget() or pad
+	end
+	return pad
+end
+
+-- Builds in progress (base mode): the nearest pad waiting for the crate the player carries, else
+-- the nearest step to assemble, else the crate depot (a step needs parts), or nil.
+local function stepTarget(): Instance?
+	local deliver = padNeeding("crate", nil)
 	if deliver and carryingCrate() then
 		return deliver
 	end
+	local assemble = padNeeding("assemble", nil)
 	if assemble then
 		return assemble
 	end
 	if deliver then
-		return crateDepotPart() or deliver
+		return crateDepotTarget() or deliver
 	end
 	return nil
 end
 
 -- A fresh meteorite crater this player has not scanned yet (Workspace.Base.Impacts), or nil.
-local function impactTarget(): BasePart?
+-- needTablet = only when the tablet is unlocked (base-mode suggestions).
+local function impactTarget(needTablet: boolean): Instance?
 	local impacts = baseFolder("Impacts")
-	if not impacts or not hasTool("tablet") then
+	if not impacts or (needTablet and not hasTool("tablet")) then
 		return nil
 	end
 	local scanned = player:GetAttribute("SBO_ScannedImpact")
@@ -483,14 +630,14 @@ local function impactTarget(): BasePart?
 			continue
 		end
 		local prompt = impact:FindFirstChildWhichIsA("ProximityPrompt", true)
-		local part = if prompt then promptHolder(prompt) else nil
-		if part == nil and impact:IsA("Model") then
-			part = impact.PrimaryPart or impact:FindFirstChildWhichIsA("BasePart", true)
-		elseif part == nil and impact:IsA("BasePart") then
-			part = impact
+		local point: Instance? = if prompt then promptPoint(prompt) else nil
+		if point == nil and impact:IsA("Model") then
+			point = impact.PrimaryPart or impact:FindFirstChildWhichIsA("BasePart", true)
+		elseif point == nil and impact:IsA("BasePart") then
+			point = impact
 		end
-		if part then
-			return part
+		if point then
+			return point
 		end
 	end
 	return nil
@@ -519,9 +666,9 @@ local function poiParts(): { BasePart }
 end
 
 -- The nearest exploration site within POI_GUIDE_RANGE this player has not scanned, or nil.
-local function poiTarget(): BasePart?
+local function poiTarget(needTablet: boolean): BasePart?
 	local root = rootPart()
-	if not root or not hasTool("tablet") then
+	if not root or (needTablet and not hasTool("tablet")) then
 		return nil
 	end
 	local state = baseState()
@@ -545,6 +692,119 @@ local function poiTarget(): BasePart?
 	return best
 end
 
+-- C.A.R.L.'s latest spoken instruction that names a place (AssistantMessage remote). The beam
+-- follows it for INSTRUCTION_SECONDS, or until the job is done (see instructionTarget).
+type InstructionKind = "depot" | "pad" | "prompt" | "impact" | "poi" | "build" | "marker" | "dusty"
+type Instruction = { kind: InstructionKind, at: number, prompt: ProximityPrompt?, name: string? }
+local instruction: Instruction? = nil
+-- The pad this player last worked at (started, delivered, assembled, or was told what it needs).
+local builderPad: BasePart? = nil
+local builderAt = -math.huge
+
+local function instructionTarget(): Instance?
+	local current = instruction
+	if current == nil then
+		return nil
+	end
+	if os.clock() - current.at > INSTRUCTION_SECONDS then
+		instruction = nil
+		return nil
+	end
+	local kind = current.kind
+	if kind == "depot" then
+		-- "Bring a parts crate": the depot, while a build still waits for parts and the hands are free.
+		if carryingCrate() or padNeeding("crate", nil) == nil then
+			return nil
+		end
+		return crateDepotTarget()
+	elseif kind == "pad" then
+		-- "Hold your wrench and build": the pad whose parts are waiting.
+		local recent = if os.clock() - builderAt <= BUILDER_SECONDS then builderPad else nil
+		return padNeeding("assemble", recent)
+	elseif kind == "prompt" then
+		-- "Hold the <tool>": the task the player just tried, while it can still be done.
+		local prompt = current.prompt
+		if prompt == nil or prompt.Parent == nil or not prompt.Enabled then
+			return nil
+		end
+		return promptPoint(prompt)
+	elseif kind == "impact" then
+		return impactTarget(false)
+	elseif kind == "poi" then
+		return poiTarget(false)
+	elseif kind == "build" then
+		return if current.name then buildStepTarget(current.name) else nil
+	elseif kind == "dusty" then
+		return dustyArrayTarget()
+	elseif kind == "marker" then
+		return if current.name then Store.findMarker(current.name) else nil
+	end
+	return nil
+end
+
+local function setInstruction(kind: InstructionKind, prompt: ProximityPrompt?, name: string?)
+	instruction = { kind = kind, at = os.clock(), prompt = prompt, name = name }
+end
+
+-- A line from C.A.R.L. arrived (server TextRef key): remember where it sends the player.
+local function onAssistantMessage(key: string)
+	if BUILDER_KEYS[key] then
+		builderAt = os.clock()
+		if key ~= "carl.base.crate_taken" then
+			-- Said at the pad (the server only answers a pad prompt near it).
+			builderPad = padNearPlayer(BUILDER_PAD_RANGE) or builderPad
+		end
+	end
+	if DEPOT_KEYS[key] then
+		setInstruction("depot")
+	elseif PAD_KEYS[key] then
+		setInstruction("pad")
+	elseif string.sub(key, 1, #TOOL_KEY_PREFIX) == TOOL_KEY_PREFIX then
+		local keys = TOOL_PROMPT_KEYS[string.sub(key, #TOOL_KEY_PREFIX + 1)]
+		local prompt = if keys then nearestPrompt(keys, TOOL_PROMPT_RANGE) else nil
+		if prompt then
+			setInstruction("prompt", prompt)
+		end
+	elseif string.sub(key, 1, #METEOR_KEY_PREFIX) == METEOR_KEY_PREFIX then
+		setInstruction("impact")
+	elseif string.sub(key, 1, #EXPLORE_KEY_PREFIX) == EXPLORE_KEY_PREFIX and key ~= EXPLORE_ALL_KEY then
+		setInstruction("poi")
+	elseif string.sub(key, 1, #BUILD_FIRST_PREFIX) == BUILD_FIRST_PREFIX then
+		setInstruction("build", nil, string.sub(key, #BUILD_FIRST_PREFIX + 1))
+	elseif key == DUST_KEY then
+		setInstruction("dusty")
+	elseif MARKER_KEYS[key] then
+		setInstruction("marker", nil, MARKER_KEYS[key])
+	elseif DONE_KEYS[key] or string.sub(key, 1, #BUILT_KEY_PREFIX) == BUILT_KEY_PREFIX then
+		instruction = nil
+	end
+	if key == UPGRADED_KEY or string.sub(key, 1, #BUILT_KEY_PREFIX) == BUILT_KEY_PREFIX then
+		builderAt = -math.huge -- the build is finished
+		builderPad = nil
+	end
+end
+
+-- What C.A.R.L.'s own words ask for, before mission objectives and suggestions:
+--   1) a parts crate in hand: the build pad waiting for it;
+--   2) parts waiting at a pad this player works at (or any, in base mode): that pad, to assemble;
+--   3) the latest instruction with a place (instructionTarget).
+local function priorityTarget(phase: string): Instance?
+	local recentPad = if os.clock() - builderAt <= BUILDER_SECONDS then builderPad else nil
+	if carryingCrate() then
+		local pad = padNeeding("crate", recentPad)
+		if pad then
+			return pad
+		end
+	end
+	if phase == "Briefing" or recentPad ~= nil then
+		local pad = padNeeding("assemble", recentPad)
+		if pad then
+			return pad
+		end
+	end
+	return instructionTarget()
+end
+
 local function isBuildObjective(id: string): boolean
 	return string.sub(id, 1, #BUILD_OBJECTIVE_PREFIX) == BUILD_OBJECTIVE_PREFIX
 end
@@ -553,8 +813,8 @@ local function doableWhilePlanning(id: string): boolean
 	return PLANNING_OBJECTIVES[id] == true or isBuildObjective(id)
 end
 
--- Marker for one objective, or nil when it is not done in one place (or not now).
-local function objectiveTarget(id: string, phase: string): BasePart?
+-- Where one objective happens, or nil when it is not done in one place (or not now).
+local function objectiveTarget(id: string, phase: string): Instance?
 	local isBuild = isBuildObjective(id)
 	if phase == "Planning" and not doableWhilePlanning(id) then
 		return nil
@@ -565,32 +825,48 @@ local function objectiveTarget(id: string, phase: string): BasePart?
 	if isBuild then
 		return buildStepTarget(string.sub(id, #BUILD_OBJECTIVE_PREFIX + 1))
 	end
+	if id == "clean_panel" then
+		return dustyArrayTarget() -- only a dusty array; with none there is nothing to clean
+	end
+	local keys = OBJECTIVE_PROMPTS[id]
+	local point = if keys then nearestPromptPoint(keys) else nil
+	if point then
+		return point
+	end
 	local marker = OBJECTIVE_MARKERS[id]
 	return if marker then Store.findMarker(marker) else nil
 end
 
 -- The most useful task right now during a shift (free play, or objectives with no place).
-local function usefulTaskMarker(): string?
+local function usefulTaskTarget(): Instance?
 	local snap = Store.getSnapshot()
 	local shift = if snap then snap.shift else nil
 	if not shift then
 		return nil
 	end
 	if carryingIce() then
-		return "Processor"
+		return Store.findMarker("Processor")
 	elseif shift.leakActive then
-		return "Leak"
-	elseif shift.dustyArrays > 0 then
-		return "Arrays"
-	elseif not shift.antennaLinked then
-		return "Antenna"
+		return nearestPromptPoint(OBJECTIVE_PROMPTS.repair_leak) or Store.findMarker("Leak")
 	end
-	return "IceSite"
+	if shift.dustyArrays > 0 then
+		local dusty = dustyArrayTarget()
+		if dusty then
+			return dusty
+		end
+	end
+	if not shift.antennaLinked then
+		local antenna = nearestPromptPoint(OBJECTIVE_PROMPTS.align_antenna)
+		if antenna then
+			return antenna
+		end
+	end
+	return Store.findMarker("IceSite")
 end
 
 -- Base mode (Briefing): carried ice, build steps, a fresh meteorite crater, the next build the
 -- player can pay for, a nearby unscanned site, else ice.
-local function baseModeTarget(): BasePart?
+local function baseModeTarget(): Instance?
 	if carryingIce() then
 		local processor = Store.findMarker("Processor")
 		if processor then
@@ -601,7 +877,7 @@ local function baseModeTarget(): BasePart?
 	if step then
 		return step
 	end
-	local impact = impactTarget()
+	local impact = impactTarget(true)
 	if impact then
 		return impact
 	end
@@ -609,7 +885,7 @@ local function baseModeTarget(): BasePart?
 	if pad then
 		return pad
 	end
-	local site = poiTarget()
+	local site = poiTarget(true)
 	if site then
 		return site
 	end
@@ -625,16 +901,20 @@ local function baseModeTarget(): BasePart?
 end
 
 -- Where C.A.R.L.'s guidance beam should point now, or nil.
-local function guidanceTarget(): BasePart?
+local function guidanceTarget(): Instance?
 	if not Store.settingOn("guidance") then
 		return nil
 	end
 	local phase = Store.phase()
+	if phase ~= "Briefing" and phase ~= "Planning" and phase ~= "Shift" then
+		return nil
+	end
+	local first = priorityTarget(phase)
+	if first then
+		return first
+	end
 	if phase == "Briefing" then
 		return baseModeTarget()
-	end
-	if phase ~= "Planning" and phase ~= "Shift" then
-		return nil
 	end
 	local mission = Store.mission()
 	local objectives = if mission then mission.objectives else nil
@@ -657,8 +937,7 @@ local function guidanceTarget(): BasePart?
 		-- Shift tasks wait: the shift starts at the console.
 		return if hasShiftTask then Store.findMarker("Console") else nil
 	end
-	local name = usefulTaskMarker()
-	return if name then Store.findMarker(name) else nil
+	return usefulTaskTarget()
 end
 
 -- A small Earth for C.A.R.L.'s dome: a round CanvasGroup with two copies of the Blue Marble map
@@ -892,9 +1171,17 @@ function CarlDrone.start()
 	model.PrimaryPart = body
 	model.Parent = workspace
 
-	-- One local attachment per target part, created on first use (markers and pads can be rebuilt).
+	-- Where a beam ends: an Attachment target (a prompt point) itself, else one local attachment per
+	-- target part, created on first use (markers and pads can be rebuilt).
 	local targetAttachments: { [BasePart]: Attachment } = {}
-	local function attachmentFor(part: BasePart): Attachment
+	local function attachmentFor(target: Instance): Attachment?
+		if target:IsA("Attachment") then
+			return target :: Attachment
+		end
+		if not target:IsA("BasePart") then
+			return nil
+		end
+		local part = target :: BasePart
 		local existing = targetAttachments[part]
 		if existing and existing.Parent == part then
 			return existing
@@ -928,6 +1215,46 @@ function CarlDrone.start()
 		local name: string = kind
 		if name == "progress" or name == "base" then
 			applySkin()
+		elseif name == "explore" then
+			-- A site or crater was scanned: a "hold the tablet to scan it" instruction is done.
+			local current = instruction
+			if current and (current.kind == "prompt" or current.kind == "impact" or current.kind == "poi") then
+				instruction = nil
+			end
+		end
+	end)
+
+	-- Guidance target, worked out every GUIDE_REFRESH_SECONDS (guideAt = when it last was).
+	local guideTarget: Instance? = nil
+	local guideAt = -math.huge
+
+	-- Every ProximityPrompt in Workspace (task prompts, the crate depot, build pads).
+	local function watchPrompt(instance: Instance)
+		if instance:IsA("ProximityPrompt") then
+			knownPrompts[instance :: ProximityPrompt] = true
+		end
+	end
+	workspace.DescendantAdded:Connect(watchPrompt)
+	workspace.DescendantRemoving:Connect(function(instance: Instance)
+		if instance:IsA("ProximityPrompt") then
+			knownPrompts[instance :: ProximityPrompt] = nil
+		end
+	end)
+	for _, descendant in workspace:GetDescendants() do
+		watchPrompt(descendant)
+	end
+
+	-- C.A.R.L.'s lines from the server: the beam follows what they ask for.
+	task.spawn(function()
+		local remotes = ReplicatedStorage:WaitForChild(Types.Remotes.FOLDER)
+		local messageRemote = remotes:WaitForChild(Types.Remotes.MESSAGE)
+		if messageRemote:IsA("RemoteEvent") then
+			messageRemote.OnClientEvent:Connect(function(ref: any)
+				if type(ref) == "table" and type(ref.key) == "string" then
+					onAssistantMessage(ref.key)
+					guideAt = -math.huge -- point the new way at once
+				end
+			end)
 		end
 	end)
 
@@ -1030,8 +1357,6 @@ function CarlDrone.start()
 	local lastGood: Vector3? = nil -- last spot beside the player with ground under it
 	local nozzleGlowUntil = 0
 	local coreColor = CORE_NORMAL
-	local guideTarget: BasePart? = nil
-	local guideAt = -math.huge
 
 	local function emitPuffs(cf: CFrame, now: number, perNozzle: number)
 		local back = cf.LookVector * -1
@@ -1088,6 +1413,7 @@ function CarlDrone.start()
 		hop = nil
 		beam.Enabled = false
 		guide.Enabled = false
+		currentGuide = nil
 	end
 
 	RunService.RenderStepped:Connect(function(deltaTime: number)
@@ -1142,13 +1468,15 @@ function CarlDrone.start()
 		if now - guideAt >= GUIDE_REFRESH_SECONDS then
 			guideAt = now
 			guideTarget = if guiding then nil else guidanceTarget()
+			currentGuide = guideTarget
 		end
-		local shownGuide: BasePart? = nil
+		local shownGuide: Instance? = nil
 		local candidate = guideTarget
-		if candidate and candidate.Parent ~= nil and (candidate.Position - rootPos).Magnitude > GUIDE_HIDE_DISTANCE then
+		local candidatePosition = targetPosition(candidate)
+		if candidate and candidatePosition and (candidatePosition - rootPos).Magnitude > GUIDE_HIDE_DISTANCE then
 			shownGuide = candidate
 		end
-		local lookAt: BasePart? = door or shownGuide
+		local lookAtPosition: Vector3? = if door then door.Position else targetPosition(shownGuide)
 
 		-- 3) Move: snap, hop or drive.
 		local current = position
@@ -1218,8 +1546,8 @@ function CarlDrone.start()
 		local travelling = moved.Magnitude > 0.002 and (remaining > FACE_TRAVEL_DISTANCE or hop ~= nil)
 		if travelling then
 			wantYaw = yawOf(moved)
-		elseif lookAt then
-			local toLook = flat(lookAt.Position - pos)
+		elseif lookAtPosition then
+			local toLook = flat(lookAtPosition - pos)
 			wantYaw = if toLook.Magnitude > 0.1 then yawOf(toLook) else yawOf(playerLook)
 		else
 			wantYaw = yawOf(playerLook)
@@ -1227,8 +1555,8 @@ function CarlDrone.start()
 		local yawStep = angleDelta(yaw, wantYaw) * (1 - math.exp(-deltaTime * TURN_RATE))
 		yaw += yawStep
 		local headWant = 0
-		if lookAt then
-			local toLook = flat(lookAt.Position - pos)
+		if lookAtPosition then
+			local toLook = flat(lookAtPosition - pos)
 			if toLook.Magnitude > 0.1 then
 				headWant = math.clamp(angleDelta(yaw, yawOf(toLook)), -HEAD_TURN_MAX, HEAD_TURN_MAX)
 			end
@@ -1275,18 +1603,20 @@ function CarlDrone.start()
 		light.Color = coreColor
 
 		-- Shelter beam, pulsing so it catches the eye.
-		local showBeam = door ~= nil
-		if door then
-			beam.Attachment1 = attachmentFor(door)
+		local doorEnd = if door then attachmentFor(door) else nil
+		local showBeam = doorEnd ~= nil
+		if doorEnd then
+			beam.Attachment1 = doorEnd
 			local wave = (math.sin(now * 6) + 1) / 2
 			beam.Transparency = NumberSequence.new(0.05 + 0.35 * wave)
 		end
 		beam.Enabled = showBeam
 
 		-- Guidance beam: calmer pulse, fading toward the target.
-		local showGuide = shownGuide ~= nil and door == nil
-		if showGuide and shownGuide then
-			guide.Attachment1 = attachmentFor(shownGuide)
+		local guideEnd = if shownGuide and door == nil then attachmentFor(shownGuide) else nil
+		local showGuide = guideEnd ~= nil
+		if guideEnd then
+			guide.Attachment1 = guideEnd
 			local wave = (math.sin(now * 2.5) + 1) / 2
 			local near = 0.15 + 0.3 * wave
 			guide.Transparency = NumberSequence.new(near, math.min(0.9, near + 0.35))
@@ -1299,6 +1629,16 @@ function CarlDrone.start()
 			earthStrip.Position = UDim2.fromScale(-2 + turn * 2, 0)
 		end
 	end)
+end
+
+-- Where C.A.R.L.'s guidance beam points now (a Part or a prompt's Attachment), or nil: no guidance,
+-- a storm (the shelter beam), or nothing to do. Markers.luau shows that task's marker from afar.
+function CarlDrone.currentTarget(): Instance?
+	local target = currentGuide
+	if target and target.Parent ~= nil then
+		return target
+	end
+	return nil
 end
 
 return CarlDrone

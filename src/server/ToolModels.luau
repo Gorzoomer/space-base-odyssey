@@ -230,7 +230,7 @@ local SPECS: { [string]: ToolSpec } = {
 	-- Repair kit: a carry case with a roll of patch tape strapped underneath (fixes air leaks).
 	repair_kit = {
 		name = "Repair Kit",
-		icon = "repair",
+		icon = "repairKit", -- its own case icon: the wrench keeps the tool icon (team feedback)
 		grip = CFrame.new(0, 0, 0),
 		anim = "spin",
 		parts = {
@@ -252,12 +252,12 @@ local SPECS: { [string]: ToolSpec } = {
 			part("StrapR", v(0.08, 0.42, 0.42), at(0.26, -1.4, 0), "panel"),
 		},
 		decorate = function(parts: { [string]: BasePart }, rig: Rig)
-			-- The repair icon on both sides of the case.
+			-- The repair kit's own case icon on both sides of the case.
 			if parts.LabelBack then
-				table.insert(rig.guis, iconGui(parts.LabelBack, Enum.NormalId.Back, Icons.repair, Theme.ROLE.background, false))
+				table.insert(rig.guis, iconGui(parts.LabelBack, Enum.NormalId.Back, Icons.repairKit, Theme.ROLE.background, false))
 			end
 			if parts.LabelFront then
-				table.insert(rig.guis, iconGui(parts.LabelFront, Enum.NormalId.Front, Icons.repair, Theme.ROLE.background, false))
+				table.insert(rig.guis, iconGui(parts.LabelFront, Enum.NormalId.Front, Icons.repairKit, Theme.ROLE.background, false))
 			end
 		end,
 	},

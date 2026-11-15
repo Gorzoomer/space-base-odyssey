@@ -13,7 +13,15 @@
 -- step completes the level (it rises in). Progress is per server: anyone present may carry crates
 -- and assemble; the player who paid gets the build in their save. Pad prompt states are written as
 -- attributes (prompt TextKey / TextParams; pad SBO_Phase "idle" | "crate" | "assemble", SBO_Stage,
--- SBO_Stages). Skills, pets and tool upgrades are only bought at the Lab (built, and standing near
+-- SBO_Stages).
+-- Stage 8 (team feedback: "after delivering, E with the wrench does nothing until I walk away"):
+-- each pad has TWO prompts. "BuildPrompt" (WorldBuilder, short hold) pays and takes the crate;
+-- "AssemblePrompt" (made here, next to it, hold ASSEMBLE_HOLD_SECONDS, attribute SBO_Tool "wrench")
+-- assembles. Only one is enabled at a time and neither ever changes its HoldDuration: Roblox's
+-- prompt UI keeps the hold time it had when the prompt appeared, so a shown prompt whose hold grew
+-- from 0.6 to 2.5 seconds filled its ring at 0.6 and never triggered. A freshly enabled prompt is
+-- shown again with its own hold. Every placeholder key gets its TextParams (written before the key).
+-- Skills, pets and tool upgrades are only bought at the Lab (built, and standing near
 -- its prompt). Tools the player may carry come from the builds standing (BaseBuild.toolsUnlocked);
 -- ToolService gives them and reports what is in hand through setToolChecker.
 --
@@ -107,7 +115,8 @@ local cargoTurn = 0 -- rotates the cargo robot between several owners
 
 local jobs: { [string]: Job } = {} -- build id -> level being built (shared by the server)
 local pendingOwner: { [number]: Levels } = {} -- UserId -> builds finished by others while they were away
-local promptHold: { [string]: number } = {} -- each pad prompt's own HoldDuration (idle and crate phases)
+local promptHold: { [string]: number } = {} -- each BuildPrompt's own HoldDuration (never changed)
+local assemblePrompts: { [string]: ProximityPrompt } = {} -- build id -> its pad's AssemblePrompt
 local carrying: { [Player]: boolean } = {} -- players carrying a parts crate
 local foodReady: { [Player]: number } = {} -- server time when the greenhouse has food for the player
 local toolsSent: { [Player]: string } = {} -- last tool set announced to onToolsChanged listeners
@@ -117,6 +126,7 @@ local debugMeteorHook: ((Player, boolean?) -> ())? = nil
 local present: { [Player]: boolean } = {}
 local connections: { [Player]: { RBXScriptConnection } } = {}
 local lastActionAt: { [Player]: number } = {}
+local lastPromptAt: { [Player]: number } = {} -- prompts have their own limit: actions never swallow them
 local lastSentAt: { [Player]: number } = {}
 local sendScheduled: { [Player]: boolean } = {}
 
@@ -194,6 +204,18 @@ local function rateLimited(player: Player): boolean
 	return false
 end
 
+-- Prompt triggers (they already need a hold) are limited apart from remote actions, so an action
+-- sent just before (for example an Equip) never swallows a delivery or an assembly.
+local function promptLimited(player: Player): boolean
+	local t = os.clock()
+	local last = lastPromptAt[player]
+	if last and t - last < ACTION_INTERVAL_SECONDS then
+		return true
+	end
+	lastPromptAt[player] = t
+	return false
+end
+
 local function isLoaded(player: Player): boolean
 	local api = progress
 	return api ~= nil and present[player] == true and api.isLoaded(player)
@@ -256,6 +278,24 @@ end
 local function buildPromptOf(id: string): ProximityPrompt?
 	local prompts = world and world.buildPrompts
 	return if type(prompts) == "table" then asPrompt(prompts[id]) else nil
+end
+
+-- Sets a prompt's localization key and its placeholder values. The params go first, so the client
+-- (Prompts.luau re-renders on each attribute change) never shows a key with raw {n} placeholders.
+local function setPromptText(prompt: ProximityPrompt, key: string, params: Params)
+	local encoded = HttpService:JSONEncode(params)
+	if prompt:GetAttribute("TextParams") ~= encoded then
+		prompt:SetAttribute("TextParams", encoded)
+	end
+	if prompt:GetAttribute("TextKey") ~= key then
+		prompt:SetAttribute("TextKey", key)
+	end
+end
+
+local function setEnabled(prompt: ProximityPrompt?, on: boolean)
+	if prompt and prompt.Enabled ~= on then
+		prompt.Enabled = on
+	end
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -537,17 +577,37 @@ local function refreshPrompts()
 			local level = BaseBuild.levelOf(effective, def.id)
 			local job = jobs[def.id]
 			local hold = promptHold[def.id] or prompt.HoldDuration
-			prompt:SetAttribute("ObjectKey", `build.{def.id}.name`)
+			local assemble = assemblePrompts[def.id]
+			if prompt.HoldDuration ~= hold then
+				prompt.HoldDuration = hold -- never changes while shown (see the header)
+			end
+			local objectKey = `build.{def.id}.name`
+			if prompt:GetAttribute("ObjectKey") ~= objectKey then
+				prompt:SetAttribute("ObjectKey", objectKey)
+			end
 			setPadAttribute(pad, "SBO_Level", level)
 			setPadAttribute(pad, "SBO_MaxLevel", def.maxLevel)
 
 			if job then
-				-- A level is being built: bring a crate, then assemble it with the wrench.
+				-- A level is being built: bring a crate (BuildPrompt), then assemble it with the wrench
+				-- (AssemblePrompt). Only one of the two prompts is on.
 				local phase: PadPhase = if job.crate then "assemble" else "crate"
-				prompt:SetAttribute("TextKey", if job.crate then "prompt.assemble" else "prompt.deliver_crate")
-				prompt:SetAttribute("TextParams", HttpService:JSONEncode({ n = job.stage + 1, m = job.stages }))
-				prompt.HoldDuration = if job.crate then BASE.ASSEMBLE_HOLD_SECONDS else hold
-				prompt.Enabled = true
+				local stepParams: Params = { n = job.stage + 1, m = job.stages }
+				if assemble then
+					setPromptText(assemble, "prompt.assemble", stepParams)
+					if job.crate then
+						setEnabled(prompt, false)
+						setEnabled(assemble, true)
+					else
+						setPromptText(prompt, "prompt.deliver_crate", stepParams)
+						setEnabled(assemble, false)
+						setEnabled(prompt, true)
+					end
+				else
+					-- No AssemblePrompt (should not happen): the BuildPrompt does both, with its own hold.
+					setPromptText(prompt, if job.crate then "prompt.assemble" else "prompt.deliver_crate", stepParams)
+					setEnabled(prompt, true)
+				end
 				setPadAttribute(pad, "SBO_Phase", phase)
 				setPadAttribute(pad, "SBO_Stage", job.stage)
 				setPadAttribute(pad, "SBO_Stages", job.stages)
@@ -569,11 +629,13 @@ local function refreshPrompts()
 			end
 			if cost ~= nil then
 				local textKey = if level > 0 then "prompt.upgrade" elseif cost == 0 then "prompt.build_free" else "prompt.build"
-				prompt:SetAttribute("TextKey", textKey)
-				prompt:SetAttribute("TextParams", HttpService:JSONEncode({ n = cost }))
+				setPromptText(prompt, textKey, { n = cost })
+			elseif prompt:GetAttribute("TextParams") == nil then
+				-- At its top level the prompt is off; still never leave a key without its params.
+				setPromptText(prompt, "prompt.upgrade", { n = 0 })
 			end
-			prompt.HoldDuration = hold
-			prompt.Enabled = cost ~= nil and not locked
+			setEnabled(assemble, false)
+			setEnabled(prompt, cost ~= nil and not locked)
 			setPadAttribute(pad, "SBO_Phase", "idle")
 			setPadAttribute(pad, "SBO_Stage", 0)
 			setPadAttribute(pad, "SBO_Stages", if cost ~= nil then BaseBuild.stagesFor(MissionData, def.id, level + 1) else 0)
@@ -921,32 +983,44 @@ local function assembleStep(player: Player, id: string, job: Job)
 	scheduleSendAll()
 end
 
--- A player used the build pad of `id` (prompt or trusted Build action). force = trusted debug: the
--- crate and the wrench are not needed.
+-- Assembles the step whose parts are at the pad of `id` (AssemblePrompt, or the BuildPrompt when a
+-- trigger was already on its way as the prompts switched). Needs the wrench in hand.
+local function assemblePad(player: Player, id: string)
+	local job = jobs[id]
+	if job == nil or not job.crate then
+		refreshPrompts() -- a late trigger: make sure the right prompt shows
+		return
+	end
+	if not isHolding(player, "wrench") then
+		sayTo(player, "carl.base.need_wrench")
+		return
+	end
+	assembleStep(player, id, job)
+end
+
+-- A player used the build pad of `id` (BuildPrompt or trusted Build action). force = trusted debug:
+-- the crate and the wrench are not needed.
 local function usePad(player: Player, id: string, force: boolean)
 	local job = jobs[id]
 	if job == nil then
 		startBuild(player, id)
 		return
 	end
-	if not job.crate then
-		if carrying[player] then
+	if force then
+		if not job.crate and carrying[player] then
 			deliverCrate(player, id, job)
-		elseif force then
-			job.crate = true
-		else
-			sayTo(player, "carl.base.need_crate")
-			return
 		end
-		if not force then
-			return
-		end
-	end
-	if not force and not isHolding(player, "wrench") then
-		sayTo(player, "carl.base.need_wrench")
+		job.crate = true
+		assembleStep(player, id, job)
 		return
 	end
-	assembleStep(player, id, job)
+	if job.crate then
+		assemblePad(player, id)
+	elseif carrying[player] then
+		deliverCrate(player, id, job)
+	else
+		sayTo(player, "carl.base.need_crate")
+	end
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -1278,6 +1352,7 @@ local function removePlayer(player: Player)
 	end
 	connections[player] = nil
 	lastActionAt[player] = nil
+	lastPromptAt[player] = nil
 	lastSentAt[player] = nil
 	sendScheduled[player] = nil
 	carrying[player] = nil
@@ -1345,6 +1420,39 @@ local function guarded(label: string, fn: () -> ())
 	end
 end
 
+-- The pad's second prompt, for assembling a step with the wrench: same place, range and key as the
+-- BuildPrompt, its own long hold. Off until a crate is at the pad.
+local function makeAssemblePrompt(id: string, buildPrompt: ProximityPrompt): ProximityPrompt?
+	local parent = buildPrompt.Parent
+	if parent == nil then
+		return nil
+	end
+	local existing = parent:FindFirstChild("AssemblePrompt")
+	if existing and existing:IsA("ProximityPrompt") then
+		return existing
+	end
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "AssemblePrompt"
+	prompt.ActionText = "Assemble" -- the client replaces it from TextKey (src/client/Prompts.luau)
+	prompt.ObjectText = ""
+	prompt.HoldDuration = BASE.ASSEMBLE_HOLD_SECONDS
+	prompt.MaxActivationDistance = buildPrompt.MaxActivationDistance
+	prompt.RequiresLineOfSight = buildPrompt.RequiresLineOfSight
+	prompt.KeyboardKeyCode = buildPrompt.KeyboardKeyCode
+	prompt.GamepadKeyCode = buildPrompt.GamepadKeyCode
+	prompt.Exclusivity = buildPrompt.Exclusivity
+	prompt.UIOffset = buildPrompt.UIOffset
+	prompt.Style = buildPrompt.Style
+	prompt.Enabled = false
+	prompt:SetAttribute("BuildId", id)
+	prompt:SetAttribute("SBO_Tool", "wrench") -- the tool this prompt needs in hand (client cues)
+	prompt:SetAttribute("ObjectKey", `build.{id}.name`)
+	prompt:SetAttribute("TextParams", HttpService:JSONEncode({ n = 1, m = 1 }))
+	prompt:SetAttribute("TextKey", "prompt.assemble")
+	prompt.Parent = parent
+	return prompt
+end
+
 local function connectPrompts()
 	local prompts = world and world.buildPrompts
 	if type(prompts) ~= "table" then
@@ -1360,18 +1468,30 @@ local function connectPrompts()
 			promptHold[buildId] = buildPrompt.HoldDuration
 			buildPrompt.Triggered:Connect(function(player: Player)
 				guarded("build prompt", function()
-					if present[player] and not rateLimited(player) and closeEnough(player, buildPrompt) then
+					if present[player] and not promptLimited(player) and closeEnough(player, buildPrompt) then
 						usePad(player, buildId, false)
 					end
 				end)
 			end)
+			local assemble = makeAssemblePrompt(buildId, buildPrompt)
+			if assemble then
+				local assemblePrompt: ProximityPrompt = assemble
+				assemblePrompts[buildId] = assemblePrompt
+				assemblePrompt.Triggered:Connect(function(player: Player)
+					guarded("assemble prompt", function()
+						if present[player] and not promptLimited(player) and closeEnough(player, assemblePrompt) then
+							assemblePad(player, buildId)
+						end
+					end)
+				end)
+			end
 		end
 	end
 	local siloPrompt = asPrompt(world and world.siloPrompt)
 	if siloPrompt then
 		siloPrompt.Triggered:Connect(function(player: Player)
 			guarded("silo prompt", function()
-				if present[player] and not rateLimited(player) then
+				if present[player] and not promptLimited(player) then
 					doClaimSilo(player, false)
 				end
 			end)
@@ -1384,7 +1504,7 @@ local function connectPrompts()
 		local depotPrompt: ProximityPrompt = cratePrompt
 		depotPrompt.Triggered:Connect(function(player: Player)
 			guarded("crate prompt", function()
-				if present[player] and not rateLimited(player) and closeEnough(player, depotPrompt) then
+				if present[player] and not promptLimited(player) and closeEnough(player, depotPrompt) then
 					takeCrate(player)
 				end
 			end)

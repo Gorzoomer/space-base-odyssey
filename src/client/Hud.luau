@@ -3,6 +3,11 @@
 --   Shift screen: meters, shift timer, event banner, storm countdown (with the flare's data source),
 --   Earth-link indicator.
 --   Field (shift and while roaming the base): suit air bar (out of PlayerStats.suitMax) and ice.
+--   Fix 8 (playtest): the field pills stack upwards from just above Roblox's tool bar (the backpack
+--   hotbar, bottom centre, about 70 real pixels tall while the player has tools) and above the
+--   vehicle panel while driving, so nothing hides under them. The left column starts under the
+--   Roblox top bar (GuiService.TopbarInset), and the build-progress signs are small screen-sized
+--   signs high above the pads, clear of the pad's own prompt.
 --   Wallet (Stage 6: shift, roaming, base mode and mission select): credits, player level and an XP
 --   bar, with a "+N" pop when credits rise.
 --   Stage 7 (field): a "Carrying parts" pill while the player carries a parts crate from the lander,
@@ -22,14 +27,19 @@
 --                            sources button (y 0.195: shift, power board)
 --   left column  x 0.01-0.21  objectives (Objectives.luau, from y 0.10-0.12), then the meters panel
 --                             right under it (air, food, radiation, water, data waiting), then the
---                             wallet (at y 0.105 when nothing is above it)
---   centre       y 0.10-0.25  C.A.R.L. bubble (Messages.luau, x 0.29-0.71)
+--                             wallet (at y 0.105 when nothing is above it, lower when the Roblox top
+--                             bar is taller, e.g. on phones)
+--   centre       y 0.115-0.26 C.A.R.L. bubble (Messages.luau, x 0.29-0.71; y 0.19 in base mode)
 --                y 0.27-0.48  storm countdown and flare source (x 0.22-0.78)
---   bottom       y 0.68-0.74  food boost; y 0.76-0.84  carrying ice or parts; y 0.86-0.96 suit air
+--   bottom       stacked upwards from the tool bar's top edge (see placeStack): suit air (0.085
+--                tall), then carrying ice or parts (0.07), then the food boost (0.055)
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
+local GuiService = game:GetService("GuiService")
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
 local TweenService = game:GetService("TweenService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -63,12 +73,26 @@ local COLUMN_GAP = 0.012
 local METERS_HEIGHT = 0.19
 local WALLET_TOP = 0.105 -- under the Roblox menu buttons when nothing else is in the column
 local WALLET_HEIGHT = 0.09
+local TOPBAR_GAP_PIXELS = 8 -- under the Roblox top bar (menu and chat buttons)
 local POP_SECONDS = 0.9
 local FOOD_BOOST_ATTRIBUTE = "SBO_FoodBoostUntil"
--- Build-progress signs over the pads (studs).
-local SIGN_SIZE = UDim2.fromScale(13, 4.2)
-local SIGN_HEIGHT = 9
-local SIGN_MAX_DISTANCE = 220
+-- Bottom stack (fractions of the screen), above Roblox's tool bar. The default backpack hotbar uses
+-- 60 px slots with a 5 px buffer: 70 real pixels at the bottom centre (not scaled by our UIScale).
+local HOTBAR_PIXELS = 70
+local HOTBAR_GAP_PIXELS = 14
+local EDGE_PIXELS = 14 -- bottom margin when no tool bar shows
+local STACK_GAP = 0.012
+local SUIT_SIZE = UDim2.fromScale(0.42, 0.085)
+local CARRY_SIZE = UDim2.fromScale(0.26, 0.07)
+local FOOD_SIZE = UDim2.fromScale(0.22, 0.055)
+local VEHICLE_PANEL_NAME = "VehiclePanel" -- VehicleClient.luau, bottom centre while driving
+-- Build-progress signs over the pads: screen-sized (pixels at UI scale 1), high above the pad so
+-- the pad's ProximityPrompt (drawn at the pad) always stays readable.
+local SIGN_PIXELS = Vector2.new(200, 58)
+local SIGN_MIN_SCALE = 0.6
+local SIGN_MAX_SCALE = 1.6
+local SIGN_HEIGHT = 12 -- studs above the pad centre
+local SIGN_MAX_DISTANCE = 150
 local SIGN_POLL_SECONDS = 1 -- look again for pads that were not there yet
 
 -- What the HUD shows (Main.client picks it from the phase and the open screens):
@@ -195,7 +219,7 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 
 	local iceBadge = Ui.iconText(field, {
 		name = "CarryingIce",
-		size = UDim2.fromScale(0.28, 0.08),
+		size = CARRY_SIZE,
 		position = UDim2.fromScale(0.5, 0.76),
 		anchor = Vector2.new(0.5, 0),
 		color = Ui.COLORS.ice,
@@ -210,7 +234,7 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	-- Stage 7: a parts crate carried from the lander to a build pad (same place as the ice: one at a time).
 	local crateBadge = Ui.iconText(field, {
 		name = "CarryingCrate",
-		size = UDim2.fromScale(0.28, 0.08),
+		size = CARRY_SIZE,
 		position = UDim2.fromScale(0.5, 0.76),
 		anchor = Vector2.new(0.5, 0),
 		color = ROLE.star,
@@ -225,7 +249,7 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	-- Stage 7: greenhouse food eaten: a short speed boost with a countdown.
 	local foodBadge = Ui.iconText(field, {
 		name = "FoodBoost",
-		size = UDim2.fromScale(0.22, 0.06),
+		size = FOOD_SIZE,
 		position = UDim2.fromScale(0.5, 0.68),
 		anchor = Vector2.new(0.5, 0),
 		color = ROLE.good,
@@ -239,7 +263,7 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 
 	local suitPanel = Ui.panel(field, {
 		name = "Suit",
-		size = UDim2.fromScale(0.46, 0.1),
+		size = SUIT_SIZE,
 		position = UDim2.fromScale(0.5, 0.86),
 		anchor = Vector2.new(0.5, 0),
 		transparency = 0.1,
@@ -337,24 +361,95 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	local walletTop = WALLET_TOP
 	local shownCredits: number? = nil
 	local shownLevel: number? = nil
+	local player = Players.LocalPlayer
+
+	local function viewportHeight(): number
+		local camera = workspace.CurrentCamera
+		local height = if camera then camera.ViewportSize.Y else 0
+		return if height > 0 then height else 720
+	end
+
+	-- Bottom of the Roblox top bar (screen fraction): on phones it takes more of the screen.
+	local function topbarBottom(): number
+		local inset = 0
+		local ok, rect = pcall(function(): any
+			return (GuiService :: any).TopbarInset
+		end)
+		if ok and typeof(rect) == "Rect" then
+			inset = (rect :: Rect).Max.Y
+		end
+		if inset <= 0 then
+			inset = GuiService:GetGuiInset().Y
+		end
+		return (inset + TOPBAR_GAP_PIXELS) / viewportHeight()
+	end
 
 	-- Keep the meters panel right under the objectives panel (its height changes with the mission).
 	-- The wallet follows the meters (shift) or the objectives (roaming), else it sits at the top.
+	-- Nothing starts under the Roblox top bar.
 	local function placeColumn()
+		local topLimit = topbarBottom()
 		local bottom = if deps and deps.columnTop then deps.columnTop() else nil
-		local top = if bottom then bottom + COLUMN_GAP else COLUMN_TOP
+		local top = if bottom then bottom + COLUMN_GAP else math.max(COLUMN_TOP, topLimit)
 		if math.abs(top - columnTop) > 0.0005 then
 			columnTop = top
 			meters.frame.Position = UDim2.fromScale(COLUMN_X, top)
 		end
 		local below: number? = if mode == "shift" then columnTop + METERS_HEIGHT else bottom
-		local nextWalletTop = if below then below + COLUMN_GAP else WALLET_TOP
+		local nextWalletTop = if below then below + COLUMN_GAP else math.max(WALLET_TOP, topLimit)
 		if math.abs(nextWalletTop - walletTop) > 0.0005 then
 			walletTop = nextWalletTop
 			wallet.Position = UDim2.fromScale(COLUMN_X, walletTop)
 		end
 	end
 	meters.frame.Position = UDim2.fromScale(COLUMN_X, COLUMN_TOP)
+
+	-- True while Roblox shows its tool bar: the backpack core UI is on and the player has a tool.
+	local function hotbarShown(): boolean
+		local ok, enabled = pcall(function(): boolean
+			return StarterGui:GetCoreGuiEnabled(Enum.CoreGuiType.Backpack)
+		end)
+		if ok and enabled == false then
+			return false
+		end
+		local backpack = player:FindFirstChildOfClass("Backpack")
+		if backpack and backpack:FindFirstChildOfClass("Tool") then
+			return true
+		end
+		local character = player.Character
+		return character ~= nil and character:FindFirstChildOfClass("Tool") ~= nil
+	end
+
+	-- Lowest screen fraction the bottom pills may reach: above the tool bar (or the screen edge),
+	-- and above the vehicle panel while driving.
+	local function bottomLimit(): number
+		local reserve = if hotbarShown() then HOTBAR_PIXELS + HOTBAR_GAP_PIXELS else EDGE_PIXELS
+		local limit = 1 - reserve / viewportHeight()
+		local vehicle = root:FindFirstChild(VEHICLE_PANEL_NAME)
+		local rootHeight = root.AbsoluteSize.Y
+		if vehicle and vehicle:IsA("GuiObject") and vehicle.Visible and rootHeight > 0 then
+			local top = (vehicle.AbsolutePosition.Y - root.AbsolutePosition.Y) / rootHeight
+			limit = math.min(limit, top - STACK_GAP)
+		end
+		return limit
+	end
+
+	-- Bottom centre pills, stacked upwards from bottomLimit (only the visible ones take room):
+	-- suit air, then carrying ice or parts, then the food boost.
+	local stackOrder: { GuiObject } = { suitPanel, crateBadge.frame, iceBadge.frame, foodBadge.frame }
+	local function placeStack()
+		local y = bottomLimit()
+		for _, item in stackOrder do
+			if not item.Visible then
+				continue
+			end
+			y -= item.Size.Y.Scale
+			if math.abs(item.Position.Y.Scale - y) > 0.0005 then
+				item.Position = UDim2.fromScale(0.5, y)
+			end
+			y -= STACK_GAP
+		end
+	end
 
 	-- "+N" rises from the credits and fades.
 	local function popCredits(amount: number)
@@ -463,10 +558,10 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 			suitPanel.Visible = false
 		end
 		renderWallet()
+		placeStack()
 	end
 
 	-- Food boost countdown (server time from the player attribute set by the server's ToolService).
-	local player = game:GetService("Players").LocalPlayer
 	local function renderFood()
 		local value = player:GetAttribute(FOOD_BOOST_ATTRIBUTE)
 		local left = if type(value) == "number" then value - workspace:GetServerTimeNow() else 0
@@ -475,6 +570,7 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		if boosted then
 			foodBadge.set(Ui.ICONS.food, Store.t("ui.food_boost", { seconds = math.ceil(left) }), Ui.COLORS.textDark)
 		end
+		placeStack()
 	end
 	player:GetAttributeChangedSignal(FOOD_BOOST_ATTRIBUTE):Connect(renderFood)
 
@@ -482,6 +578,14 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	-- Build-progress signs: a BillboardGui on each pad (Workspace.Base.BuildPads.<id>) with a build
 	-- in progress. Local only: every player sees the shared progress from their own BaseState.
 	---------------------------------------------------------------------------------------------
+	-- The wrench's own icon (MissionData.BASE.TOOLS), the same as in the tool bar and the Lab.
+	local WRENCH_IMAGE = Ui.Icons.failure
+	for _, tool in MissionData.BASE.TOOLS do
+		if tool.id == "wrench" then
+			WRENCH_IMAGE = Ui.iconImage(tool.icon)
+		end
+	end
+
 	type Sign = {
 		gui: BillboardGui,
 		title: TextLabel,
@@ -502,19 +606,25 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		return nil
 	end
 
-	-- Sign text scales with the sign (a BillboardGui sized in studs), not with the screen.
+	-- Sign text scales with the sign (a BillboardGui sized in pixels, outside the root's UIScale).
 	local function looseText(label: TextLabel)
 		local constraint = label:FindFirstChildOfClass("UITextSizeConstraint")
 		if constraint then
-			constraint.MaxTextSize = 60
-			constraint.MinTextSize = 6
+			constraint.MaxTextSize = 40
+			constraint.MinTextSize = 7
 		end
+	end
+
+	-- Same size on every screen as the rest of the HUD (the root's UIScale), within limits.
+	local function signSize(): UDim2
+		local scale = math.clamp(Ui.scale(), SIGN_MIN_SCALE, SIGN_MAX_SCALE)
+		return UDim2.fromOffset(math.floor(SIGN_PIXELS.X * scale), math.floor(SIGN_PIXELS.Y * scale))
 	end
 
 	local function makeSign(id: string, pad: BasePart): Sign
 		local gui = Instance.new("BillboardGui")
 		gui.Name = "SBO_BuildProgress"
-		gui.Size = SIGN_SIZE
+		gui.Size = signSize()
 		gui.StudsOffsetWorldSpace = Vector3.new(0, SIGN_HEIGHT, 0)
 		gui.AlwaysOnTop = true
 		gui.LightInfluence = 0
@@ -526,20 +636,20 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 			color = ROLE.panel,
 			transparency = 0.08,
 			corner = 0.2,
-			stroke = 3,
+			stroke = 2,
 			strokeColor = ROLE.accent,
 		})
 		local def = BaseBuild.buildDef(MissionData, id)
 		Ui.icon(frame, Ui.iconImage(if def then def.icon else "build"), {
 			name = "Icon",
-			size = UDim2.fromScale(0.13, 0.36),
+			size = UDim2.fromScale(0.12, 0.36),
 			position = UDim2.fromScale(0.03, 0.06),
 			tint = ROLE.accent,
 		})
 		local title = Ui.label(frame, {
 			name = "Title",
-			size = UDim2.fromScale(0.56, 0.34),
-			position = UDim2.fromScale(0.17, 0.07),
+			size = UDim2.fromScale(0.58, 0.34),
+			position = UDim2.fromScale(0.16, 0.07),
 			alignX = Enum.TextXAlignment.Left,
 			textColor = ROLE.text,
 		})
@@ -568,14 +678,14 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		})
 		local needIcon = Ui.icon(frame, Ui.Icons.crate, {
 			name = "NeedIcon",
-			size = UDim2.fromScale(0.1, 0.28),
-			position = UDim2.fromScale(0.03, 0.66),
+			size = UDim2.fromScale(0.12, 0.3),
+			position = UDim2.fromScale(0.03, 0.64),
 			tint = ROLE.star,
 		})
 		local need = Ui.body(frame, {
 			name = "Need",
-			size = UDim2.fromScale(0.82, 0.28),
-			position = UDim2.fromScale(0.15, 0.66),
+			size = UDim2.fromScale(0.8, 0.3),
+			position = UDim2.fromScale(0.16, 0.64),
 			textColor = ROLE.star,
 		})
 		looseText(need)
@@ -604,6 +714,10 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 				signs[id] = sign
 			end
 			local current = sign :: Sign
+			local size = signSize()
+			if current.gui.Size ~= size then
+				current.gui.Size = size
+			end
 			local name = Store.t(`build.{id}.name`)
 			current.title.Text = if progress.level > 1 then name .. "  " .. Store.t("ui.level", { n = progress.level }) else name
 			current.step.Text = Store.t("ui.build_step", { n = progress.stage, max = progress.stages })
@@ -611,7 +725,7 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 			current.fill.Size = UDim2.fromScale(fraction, 1)
 			current.fill.Visible = fraction > 0.005
 			if progress.crate then
-				Ui.setIcon(current.needIcon, Ui.Icons.failure, ROLE.good) -- the wrench
+				Ui.setIcon(current.needIcon, WRENCH_IMAGE, ROLE.good)
 				current.need.Text = Store.t("ui.build_need_assemble")
 				current.need.TextColor3 = ROLE.good
 			else
@@ -644,7 +758,7 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 
 	local function tick()
 		if field.Visible then
-			renderFood()
+			renderFood() -- also places the bottom stack (the tool bar comes and goes with the tools)
 		end
 		if wallet.Visible then
 			placeColumn() -- the objectives panel above the wallet can change height
@@ -725,6 +839,7 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		crateBadge.frame.Visible = carryingCrate
 		local stats = Store.getStats()
 		iceBadge.frame.Visible = stats ~= nil and stats.carryingIce and not carryingCrate
+		placeStack()
 		renderSigns()
 	end
 

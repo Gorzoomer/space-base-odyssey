@@ -211,7 +211,7 @@ MissionData.BASE = table.freeze({
 		table.freeze({ id = "wrench", icon = "failure" }),
 		table.freeze({ id = "drill", icon = "drill" }),
 		table.freeze({ id = "brush", icon = "brush", unlock = "solar" }),
-		table.freeze({ id = "repair_kit", icon = "repair", unlock = "habitat" }),
+		table.freeze({ id = "repair_kit", icon = "repairKit", unlock = "habitat" }),
 		table.freeze({ id = "tablet", icon = "tablet", unlock = "antenna" }),
 		table.freeze({ id = "food", icon = "food", unlock = "greenhouse", consumable = true }),
 	}),

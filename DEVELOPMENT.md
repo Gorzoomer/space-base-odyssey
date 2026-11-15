@@ -252,6 +252,16 @@ Tested in Studio (assistant-driven):
 
 Found in that test: Roblox refuses to set a script source over 200,000 characters, so the 238,000-character world builder stopped Rojo live sync. It was split into smaller modules.
 
+**Morning – Team playtest feedback, round 4, and fixes.** The team reported, and the fixes:
+- **Overlapping boxes and HUD under the tool bar:** the suit air bar and the carrying pills now stack above the Roblox hotbar. The C.A.R.L. bubble sits at the top centre while playing. The "Step 1/2" sign over a build pad is smaller and higher, so it never covers the pad's prompt.
+- **Too many markers on screen:** a marker shows only when the player is close, when C.A.R.L. points at it, or when the current objective needs it.
+- **Two tools with the same icon:** the repair kit now uses its own case icon (Tabler briefcase-2), different from the wrench.
+- **C.A.R.L. pointed at the wrong place:** its beam now follows what it just said. "Bring parts" points at the lander's cargo bay; carrying parts or assembling points at the build pad, never the structure; cleaning points only at a dusty row.
+- **Visual cue for kids:** every C.A.R.L. instruction that needs a tool shows that tool's icon between the robot and the text.
+- **Assemble bug:** after delivering parts, holding E with the wrench did nothing until the player walked away. The cause: the pad's single prompt changed its hold time while it was on screen, and Roblox keeps the old hold time. Each pad now has a separate Assemble prompt. Prompt triggers also no longer share a rate limit with other actions.
+- **Raw "{n}" in marker labels:** the labels now fill in the numbers.
+- **Cheese pet:** the helmet that cut through its body is gone; it has a tiny antenna with a blinking light.
+
 ## Decisions
 
 | Decision | Who decided | Why |

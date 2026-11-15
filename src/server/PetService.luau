@@ -96,7 +96,9 @@ local MODELS: { [string]: { PetRow } } = PetModels :: any
 local DEFAULT_GAIT: Gait = { height = 2.8, hopHeight = 0.4, hopRate = 11, limbSwing = 30, together = false, waddle = 0 }
 local GAITS: { [string]: Gait } = {
 	laika = { height = 3.0, hopHeight = 0.35, hopRate = 12, limbSwing = 35, together = false, waddle = 0 },
-	cheese = { height = 2.7, hopHeight = 0.3, hopRate = 14, limbSwing = 40, together = false, waddle = 7 },
+	-- The cheese lost its helmet (Stage 8): its top is now the antenna light, not the old antenna above
+	-- the helmet, so 2.07 keeps the wedge the same size as before (2.7 * 3.01 / 3.93).
+	cheese = { height = 2.07, hopHeight = 0.3, hopRate = 14, limbSwing = 40, together = false, waddle = 7 },
 	rabbit = { height = 3.4, hopHeight = 0.85, hopRate = 8, limbSwing = 25, together = true, waddle = 0 },
 	monkey = { height = 3.1, hopHeight = 0.3, hopRate = 11, limbSwing = 30, together = false, waddle = 3 },
 }

@@ -3,7 +3,8 @@
 -- Santiago Alvarado Delgadillo (his Stage 6 prototype pack: Laika the cosmonaut dog, the moon cheese
 -- with a helmet, the moon rabbit and the space chimp). Stage 7 adds detail while keeping each pet's
 -- character: paws and boots, tails, ears with an inner colour, eyes with a shine, little space suits,
--- helmets with rims and small backpacks with a light.
+-- helmets with rims and small backpacks with a light. Stage 8: the cheese has no helmet any more (it
+-- cut through the wedge); it wears a tiny antenna with a blinking light instead.
 -- Pure data: no Roblox instances. The small helpers below only do math so the shapes stay readable.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 --
@@ -215,9 +216,10 @@ local function laika(): { PetPart }
 end
 
 ----------------------------------------------------------------------------------------------------
--- Cheese, the moon cheese wedge (30 parts): tall flat face in front with big eyes and a smile, holes
--- all over, a glass helmet over the top with a metal rim lying on the slope, a springy antenna,
--- little arms and boots, and an air pack with a light on its back.
+-- Cheese, the moon cheese wedge (29 parts): tall flat face in front with big eyes and a smile, holes
+-- all over, a tiny springy antenna with a blinking light growing from the top slope, little arms and
+-- boots, and an air pack with a light on its back. No helmet (team feedback: a glass bubble cut
+-- through the wedge); the antenna stands clear of the body and the face.
 
 local function cheese(): { PetPart }
 	local CHEESE = { 255, 215, 35 }
@@ -252,15 +254,15 @@ local function cheese(): { PetPart }
 		add(P("Cheek" .. side.n, "Ball", { 0.3, 0.3, 0.3 }, { 0.8 * side.s, 1.55, -1.1 }, BLUSH))
 	end
 
-	-- Helmet: a rim lying on the slope near the top and a glass bubble over the face and top
-	add(P("HelmetRim", "Cylinder", { 0.2, 2.5, 2.5 }, { 0, 2.03, -0.5 }, METAL, { rot = { SLOPE, 0, 90 }, mat = "Metal" }))
-	add(P("HelmetGlass", "Ball", { 2.4, 2.4, 2.4 }, { 0, 2.05, -0.5 }, GLASS, { mat = "Glass", tr = 0.55, rf = 0.2 }))
-	add(Seg("Antenna", { 0.45, 3.05, -0.35 }, { 0.6, 3.75, -0.2 }, 0.08, METAL, {
+	-- Tiny antenna: a metal button lying on the top slope (the slope is at y = 1.5 - 0.917 z, so
+	-- y 2.19 at z -0.75), a thin springy rod and a magenta light on its tip that blinks.
+	add(P("AntennaBase", "Cylinder", { 0.08, 0.34, 0.34 }, { 0.4, 2.2, -0.75 }, METAL, { rot = { SLOPE, 0, 90 }, mat = "Metal" }))
+	add(Seg("Antenna", { 0.4, 2.15, -0.75 }, { 0.5, 2.8, -0.58 }, 0.08, METAL, {
 		mat = "Metal",
 		anim = "antenna",
-		pivot = { 0.45, 3.05, -0.35 },
+		pivot = { 0.4, 2.15, -0.75 },
 	}))
-	add(P("AntennaBall", "Ball", { 0.26, 0.26, 0.26 }, { 0.6, 3.8, -0.2 }, MAGENTA, { mat = "Neon", anim = "antenna" }))
+	add(P("AntennaBall", "Ball", { 0.26, 0.26, 0.26 }, { 0.5, 2.88, -0.56 }, MAGENTA, { mat = "Neon", anim = "antenna.light" }))
 
 	-- Little legs and boots, little arms and gloves
 	for _, side in SIDES do
