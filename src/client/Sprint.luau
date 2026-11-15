@@ -76,7 +76,9 @@ local function controlModule(player: Player): any
 end
 
 local function touchRow(root: Frame): Frame
-	local existing = root:FindFirstChild(TOUCH_ROW_NAME)
+	-- Stage 10: the start menu keeps the game UI in root.GameLayer while it is open.
+	local holder = root:FindFirstChild("GameLayer")
+	local existing = root:FindFirstChild(TOUCH_ROW_NAME) or (if holder then holder:FindFirstChild(TOUCH_ROW_NAME) else nil)
 	if existing and existing:IsA("Frame") then
 		return existing
 	end

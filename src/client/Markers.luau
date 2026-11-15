@@ -17,6 +17,8 @@
 -- for the pad's next level (pad attribute SBO_HabNeed, else BaseBuild.habitatNeeded), or "Build X
 -- first" when a required build is missing (SBO_Locked). Pads at their top level or under way never
 -- get one.
+-- Stage 10: Markers.setSuppressed(true) hides every marker at once (task, lock and shelter) while a
+-- cinematic camera plays (Cinematic.luau); false lets them fade back in as usual.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local HttpService = game:GetService("HttpService")
@@ -135,6 +137,7 @@ local started = false
 local playerGui: Instance? = nil
 local shelterGui: BillboardGui? = nil
 local shelterBounce: Frame? = nil
+local suppressed = false -- Stage 10: a cinematic camera is playing
 
 local function promptKey(prompt: ProximityPrompt): string?
 	local key = prompt:GetAttribute(TEXT_KEY_ATTRIBUTE)
@@ -561,7 +564,7 @@ local function refresh()
 		end
 	end
 	if shelterGui then
-		shelterGui.Enabled = showShelter
+		shelterGui.Enabled = showShelter and not suppressed
 	end
 end
 
@@ -668,7 +671,7 @@ function Markers.start()
 		local step = deltaTime / FADE_SECONDS
 		for _, entry in entries do
 			local wanted = false
-			if entry.eligible then
+			if entry.eligible and not suppressed then
 				local position = worldPosition(entry.gui.Adornee)
 				local distance = if here and position then (position - here).Magnitude else math.huge
 				-- Close enough for the prompt itself to show: hide the marker so they never overlap.
@@ -693,7 +696,7 @@ function Markers.start()
 		-- Locked pads close by: what they wait for.
 		for pad, lock in lockEntries do
 			local wanted = false
-			if lock.text ~= nil and here then
+			if lock.text ~= nil and here and not suppressed then
 				wanted = (pad.Position - here).Magnitude <= LOCK_SHOW
 			end
 			local goal = if wanted then 1 else 0
@@ -711,6 +714,24 @@ function Markers.start()
 			shelterBounce.Position = UDim2.fromOffset(0, -lift)
 		end
 	end)
+end
+
+-- Stage 10: hide every marker now (true) while a cinematic camera plays; false lets them fade back.
+function Markers.setSuppressed(on: boolean)
+	suppressed = on == true
+	if suppressed then
+		for _, entry in entries do
+			entry.alpha = 0
+			applyAlpha(entry)
+		end
+		for _, lock in lockEntries do
+			lock.alpha = 0
+			applyAlpha(lock)
+		end
+	end
+	if started then
+		refresh()
+	end
 end
 
 return Markers

@@ -200,11 +200,38 @@ Players.PlayerRemoving:Connect(function(player: Player)
 	spawning[player] = nil
 end)
 
+-- Stage 10 cinematic start menu: the place streams (Workspace.StreamingEnabled), and a player on the
+-- menu has no character yet, so nothing around the base would stream in for the menu's camera shots.
+-- Until the character spawns, the player's streaming focus is this invisible anchored part in the
+-- middle of the base (the streaming radius covers the base, the crater and the landing pad).
+local MENU_FOCUS_POSITION = Vector3.new(-20, 4, 10)
+local menuFocus: BasePart? = nil
+local function getMenuFocus(): BasePart
+	if menuFocus == nil or menuFocus.Parent == nil then
+		local part = Instance.new("Part")
+		part.Name = "SBO_MenuStreamFocus"
+		part.Anchored = true
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CanTouch = false
+		part.Transparency = 1
+		part.Size = Vector3.new(1, 1, 1)
+		part.CFrame = CFrame.new(MENU_FOCUS_POSITION)
+		part.Parent = workspace
+		menuFocus = part
+	end
+	return menuFocus :: BasePart
+end
+
 local function onPlayerAdded(player: Player)
 	if world.spawn then
 		player.RespawnLocation = world.spawn
 	end
+	if player.Character == nil then
+		player.ReplicationFocus = getMenuFocus()
+	end
 	player.CharacterAdded:Connect(function(character: Model)
+		player.ReplicationFocus = nil -- the character is the streaming focus from now on
 		local humanoid = character:WaitForChild("Humanoid", 10)
 		if humanoid and humanoid:IsA("Humanoid") then
 			humanoid.Died:Once(function()

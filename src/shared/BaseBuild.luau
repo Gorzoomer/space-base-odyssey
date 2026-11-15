@@ -125,6 +125,36 @@ function BaseBuild.effective(list: { Levels }): Levels
 	return result
 end
 
+-- Stage 10 (cinematic start menu): the "showcase" base, every build at its top level, so the menu's
+-- camera shots show a finished base while nobody in the server has loaded a save. Builds in `busy`
+-- (a level being built in steps) keep their level in `standing` instead, so the step view stays.
+-- Only the WORLD shows it: saves, quests, mission rules, rewards and BaseState use the effective
+-- builds (BaseBuild.effective of the loaded players).
+function BaseBuild.showcaseLevels(data: any, busy: { [string]: boolean }?, standing: Levels?): Levels
+	local result: Levels = {}
+	for _, def in data.BASE.BUILDS do
+		if busy ~= nil and busy[def.id] then
+			local level = levelOf(standing, def.id)
+			if level > 0 then
+				result[def.id] = level
+			end
+		else
+			result[def.id] = def.maxLevel
+		end
+	end
+	return result
+end
+
+-- Stage 10: the levels the world shows. `loaded` = the saved builds of every present player whose
+-- save is loaded. Nobody loaded: the showcase (true); else the effective builds (false).
+function BaseBuild.shownLevels(data: any, loaded: { Levels }, busy: { [string]: boolean }?): (Levels, boolean)
+	local effective = BaseBuild.effective(loaded)
+	if #loaded == 0 then
+		return BaseBuild.showcaseLevels(data, busy, effective), true
+	end
+	return effective, false
+end
+
 -- Credits for the NEXT level of a build given the effective builds (nil when maxed or unknown).
 function BaseBuild.nextCost(data: any, effective: Levels, id: string): number?
 	local def = BaseBuild.buildDef(data, id)

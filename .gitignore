@@ -9,3 +9,6 @@ place/
 # Tooling output
 sourcemap.json
 .vscode/
+
+# Large promotional video recordings (cinematics, trailer renders)
+promo/

@@ -1,7 +1,6 @@
 --!strict
--- Space Base Odyssey - start menu (Stage 9): the first screen, in the "Lunar Sunrise" identity. A dark
--- starfield, the turning Earth (NASA Blue Marble map), a sunrise glow on the Moon's horizon and the
--- game title, with:
+-- Space Base Odyssey - start menu (Stage 9): the first screen, in the "Lunar Sunrise" identity: the
+-- game title over a live cinematic of the base (Stage 10), with:
 --   * Continue   - loads the slot used last time (Store.continueSlot()),
 --   * New game   - pick one of the 3 worlds; a world that is already used asks before it is wiped,
 --   * Load game  - the 3 world cards: base level, player level, credits, last save, how it was played,
@@ -13,9 +12,19 @@
 -- loads the slot and sets the player attribute SBO_SlotChosen = true; then this screen closes.
 -- A player teleported into their solo server (TeleportData { slot, mode }) never sees the menu again:
 -- the server picks the slot there, so the screen only says "getting your base ready".
+-- Stage 10 (team request): the background is no longer drawn in 2D. Cinematic.luau plays the shots
+-- of CinematicShots.MENU_ORDER (the Earth about to hide the Sun, a plant close-up, the greenhouse
+-- tube, the ice drills in the crater, the antenna, the base from the air, the ship, a pull-back) on the
+-- real 3D world, looping with black fades, from the moment the menu opens until it hides. The server
+-- shows a finished "showcase" base while nobody has loaded a save (BaseService). A soft dark gradient
+-- over the left part of the screen and a light vignette keep the title and buttons readable over any
+-- shot. Because the menu no longer covers the screen, the rest of the game UI in the same root (HUD,
+-- top bar, C.A.R.L.'s bubble, Settings button, cards) waits in a hidden holder frame ("GameLayer")
+-- while the menu is open and goes back when it hides; moving them leaves every module's own Visible
+-- values untouched. Without Cinematic (load failure) the screen falls back to a plain night colour.
 -- Layout (fractions of the screen; the root is 720 units tall and as wide as the device, so it fits a
--- phone in landscape): title x 0.06-0.56 y 0.07-0.25, buttons x 0.06-0.40 y 0.34-0.88, Earth on the
--- right, sub-screens in one centred panel 0.86 x 0.82.
+-- phone in landscape): title x 0.06-0.56 y 0.07-0.25, buttons x 0.06-0.40 y 0.34-0.88, the dark
+-- gradient x 0-0.62, sub-screens in one centred panel 0.86 x 0.82.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local GuiService = game:GetService("GuiService")
@@ -31,7 +40,6 @@ type SlotInfo = Store.SlotInfo
 type SlotMode = Store.SlotMode
 
 local ROLE = Ui.ROLE
-local PALETTE = Ui.Theme.PALETTE
 local ICONS = Ui.Icons
 
 -- Above the HUD, the top bar (52), the Lab and Wardrobe (53), the cards (55-57) and the Settings
@@ -39,10 +47,15 @@ local ICONS = Ui.Icons
 local Z = 61
 local PRESS_COOLDOWN = 0.35 -- seconds between two taps (no double sends)
 local WAIT_TIMEOUT = 40 -- seconds without SBO_SlotChosen before the menu offers to go back
-local STAR_COUNT = 90
-local STAR_SEED = 2026 -- the same sky every time
-local EARTH_TURN_SECONDS = 160 -- one full turn of the Earth picture
 local ANIMATION_STEP = 1 / 30
+local SHADE_WIDTH = 0.62 -- the dark gradient behind the title and buttons (fraction of the width)
+-- Root children that stay while the menu is open (everything else waits in the GameLayer holder).
+local VEIL_KEEP: { [string]: boolean } = {
+	StartMenu = true,
+	Settings = true, -- the Settings panel opens over the menu
+	MouseUnlock = true, -- frees the mouse while a panel is open (Main.client)
+	GameLayer = true,
+}
 local TEAM_SIZE = 4 -- ui.menu_team_1 .. ui.menu_team_4
 
 local StartMenu = {}
@@ -82,8 +95,6 @@ type ModeCard = {
 	desc: TextLabel,
 	lastPill: TextLabel,
 }
-
-type Star = { frame: Frame, base: number, speed: number, phase: number }
 
 -- A small "pill" label (night fill, coloured text and stroke).
 local function pill(parent: Instance, props: Ui.Props): TextLabel
@@ -155,183 +166,112 @@ end
 function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 	local player = Players.LocalPlayer
 
+	-- Stage 10: Cinematic.luau moves the camera behind this screen (pcall: a broken module only
+	-- brings back a plain background).
+	local cinematic: any = nil
+	do
+		local ok, result = pcall(function(): any
+			local moduleScript = script.Parent:WaitForChild("Cinematic", 5)
+			if moduleScript == nil then
+				error("Cinematic not found")
+			end
+			return (require :: any)(moduleScript)
+		end)
+		if ok and type(result) == "table" and type(result.playMenu) == "function" then
+			cinematic = result
+		else
+			warn(`[SpaceBaseOdyssey] Cinematic unavailable, plain menu background: {result}`)
+		end
+	end
+
 	local screen = Ui.frame(root, {
 		name = "StartMenu",
 		color = ROLE.background,
+		transparency = if cinematic then 1 else 0,
 		zindex = Z,
 		visible = not Store.isSlotChosen(),
 	})
 	screen.Active = true -- taps never reach the world behind
 	screen.ClipsDescendants = true
-	-- A lighter night near the horizon (an overlay: a UIGradient colour would darken the fill).
-	local depth = Ui.frame(screen, { name = "Depth", color = PALETTE.nightLight, zindex = Z })
+
+	-- Background: the cinematic's black fade, the dark gradient on the left and a light vignette ----
+
+	local fade = Ui.frame(screen, { name = "Fade", color = ROLE.background, transparency = 0, zindex = Z })
+	fade.Visible = cinematic ~= nil
+	local shade = Ui.frame(screen, {
+		name = "Shade",
+		size = UDim2.fromScale(SHADE_WIDTH, 1),
+		color = ROLE.background,
+		zindex = Z + 1,
+	})
 	do
 		local gradient = Instance.new("UIGradient")
-		gradient.Rotation = 90
-		gradient.Transparency = NumberSequence.new(1, 0.2)
-		gradient.Parent = depth
-	end
-
-	-- Background: stars, the Earth, the sunrise glow and the Moon's horizon with a tiny base -------
-
-	local sky = Ui.frame(screen, { name = "Sky", zindex = Z + 1 })
-	local stars: { Star } = {}
-	do
-		local random = Random.new(STAR_SEED)
-		local colours = { PALETTE.cream, PALETTE.cream, PALETTE.cream, PALETTE.cyan, PALETTE.gold }
-		for index = 1, STAR_COUNT do
-			local size = random:NextInteger(2, 5)
-			local frame = Ui.frame(sky, {
-				name = `Star{index}`,
-				size = UDim2.fromOffset(size, size),
-				position = UDim2.fromScale(random:NextNumber(0, 1), random:NextNumber(0, 0.78)),
-				anchor = Vector2.new(0.5, 0.5),
-				color = colours[random:NextInteger(1, #colours)],
-				corner = 0.5,
-				zindex = Z + 1,
-			})
-			local base = random:NextNumber(0, 0.45)
-			frame.BackgroundTransparency = base
-			table.insert(stars, {
-				frame = frame,
-				base = base,
-				speed = random:NextNumber(0.6, 2.2),
-				phase = random:NextNumber(0, math.pi * 2),
-			})
-		end
-	end
-
-	-- The Earth: the Blue Marble map scrolls inside a round CanvasGroup (it clips to its corner), with
-	-- a soft night side and a thin cyan air glow.
-	local earthHolder = Ui.frame(screen, {
-		name = "Earth",
-		size = UDim2.fromScale(0.44, 0.44),
-		position = UDim2.fromScale(0.78, 0.36),
-		anchor = Vector2.new(0.5, 0.5),
-		aspect = 1,
-		zindex = Z + 2,
-	})
-	Ui.frame(earthHolder, {
-		name = "Glow",
-		size = UDim2.fromScale(1.12, 1.12),
-		position = UDim2.fromScale(0.5, 0.5),
-		anchor = Vector2.new(0.5, 0.5),
-		color = PALETTE.cyan,
-		transparency = 0.82,
-		corner = 0.5,
-		zindex = Z + 2,
-	})
-	local earthGroup = Instance.new("CanvasGroup")
-	earthGroup.Name = "Globe"
-	earthGroup.Size = UDim2.fromScale(1, 1)
-	earthGroup.BackgroundColor3 = PALETTE.night
-	earthGroup.BorderSizePixel = 0
-	earthGroup.ZIndex = Z + 3
-	Ui.corner(earthGroup, 0.5)
-	earthGroup.Parent = earthHolder
-	local maps: { ImageLabel } = {}
-	for index = 1, 2 do
-		local map = Instance.new("ImageLabel")
-		map.Name = `Map{index}`
-		map.BackgroundTransparency = 1
-		map.Image = ICONS.earthMap
-		map.ScaleType = Enum.ScaleType.Stretch
-		map.Size = UDim2.fromScale(2, 1) -- the map is twice as wide as it is tall
-		map.Position = UDim2.fromScale((index - 1) * 2, 0)
-		map.ZIndex = Z + 3
-		map.Parent = earthGroup
-		table.insert(maps, map)
-	end
-	local nightSide = Ui.frame(earthGroup, { name = "NightSide", color = PALETTE.night, zindex = Z + 4 })
-	do
-		local shade = Instance.new("UIGradient")
-		shade.Transparency = NumberSequence.new({
+		gradient.Transparency = NumberSequence.new({
 			NumberSequenceKeypoint.new(0, 0.12),
-			NumberSequenceKeypoint.new(0.4, 0.55),
-			NumberSequenceKeypoint.new(0.68, 1),
+			NumberSequenceKeypoint.new(0.5, 0.38),
 			NumberSequenceKeypoint.new(1, 1),
 		})
-		shade.Parent = nightSide
+		gradient.Parent = shade
 	end
-	Ui.stroke(earthGroup, 2, PALETTE.cyan).Transparency = 0.35
-
-	-- Sunrise glow over the horizon, the grey Moon and a tiny base with a blinking light.
-	local glow = Ui.frame(screen, {
-		name = "SunriseGlow",
-		size = UDim2.fromScale(1, 0.42),
-		position = UDim2.fromScale(0, 0.58),
-		color = PALETTE.orange,
-		zindex = Z + 2,
-	})
+	-- Vignette: darker top and bottom edges, and a little on the right.
+	local vignette = Ui.frame(screen, { name = "Vignette", color = ROLE.background, zindex = Z + 1 })
 	do
 		local gradient = Instance.new("UIGradient")
 		gradient.Rotation = 90
 		gradient.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.5),
+			NumberSequenceKeypoint.new(0.2, 1),
+			NumberSequenceKeypoint.new(0.78, 1),
+			NumberSequenceKeypoint.new(1, 0.4),
+		})
+		gradient.Parent = vignette
+	end
+	local vignetteSide = Ui.frame(screen, { name = "VignetteSide", color = ROLE.background, zindex = Z + 1 })
+	do
+		local gradient = Instance.new("UIGradient")
+		gradient.Transparency = NumberSequence.new({
 			NumberSequenceKeypoint.new(0, 1),
-			NumberSequenceKeypoint.new(0.65, 0.8),
+			NumberSequenceKeypoint.new(0.85, 1),
 			NumberSequenceKeypoint.new(1, 0.55),
 		})
-		gradient.Parent = glow
+		gradient.Parent = vignetteSide
 	end
-	local moon = Ui.frame(screen, {
-		name = "MoonHorizon",
-		size = UDim2.fromScale(1.7, 0.5),
-		position = UDim2.fromScale(0.5, 1.12),
-		anchor = Vector2.new(0.5, 0.5),
-		color = PALETTE.creamDim:Lerp(PALETTE.night, 0.62),
-		corner = 0.5,
-		zindex = Z + 3,
-	})
-	for index, crater in { { 0.36, 0.12, 0.05 }, { 0.52, 0.2, 0.035 }, { 0.6, 0.1, 0.025 }, { 0.43, 0.3, 0.03 } } do
-		Ui.frame(moon, {
-			name = `Crater{index}`,
-			size = UDim2.fromScale(crater[3], crater[3] * 1.4),
-			position = UDim2.fromScale(crater[1], crater[2]),
-			anchor = Vector2.new(0.5, 0.5),
-			color = PALETTE.night,
-			transparency = 0.7,
-			corner = 0.5,
-			zindex = Z + 4,
-		})
+
+	-- The rest of the game UI waits in a hidden holder while the menu is open (see the header).
+	local gameLayer: Frame? = nil
+	local veilAdded: RBXScriptConnection? = nil
+	local function veil(child: Instance)
+		local holder = gameLayer
+		if holder and child.Parent == root and child:IsA("GuiObject") and not VEIL_KEEP[child.Name] then
+			child.Parent = holder
+		end
 	end
-	local baseDome = Ui.frame(screen, {
-		name = "BaseDome",
-		size = UDim2.fromScale(0.07, 0.07),
-		position = UDim2.fromScale(0.62, 0.885),
-		anchor = Vector2.new(0.5, 1),
-		color = PALETTE.nightLight,
-		corner = 0.5,
-		aspect = 1.8,
-		stroke = 2,
-		strokeColor = PALETTE.nightLine,
-		zindex = Z + 3,
-	})
-	Ui.frame(baseDome, {
-		name = "Window",
-		size = UDim2.fromScale(0.22, 0.3),
-		position = UDim2.fromScale(0.5, 0.42),
-		anchor = Vector2.new(0.5, 0.5),
-		color = PALETTE.cyan,
-		corner = 0.5,
-		zindex = Z + 4,
-	})
-	local mast = Ui.frame(screen, {
-		name = "Mast",
-		size = UDim2.fromScale(0.004, 0.09),
-		position = UDim2.fromScale(0.665, 0.875),
-		anchor = Vector2.new(0.5, 1),
-		color = PALETTE.creamDim,
-		zindex = Z + 3,
-	})
-	local beacon = Ui.frame(mast, {
-		name = "Beacon",
-		size = UDim2.fromOffset(9, 9),
-		position = UDim2.fromScale(0.5, 0),
-		anchor = Vector2.new(0.5, 0.5),
-		color = PALETTE.magenta,
-		corner = 0.5,
-		zindex = Z + 4,
-	})
+	local function setVeil(on: boolean)
+		if on and gameLayer == nil then
+			local holder = Ui.frame(root, { name = "GameLayer", zindex = 1, visible = false })
+			gameLayer = holder
+			for _, child in root:GetChildren() do
+				veil(child)
+			end
+			veilAdded = root.ChildAdded:Connect(function(child: Instance)
+				-- Deferred: the module that made it finishes setting it up first.
+				task.defer(veil, child)
+			end)
+		elseif not on and gameLayer then
+			local holder = gameLayer :: Frame
+			gameLayer = nil
+			if veilAdded then
+				veilAdded:Disconnect()
+				veilAdded = nil
+			end
+			for _, child in holder:GetChildren() do
+				if child:IsA("GuiObject") then
+					child.Parent = root
+				end
+			end
+			holder:Destroy()
+		end
+	end
 
 	-- Home: title and the menu buttons -------------------------------------------------------------
 
@@ -1194,25 +1134,16 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		startWait(mode == "solo" and not RunService:IsStudio())
 	end
 
-	-- Animation: twinkling stars, the turning Earth, the base's blinking light, the waiting rocket.
+	-- Animation: the waiting rocket (the background is the cinematic now).
 	local animation: RBXScriptConnection? = nil
 	local sinceFrame = 0
-	local earthOffset = 0
 	local function animate(deltaTime: number)
 		sinceFrame += deltaTime
 		if sinceFrame < ANIMATION_STEP then
 			return
 		end
-		local step = sinceFrame
 		sinceFrame = 0
 		local now = os.clock()
-		for _, star in stars do
-			star.frame.BackgroundTransparency = math.clamp(star.base + 0.35 * (math.sin(now * star.speed + star.phase) + 1) / 2, 0, 0.95)
-		end
-		earthOffset = (earthOffset + step * 2 / EARTH_TURN_SECONDS) % 2
-		maps[1].Position = UDim2.fromScale(-earthOffset, 0)
-		maps[2].Position = UDim2.fromScale(2 - earthOffset, 0)
-		beacon.BackgroundTransparency = if math.floor(now * 1.5) % 2 == 0 then 0 else 0.75
 		if waitView.Visible and not waitFailed then
 			waitIcon.Rotation = 12 * math.sin(now * 3)
 			waitBadge.Position = UDim2.fromScale(0.5, 0.12 - 0.015 * math.sin(now * 2))
@@ -1228,10 +1159,34 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		end
 	end
 
+	-- Stage 10: the cinematic plays while the menu is open (fade = this screen's own night layer, so
+	-- the title and buttons never fade).
+	local cinematicOn = false
+	local function setCinematic(on: boolean)
+		if cinematic == nil or on == cinematicOn then
+			return
+		end
+		cinematicOn = on
+		local ok, err = pcall(function()
+			if on then
+				cinematic.playMenu({ fade = fade, owner = "menu" })
+			elseif cinematic.owner() == "menu" then
+				cinematic.stop() -- a recording started from DemoKeys keeps playing
+			end
+		end)
+		if not ok then
+			warn(`[SpaceBaseOdyssey] start menu cinematic failed: {err}`)
+			fade.Visible = false
+			screen.BackgroundTransparency = 0
+		end
+	end
+
 	local function hide()
 		waitToken += 1
 		screen.Visible = false
 		setAnimating(false)
+		setCinematic(false)
+		setVeil(false)
 		if GuiService.SelectedObject and GuiService.SelectedObject:IsDescendantOf(screen) then
 			pcall(function()
 				GuiService.SelectedObject = nil
@@ -1273,6 +1228,8 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 
 	if screen.Visible then
 		setAnimating(true)
+		setVeil(true)
+		setCinematic(true)
 		local teleportedSlot, teleportedMode = teleportSlot()
 		if teleportedSlot then
 			-- Arrived in the player's own server: the server picks that slot by itself.

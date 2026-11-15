@@ -57,6 +57,7 @@
 -- Anchored Parts moved every frame with BulkMoveTo (no physics); it never collides, blocks clicks
 -- or casts shadows. Ground and walls are found with a few raycasts per frame that skip characters,
 -- C.A.R.L. itself, pets and parts that do not collide.
+-- Stage 10: CarlDrone.setCinematic(true) keeps both beams off while a cinematic camera plays.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -240,6 +241,7 @@ type Puff = { part: BasePart, born: number, velocity: Vector3, alive: boolean }
 
 local player = Players.LocalPlayer
 local started = false
+local cinematic = false -- Stage 10: a cinematic camera is playing (setCinematic): no beams
 -- Where the guidance beam points now (a Part or an Attachment), read by Markers.luau.
 local currentGuide: Instance? = nil
 
@@ -1839,7 +1841,7 @@ function CarlDrone.start()
 			local wave = (math.sin(now * 6) + 1) / 2
 			beam.Transparency = NumberSequence.new(0.05 + 0.35 * wave)
 		end
-		beam.Enabled = showBeam
+		beam.Enabled = showBeam and not cinematic
 
 		-- Guidance beam: calmer pulse, fading toward the target.
 		local guideEnd = if shownGuide and door == nil then attachmentFor(shownGuide) else nil
@@ -1850,7 +1852,7 @@ function CarlDrone.start()
 			local near = 0.15 + 0.3 * wave
 			guide.Transparency = NumberSequence.new(near, math.min(0.9, near + 0.35))
 		end
-		guide.Enabled = showGuide
+		guide.Enabled = showGuide and not cinematic
 
 		-- Earth skin: turn the little Earth (one turn every EARTH_TURN_SECONDS).
 		if earthSkin then
@@ -1858,6 +1860,20 @@ function CarlDrone.start()
 			earthStrip.Position = UDim2.fromScale(-2 + turn * 2, 0)
 		end
 	end)
+end
+
+-- Stage 10: while a cinematic camera plays (Cinematic.luau) the shelter and guidance beams stay off.
+function CarlDrone.setCinematic(on: boolean)
+	cinematic = on == true
+	local model = workspace:FindFirstChild("CarlDrone_Local")
+	if cinematic and model then
+		for _, name in { "ShelterBeam", "GuideBeam" } do
+			local item = model:FindFirstChild(name)
+			if item and item:IsA("Beam") then
+				item.Enabled = false
+			end
+		end
+	end
 end
 
 -- Where C.A.R.L.'s guidance beam points now (a Part or a prompt's Attachment), or nil: no guidance,

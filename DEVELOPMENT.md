@@ -354,6 +354,30 @@ Tested in Studio (assistant-driven):
 - Walking the hub to the lab and dome A to dome B never counted as outside.
 - No script errors.
 
+**Stage 10 follow-up: cinematic start menu.** The team asked for a start menu with live camera shots behind it, shots that also serve the 30-second video and promo material, with contrast and lighting at their best.
+- **Shots (src/shared/CinematicShots.luau):** eight named shots, pure data and maths so Lune tests them (tests/cinematic.luau).
+  - The Earth about to hide the Sun behind the hub, a plant close-up in dome A, the ice drills in the crater, the base from the air, the greenhouse tube, the antenna, the ship, and a pull-back.
+  - The camera follows a Catmull-Rom curve through each shot's keys and slows near the ends but never stops.
+  - The Earth shot is framed at run time from the Earth's position.
+- **Player (src/client/Cinematic.luau):** plays the shots in a loop with a short night-coloured fade between them.
+  - While it plays, C.A.R.L.'s beams, the task markers and the prompts are hidden.
+  - A client-side grade adds contrast, a little warmth, bloom and sun rays, and depth of field for the close-up (not on phones). The server's own bloom is off meanwhile, so the two never stack. Lighting values are never changed.
+- **Start menu:** the 2D starfield and Earth picture are gone. The shots play behind the title and buttons, with a dark gradient on the left and a light vignette. Every button and screen works as before. The rest of the game UI waits in a hidden holder while the menu is open.
+- **Showcase base:** while nobody in the server has loaded a save, the world shows every structure at its top level, so the shots show a finished base.
+  - Only the world changes. Saves, quests, mission rules, rewards, prompts and the player's base state keep using the real builds, and nothing announces a build.
+  - When a save loads, the world drops back to the real builds at once.
+  - The first player who reaches the menu gets an eclipse preview, so the first shot shows the Earth about to hide the Sun. It is skipped in a solo trip's server and when a save is already loading, so it does not land in gameplay.
+  - The eclipse dims the sunlight for about 20 seconds, so the lamp-lit shots (greenhouse, tube, crater, antenna) come right after it and the sunlit wide shots after those.
+- **Recording (Studio or place owner):** Ctrl+Shift+C plays the shots full screen with every other screen hidden, Ctrl+Shift+G keeps the grade on during play. A Studio command can do the same with the player attribute SBO_Cinematic ("play", "grade", "off").
+- **Tested in Studio (assistant-driven):**
+  - The first run showed only stars: the place streams, and a player on the menu has no character to stream around. While a player has no character, the server now sets their streaming focus to an invisible part in the middle of the base (Main.server.luau). After that every shot showed the finished base.
+  - The Earth shot is now wider and closer (170 studs, field of view 24 to 20): with a long lens the 9-degree Sun filled the frame with yellow. The grade uses the values checked while recording (bloom threshold 1.35, sun rays 0.04).
+  - Credits and Settings open over the shots. New game, slot 1, Solo closed the menu, gave back the normal camera, HUD and C.A.R.L.'s beam, removed the grade and lowered the world to the player's empty base. No script errors.
+
+**Stage 10 follow-up: 30-second trailer and one documentation file per language.**
+- The trailer was cut in HyperFrames from gameplay captured in Studio (graphics at the top quality level, the cinematic grade on), with an original score synthesized in code. Captions are in English for the global submission; the storm line says "What if a storm like this reached your base?". The raw shots and the render live in `promo/`, which is git-ignored.
+- `DOCUMENTATION.md` (English) and `DOCUMENTACION.md` (Spanish) gather the overview, how to play, science and NASA data, technical design, this log, and the sources, credits and licenses.
+
 ## Decisions
 
 | Decision | Who decided | Why |

@@ -11,7 +11,7 @@ Roblox (Luau) game for NASA Space Apps 2026, challenge "Build a Junior Astronaut
 - Edit the files, never scripts inside Studio. The world is built by code (`src/server/WorldBuilder.luau`), not by hand-placed parts.
 - Tests:
   - `lune run tests/balance`: mission rules. Must pass.
-  - `lune run tests/missions`, `lune run tests/base` and `lune run tests/economy`: missions, build-and-grow rules and economy pacing. Must pass.
+  - `lune run tests/missions`, `lune run tests/base`, `lune run tests/economy` and `lune run tests/cinematic`: missions, build-and-grow rules, economy pacing and the cinematic camera shots. Must pass.
   - `lune run tests/localization`: every key in en and es, at most 8 words.
 - Check that the project still builds with `rojo build default.project.json -o <temp>.rbxl`.
 
@@ -33,4 +33,4 @@ Roblox (Luau) game for NASA Space Apps 2026, challenge "Build a Junior Astronaut
 - No Toolbox or Marketplace assets. The only image assets are the team-uploaded Tabler icons (MIT) listed in `src/shared/Icons.luau`; tint them with `src/shared/Theme.luau` colours. Never use emoji in the UI.
 - Visual identity "Lunar Sunrise": use `Theme.ROLE` colours and `Theme.FONT` fonts everywhere (UI, lights, base accents).
 - Every code file starts with `--!strict` and an SI disclosure line. The hackathon rules require disclosing AI use.
-- Everything committed is in English. `docs/` (Spanish planning notes) is git-ignored.
+- Everything committed is in English, except `DOCUMENTACION.md`: the Spanish twin of `DOCUMENTATION.md` (team request). Keep both in step. `docs/` (Spanish planning notes) and `promo/` (video recordings) are git-ignored.

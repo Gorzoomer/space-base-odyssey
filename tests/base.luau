@@ -17,7 +17,8 @@
 --   L. gear (Stage 8): air boots and jetpack, buying, gas use, the gas tank; bonuses are whole numbers;
 --   M. save migration (Stage 8): the old jump skill becomes air boots, its points come back;
 --   N. the habitat tree (Stage 9): every structure level opens at one habitat level, per-level effects;
---   O. quests (Stage 9): step types, mission ids, builds reachable in order with the habitat tree.
+--   O. quests (Stage 9): step types, mission ids, builds reachable in order with the habitat tree;
+--   P. the showcase base (Stage 10): every build at its top level while nobody has loaded a save.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local BaseBuild = require("../src/shared/BaseBuild")
@@ -1147,6 +1148,39 @@ do
 	check(Quests.stepDone({ type = "vehicle" }, { counts = { vehicle = 1 } }), "O: vehicle step")
 	local first = Quests.MAIN[1]
 	check(not Quests.questDone(first, {}), "O: the first quest is not done at the start")
+end
+
+----------------------------------------------------------------------------------------------------
+-- P. The showcase base (Stage 10, cinematic start menu): while nobody has loaded a save the world
+--    shows every build at its top level; one loaded player brings back the normal rule.
+
+do
+	local show = BaseBuild.showcaseLevels(MissionData)
+	for _, def in BASE.BUILDS do
+		check(show[def.id] == def.maxLevel, `P: showcase {def.id} at its top level`)
+	end
+	check(BaseBuild.habitatLevel(show) == BaseBuild.buildDef(MissionData, "habitat").maxLevel, "P: showcase base level is the top")
+	-- A level being built in steps keeps what stands, so the step view is not hidden.
+	local busy = BaseBuild.showcaseLevels(MissionData, { solar = true, garage = true }, { solar = 1 })
+	check(busy.solar == 1, "P: a build in progress keeps its standing level")
+	check(busy.garage == nil, "P: a build in progress from nothing stays a blueprint")
+	check(busy.ship == BaseBuild.buildDef(MissionData, "ship").maxLevel, "P: other builds still show finished")
+
+	local shown, showcase = BaseBuild.shownLevels(MissionData, {})
+	check(showcase, "P: nobody loaded = showcase")
+	check(shown.habitat == BaseBuild.buildDef(MissionData, "habitat").maxLevel, "P: nobody loaded = finished base")
+	local newPlayer: BaseBuild.Levels = {}
+	shown, showcase = BaseBuild.shownLevels(MissionData, { newPlayer })
+	check(not showcase, "P: one loaded player ends the showcase")
+	check(next(shown) == nil, "P: a new player's empty base is shown as it is")
+	local a: BaseBuild.Levels = { habitat = 2, solar = 1 }
+	local b: BaseBuild.Levels = { habitat = 1, solar = 3 }
+	shown, showcase = BaseBuild.shownLevels(MissionData, { a, b })
+	local eff = BaseBuild.effective({ a, b })
+	check(not showcase and shown.habitat == eff.habitat and shown.solar == eff.solar and shown.ship == nil, "P: loaded players = effective builds")
+	check(a.habitat == 2 and b.solar == 3, "P: shownLevels does not change the inputs")
+	shown = BaseBuild.shownLevels(MissionData, {}, { habitat = true })
+	check(shown.habitat == nil, "P: busy builds with nobody loaded show what stands (nothing)")
 end
 
 ----------------------------------------------------------------------------------------------------

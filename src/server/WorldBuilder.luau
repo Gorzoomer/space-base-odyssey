@@ -3299,7 +3299,8 @@ function WorldBuilder.build(data: any): World
 				break
 			end
 		end
-		drillsAwake = drillsNear
+		-- Stage 10: the start menu's showcase base (BaseService, nobody loaded) turns them for the cameras.
+		drillsAwake = drillsNear or workspace:GetAttribute("SBO_Showcase") == true
 	end
 
 	-- One cheap Heartbeat drives every animation (systems and collectibles); it stops when the base

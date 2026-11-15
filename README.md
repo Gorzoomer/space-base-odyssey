@@ -66,6 +66,7 @@ Every number and its source is listed in [DATA_SOURCES.md](DATA_SOURCES.md).
 - [ ] Public release
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the full development log.
+All the project documentation in one place: [DOCUMENTATION.md](DOCUMENTATION.md) (English) and [DOCUMENTACION.md](DOCUMENTACION.md) (Spanish).
 
 ## Running it locally
 

@@ -44,6 +44,16 @@
 -- The rules live in src/shared/BaseBuild.luau and every number in MissionData.BASE. This module
 -- validates every request (server authoritative), keeps the world (build pads, silo, cargo robot)
 -- in sync, applies skill effects and sends each player their Types.BaseState (Remotes.BASE_STATE).
+-- Stage 10 (cinematic start menu): while NO present player has a loaded save, the WORLD shows the
+-- "showcase" base (BaseBuild.shownLevels: every build at its top level, builds in progress keep their
+-- step view), so the menu's camera shots show a finished base. Only the structures change: the
+-- effective builds (effectiveBuilds, onBuildsChanged, BaseState, prompts, silo, tools, quests, mission
+-- rules, rewards and saves) never see it, and nothing announces a build. Workspace attribute
+-- SBO_Showcase = true while it shows (the drills turn and the cargo robot drives for the cameras). As
+-- soon as one player's save is loaded the world drops back to the real builds without animation.
+-- The first player who arrives during a showcase also gets an eclipse preview (WorldSky via
+-- world.previewEclipse) a moment later, so the menu's first shot shows the Earth about to hide the
+-- Sun; it is not repeated until the showcase ends and starts again.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local HttpService = game:GetService("HttpService")
@@ -99,6 +109,7 @@ local PROMPT_EXTRA_RANGE = 8 -- studs beyond the prompt's own range (lag), check
 local LAB_RANGE_STUDS = 30 -- Lab purchases need the player this close to the Lab prompt (the panel closes at 30)
 local DEBUG_MAX_GRANT = 100000
 local HABITAT_TIER_LINE_DELAY = 4 -- seconds between "Base level N!" and what that level opens
+local SHOWCASE_ECLIPSE_DELAY = 1 -- Stage 10: seconds after a menu player arrives before the eclipse preview
 
 -- Action types this module handles (MissionService routes them here).
 local ACTION_TYPES: { [string]: boolean } = {
@@ -126,7 +137,9 @@ local progress: ProgressApi? = nil
 local crew: CrewApi? = nil
 
 local effective: Levels = {} -- builds standing in this server
-local applied: { [string]: number } = {} -- build levels the world shows
+local applied: { [string]: number } = {} -- build levels the world shows (the showcase while nobody is loaded)
+local showcaseOn = false -- Stage 10: the world shows the showcase base (nobody loaded)
+local showcaseEclipseDone = false -- the eclipse preview already ran during this showcase
 local cargoShown: boolean? = nil
 local siloEnabled: boolean? = nil
 local silo = 0 -- ice waiting in the silo (shared by the server)
@@ -688,7 +701,9 @@ local function refreshPrompts()
 			if prompt:GetAttribute("ObjectKey") ~= objectKey then
 				prompt:SetAttribute("ObjectKey", objectKey)
 			end
-			setPadAttribute(pad, "SBO_Level", level)
+			-- Stage 10: the showcase base (nobody loaded) shows idle pads as finished (see below).
+			local showcasePad = showcaseOn and job == nil
+			setPadAttribute(pad, "SBO_Level", if showcasePad then math.max(1, applied[def.id] or def.maxLevel) else level)
 			setPadAttribute(pad, "SBO_MaxLevel", def.maxLevel)
 
 			if job then
@@ -715,6 +730,21 @@ local function refreshPrompts()
 				setPadAttribute(pad, "SBO_Stage", job.stage)
 				setPadAttribute(pad, "SBO_Stages", job.stages)
 				setPadAttribute(pad, "SBO_BuildingLevel", job.level)
+				setPadAttribute(pad, "SBO_Cost", nil)
+				setPadAttribute(pad, "SBO_HabNeed", nil)
+				setPadAttribute(pad, "SBO_Locked", false)
+				continue
+			end
+
+			if showcasePad then
+				-- Stage 10: every idle pad looks finished (small, no ring or icon) and has no prompt; the
+				-- next recompute after a save loads writes the real state.
+				setEnabled(assemble, false)
+				setEnabled(prompt, false)
+				setPadAttribute(pad, "SBO_Phase", "idle")
+				setPadAttribute(pad, "SBO_Stage", 0)
+				setPadAttribute(pad, "SBO_Stages", 0)
+				setPadAttribute(pad, "SBO_BuildingLevel", nil)
 				setPadAttribute(pad, "SBO_Cost", nil)
 				setPadAttribute(pad, "SBO_HabNeed", nil)
 				setPadAttribute(pad, "SBO_Locked", false)
@@ -762,7 +792,8 @@ local function refreshPrompts()
 		siloEnabled = siloOn
 		siloPrompt.Enabled = siloOn
 	end
-	local cargoOn = BaseBuild.levelOf(effective, "cargo_bot") >= 1
+	-- Stage 10: the showcase drives the robot too (a visual only: ice still follows the real builds).
+	local cargoOn = BaseBuild.levelOf(effective, "cargo_bot") >= 1 or showcaseOn
 	if cargoShown ~= cargoOn then
 		cargoShown = cargoOn
 		worldCall("setCargoActive", cargoOn)
@@ -775,6 +806,8 @@ end
 
 -- Recomputes the builds standing in the server from every present player whose data is loaded and
 -- updates the world. animate = a player just finished a level (structures rise in).
+-- Stage 10: the world shows BaseBuild.shownLevels (the showcase while nobody is loaded); `changed`
+-- and everything that follows it (silo, tools, listeners, BaseState) use the effective builds.
 local function recompute(animate: boolean): boolean
 	local list: { Levels } = {}
 	for player in present do
@@ -804,16 +837,34 @@ local function recompute(animate: boolean): boolean
 		end
 	end
 
+	local busy: { [string]: boolean } = {}
+	for id in jobs do
+		busy[id] = true
+	end
+	local shown, showcase = BaseBuild.shownLevels(MissionData, list, busy)
+	local wasShowcase = showcaseOn
+	showcaseOn = showcase
+	if showcase ~= wasShowcase then
+		workspace:SetAttribute("SBO_Showcase", showcase)
+		if not showcase then
+			showcaseEclipseDone = false -- the next showcase may preview an eclipse again
+		end
+	end
+	-- Structures rise in only for a level really finished, never for the showcase coming or going.
+	local rise = animate and not showcase and not wasShowcase
+
 	local changed = false
 	local levelChanged: { [string]: boolean } = {}
 	for _, def in BASE.BUILDS do
-		local level = BaseBuild.levelOf(newEffective, def.id)
+		if BaseBuild.levelOf(newEffective, def.id) ~= BaseBuild.levelOf(effective, def.id) then
+			changed = true
+		end
+		local level = BaseBuild.levelOf(shown, def.id)
 		local before = applied[def.id]
 		if before ~= level then
 			applied[def.id] = level
-			changed = true
 			levelChanged[def.id] = true
-			worldCall("setBuildLevel", def.id, level, animate and level > (before or 0))
+			worldCall("setBuildLevel", def.id, level, rise and level > (before or 0))
 			local job = jobs[def.id]
 			if job then
 				showJob(def.id, job) -- setBuildLevel shows the plain level; keep the steps on show
@@ -1654,6 +1705,31 @@ local function onLoaded(player: Player)
 	sendNow(player)
 end
 
+-- Stage 10: a player arriving during the showcase (on the start menu) gets the eclipse preview a
+-- moment later, once per showcase, so the menu's first shot shows the Earth about to hide the Sun.
+local function previewShowcaseEclipse()
+	if not showcaseOn or showcaseEclipseDone then
+		return
+	end
+	-- A solo trip's reserved server picks the slot at once (no menu shots): no preview there.
+	if game.PrivateServerId ~= "" and game.PrivateServerOwnerId == 0 then
+		return
+	end
+	showcaseEclipseDone = true
+	task.delay(SHOWCASE_ECLIPSE_DELAY, function()
+		if not showcaseOn then
+			return
+		end
+		-- A save already loading (Continue pressed at once): the eclipse would land in gameplay.
+		for other in present do
+			if other:GetAttribute("SBO_SlotLoading") == true then
+				return
+			end
+		end
+		worldCall("previewEclipse")
+	end)
+end
+
 local function addPlayer(player: Player)
 	if present[player] then
 		return
@@ -1685,6 +1761,8 @@ local function addPlayer(player: Player)
 	local api = progress
 	if api and api.isLoaded(player) then
 		onLoaded(player)
+	else
+		previewShowcaseEclipse()
 	end
 end
 
@@ -1863,7 +1941,7 @@ end
 ----------------------------------------------------------------------------------------------------
 -- Public API
 
--- worldRefs: WorldBuilder.World (setBuildLevel, setBuildProgress, buildPads, buildPrompts,
+-- worldRefs: WorldBuilder.World (setBuildLevel, setBuildProgress, previewEclipse, buildPads, buildPrompts,
 -- siloPrompt, setSilo, setCargoActive, crateDepot, setCarryCrate, labPrompt);
 -- remoteEvents.baseState = Remotes.BASE_STATE; progressService: ProgressService (already started);
 -- crewService (optional): CrewService, so a player carrying ice cannot take a crate too.
@@ -1883,6 +1961,8 @@ function BaseService.start(worldRefs: any, remoteEvents: Remotes, progressServic
 	connectPrompts()
 	refreshPrompts()
 	setSiloVisual()
+	-- Stage 10: nobody is loaded yet, so the world shows the showcase base (start menu cameras).
+	recompute(false)
 
 	progressService.onLoaded(onLoaded)
 	progressService.onCollectible(onCollectible)
@@ -1954,6 +2034,17 @@ end
 -- Builds standing in this server right now (a copy).
 function BaseService.effectiveBuilds(): Levels
 	return table.clone(effective)
+end
+
+-- Stage 10: true while the world shows the showcase base (no present player has a loaded save).
+function BaseService.isShowcase(): boolean
+	return showcaseOn
+end
+
+-- Stage 10: the build levels the world shows right now (the showcase or the effective builds; a copy).
+-- For visuals only: game rules use effectiveBuilds.
+function BaseService.shownBuilds(): Levels
+	return table.clone(applied)
 end
 
 -- Called with the new effective builds whenever a structure appears, grows or falls back.
