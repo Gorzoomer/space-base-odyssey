@@ -640,4 +640,32 @@ function Ui.createRoot(playerGui: Instance): (ScreenGui, Frame)
 	return gui, root
 end
 
+-- A label that stays on ONE line at the biggest size that fits its box. Roblox's TextScaled with
+-- TextWrapped off picked the minimum size for short names (team playtest: tiny "Laboratorio" and skill
+-- names), so the size is measured here with TextService instead.
+function Ui.oneLine(label: TextLabel)
+	label.TextWrapped = false
+	label.TextScaled = false
+	local constraint = label:FindFirstChildOfClass("UITextSizeConstraint")
+	local maxSize = if constraint then constraint.MaxTextSize else 40
+	local minSize = 8
+	if constraint then
+		constraint.MinTextSize = math.min(constraint.MinTextSize, minSize)
+	end
+	local function fit()
+		local box = label.AbsoluteSize
+		if box.X <= 0 or box.Y <= 0 then
+			return
+		end
+		local size = math.max(minSize, math.min(maxSize, math.floor(box.Y * 0.9)))
+		while size > minSize and TextService:GetTextSize(label.Text, size, label.Font, Vector2.new(100000, 100000)).X > box.X do
+			size -= 1
+		end
+		label.TextSize = size
+	end
+	label:GetPropertyChangedSignal("AbsoluteSize"):Connect(fit)
+	label:GetPropertyChangedSignal("Text"):Connect(fit)
+	fit()
+end
+
 return table.freeze(Ui)

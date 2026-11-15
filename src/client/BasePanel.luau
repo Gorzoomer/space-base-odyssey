@@ -437,7 +437,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 		maxText = 36,
 		zindex = Z + 2,
 	})
-	title.TextWrapped = false -- "Laboratorio" shrinks instead of splitting
+	Ui.oneLine(title) -- "Laboratorio" shrinks instead of splitting
 
 	local currentTab: Tab = "skills"
 	local render: () -> () -- defined below
@@ -690,7 +690,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 			maxText = 26,
 			zindex = Z + 3,
 		})
-		name.TextWrapped = false -- five cards are narrow: the name shrinks instead of splitting
+		Ui.oneLine(name) -- five cards are narrow: the name shrinks instead of splitting
 		local desc = Ui.body(frame, {
 			name = "Desc",
 			size = UDim2.fromScale(0.88, 0.2),
@@ -896,7 +896,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 			maxText = 30,
 			zindex = Z + 3,
 		})
-		name.TextWrapped = false
+		Ui.oneLine(name)
 		-- "Press B to turn on or off": the key from MissionData (B for boots, J for the jetpack).
 		local keyText = Ui.body(frame, {
 			name = "Key",
@@ -928,7 +928,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 		use.icon.Position = UDim2.fromScale(0.03, 0.5)
 		use.label.Size = UDim2.fromScale(0.8, 0.8)
 		use.label.Position = UDim2.fromScale(0.17, 0.5)
-		use.label.TextWrapped = false
+		Ui.oneLine(use.label)
 		local nextUse = Ui.body(frame, {
 			name = "NextGas",
 			size = UDim2.fromScale(0.34, 0.1),

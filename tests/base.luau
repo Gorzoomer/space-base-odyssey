@@ -196,11 +196,11 @@ do
 	for level = 1, #BASE.LEVEL_XP do
 		check(BaseBuild.levelForXp(MissionData, BASE.LEVEL_XP[level]) == level, `B: exact XP of level {level}`)
 	end
-	check(BaseBuild.skillPoints(1, {}) == 0, "B: level 1 has no skill points")
-	check(BaseBuild.skillPoints(4, {}) == 3, "B: level 4 has 3 points")
-	check(BaseBuild.skillPoints(4, { speed = 2 }) == 1, "B: spent points are taken away")
+	check(BaseBuild.skillPoints(1, {}) == 1, "B: level 1 has one (waiting) skill point")
+	check(BaseBuild.skillPoints(4, {}) == 4, "B: level 4 has 4 points")
+	check(BaseBuild.skillPoints(4, { speed = 2 }) == 2, "B: spent points are taken away")
 	check(BaseBuild.skillPoints(2, { speed = 3 }) == 0, "B: points never go below 0")
-	check(BaseBuild.skillPoints(3, nil) == 2, "B: nil skills = none spent")
+	check(BaseBuild.skillPoints(3, nil) == 3, "B: nil skills = none spent")
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -322,8 +322,8 @@ do
 	check(not ok and reason == "level", "E: no skills at level 1")
 	ok, reason = BaseBuild.canLearn(MissionData, {}, 2, "speed")
 	check(ok, "E: speed 1 at level 2")
-	ok, reason = BaseBuild.canLearn(MissionData, { tank = 1 }, 2, "speed")
-	check(not ok and reason == "points", "E: one point at level 2, already spent")
+	ok, reason = BaseBuild.canLearn(MissionData, { tank = 1, builder = 1 }, 2, "speed")
+	check(not ok and reason == "points", "E: both points at level 2 already spent")
 	ok, reason = BaseBuild.canLearn(MissionData, { speed = 1 }, 3, "speed")
 	check(not ok and reason == "level", "E: speed 2 needs level 4")
 	ok, reason = BaseBuild.canLearn(MissionData, { speed = 3 }, 10, "speed")
@@ -418,6 +418,9 @@ do
 		end
 	end
 	check(BaseBuild.skillPoints(lastUnlock, {}) < totalSkillLevels, "E: not enough points for every skill yet (choose!)")
+	-- Team playtest: at the top level every skill can be maxed (no skill stays locked forever).
+	local topLevel = BaseBuild.maxPlayerLevel(MissionData)
+	check(BaseBuild.skillPoints(topLevel, {}) >= totalSkillLevels, "E: the top level gives enough points for every skill")
 end
 
 ----------------------------------------------------------------------------------------------------

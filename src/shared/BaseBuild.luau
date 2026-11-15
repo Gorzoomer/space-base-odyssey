@@ -93,7 +93,9 @@ function BaseBuild.maxPlayerLevel(data: any): number
 	return #data.BASE.LEVEL_XP
 end
 
--- Skill points earned by a level (one per level above 1) minus the ones already spent.
+-- Skill points earned by a level (one per level, so the top level gives exactly enough points for
+-- every skill at its top level; team playtest) minus the ones already spent. A point earned at level
+-- 1 waits: every skill needs player level 2 or more.
 function BaseBuild.skillPoints(level: number, skills: Levels?): number
 	local spent = 0
 	if skills then
@@ -103,7 +105,7 @@ function BaseBuild.skillPoints(level: number, skills: Levels?): number
 			end
 		end
 	end
-	return math.max(0, (level - 1) - spent)
+	return math.max(0, level - spent)
 end
 
 -- The highest level of each build across several players' saved builds.

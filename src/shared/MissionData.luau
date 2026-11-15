@@ -191,7 +191,8 @@ MissionData.BASE = table.freeze({
 	CREDITS_PER_SILO_ICE = 2,
 	XP_PER_SILO_ICE = 1,
 	CARGO_BOT_SECONDS = 30, -- the cargo robot empties the silo for its owner this often
-	-- Player level i needs LEVEL_XP[i] total XP. Each level above 1 gives one skill point.
+	-- Player level i needs LEVEL_XP[i] total XP. Each level gives one skill point: at the top
+	-- level a player has exactly enough points for every skill at its top level (team playtest).
 	LEVEL_XP = table.freeze({ 0, 40, 100, 180, 280, 400, 550, 730, 940, 1200, 1500, 1850, 2250, 2700, 3200 }),
 	-- Skills (learned at the Lab): each level costs one skill point and needs the player level in minLevel.
 	-- Stage 8 (team feedback): the jump skill became the air boots (GEAR); three new skills took its place.
