@@ -405,8 +405,14 @@ local function updateCrew(player: Player, crew: Crew, dt: number, built: BuiltNo
 
 	local velocity = root.AssemblyLinearVelocity
 	local speed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
-	local drain = if speed > runThresholdOf(player)
-		then SUIT.DRAIN_RUN_PER_SECOND
+	-- Stage 10 (playtest): in a vehicle seat the astronaut is not moving their legs, so the vehicle's
+	-- speed must not count as running.
+	local character = player.Character
+	local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
+	local seated = humanoid ~= nil and humanoid.SeatPart ~= nil
+	local drain = if seated
+		then SUIT.DRAIN_SEATED_PER_SECOND
+		elseif speed > runThresholdOf(player) then SUIT.DRAIN_RUN_PER_SECOND
 		elseif speed > MOVING_SPEED then SUIT.DRAIN_WALK_PER_SECOND
 		else SUIT.DRAIN_IDLE_PER_SECOND
 	crew.suitO2 = math.max(0, crew.suitO2 - drain * dt)

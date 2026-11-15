@@ -115,6 +115,9 @@ MissionData.SUIT = table.freeze({
 	DRAIN_WALK_PER_SECOND = 1.0,
 	DRAIN_RUN_PER_SECOND = 2.0,
 	DRAIN_IDLE_PER_SECOND = 0.5,
+	-- Riding a vehicle: the astronaut sits still, so the suit uses the resting rate, however fast the
+	-- vehicle goes (Stage 10 playtest: speed alone used to count as running).
+	DRAIN_SEATED_PER_SECOND = 0.5,
 	RUN_SPEED_THRESHOLD = 18, -- studs/s measured on the server; above this counts as running
 	RESCUE_REFILL = 60, -- C.A.R.L. brings an astronaut with an empty suit back inside
 	REFILL_PER_SECOND = 15,

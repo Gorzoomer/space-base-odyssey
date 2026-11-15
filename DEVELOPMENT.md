@@ -374,6 +374,8 @@ Tested in Studio (assistant-driven):
   - The Earth shot is now wider and closer (170 studs, field of view 24 to 20): with a long lens the 9-degree Sun filled the frame with yellow. The grade uses the values checked while recording (bloom threshold 1.35, sun rays 0.04).
   - Credits and Settings open over the shots. New game, slot 1, Solo closed the menu, gave back the normal camera, HUD and C.A.R.L.'s beam, removed the grade and lowered the world to the player's empty base. No script errors.
 
+**Stage 10 fix: suit air while driving.** The team found that riding the moon buggy emptied the suit fast. The drain read the character's speed, so a fast vehicle counted as running (2 per second). A player in a vehicle seat now uses the resting rate (`SUIT.DRAIN_SEATED_PER_SECOND`, 0.5 per second, GAME). Tested in Studio: driving the buggy for 8 s took the suit from 93 to 89.
+
 **Stage 10 follow-up: 30-second trailer and one documentation file per language.**
 - The trailer was cut in HyperFrames from gameplay captured in Studio (graphics at the top quality level, the cinematic grade on), with an original score synthesized in code. Captions are in English for the global submission; the storm line says "What if a storm like this reached your base?". The raw shots and the render live in `promo/`, which is git-ignored.
 - `DOCUMENTATION.md` (English) and `DOCUMENTACION.md` (Spanish) gather the overview, how to play, science and NASA data, technical design, this log, and the sources, credits and licenses.

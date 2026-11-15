@@ -389,6 +389,8 @@ do
 	check(BaseBuild.speedBonus(MissionData, { speed = 2 }) == 2 * BASE.SPEED_BONUS_PER_LEVEL, "E: speed bonus per level")
 	check(BaseBuild.suitMax(MissionData, {}) == MissionData.SUIT.MAX, "E: suit max without tank skill")
 	check(BaseBuild.suitMax(MissionData, { tank = 3 }) == MissionData.SUIT.MAX + 3 * BASE.TANK_BONUS_PER_LEVEL, "E: bigger air tank")
+	-- Stage 10 playtest: riding a vehicle must not drain the suit like running.
+	check(MissionData.SUIT.DRAIN_SEATED_PER_SECOND ~= nil and MissionData.SUIT.DRAIN_SEATED_PER_SECOND <= MissionData.SUIT.DRAIN_WALK_PER_SECOND, "E: a seated rider uses no more air than walking")
 	check(BaseBuild.jumpPower(MissionData, {}) == MissionData.WORLD.JUMP_POWER, "E: normal Moon jump")
 	check(BaseBuild.jumpPower(MissionData, { jump = 3 }) == MissionData.WORLD.JUMP_POWER, "E: an old jump level adds nothing")
 	check(BASE.DOUBLE_JUMP_FRACTION > 0 and BASE.DOUBLE_JUMP_FRACTION <= 1, "E: second jump is smaller")
