@@ -328,7 +328,6 @@ local EXPECTED: { [string]: { string } } = {
 	["tip.build_greenhouse"] = {},
 	["tip.build_antenna"] = {},
 	["tip.build_shelter"] = {},
-	["tip.double_jump"] = {},
 	["panel.tab_skills"] = {},
 	["panel.tab_pets"] = {},
 	["panel.level"] = {"n"},
@@ -370,8 +369,6 @@ local EXPECTED: { [string]: { string } } = {
 	["skill.speed.desc"] = {"n"},
 	["skill.tank.name"] = {},
 	["skill.tank.desc"] = {"n"},
-	["skill.jump.name"] = {},
-	["skill.jump.desc"] = {},
 	["pet.laika.name"] = {},
 	["pet.cheese.name"] = {},
 	["pet.rabbit.name"] = {},
@@ -529,6 +526,38 @@ local EXPECTED: { [string]: { string } } = {
 	["poi.sun_peak.fact"] = {},
 	["meteor.name"] = {},
 	["meteor.fact"] = {},
+	-- Stage 8: gear, gas tank, auto-run, new skills.
+	["ui.autorun"] = {},
+	["ui.autorun_key"] = {},
+	["tip.autorun"] = {},
+	["tip.autorun_touch"] = {},
+	["tip.gear_boots"] = {},
+	["tip.gear_boots_touch"] = {},
+	["tip.gear_jetpack"] = {},
+	["tip.gear_jetpack_touch"] = {},
+	["tip.gas_empty"] = {},
+	["tip.gear_need_lab"] = {},
+	["carl.base.gear_bought"] = {"k"},
+	["carl.base.gear_upgraded"] = {"n"},
+	["panel.tab_gear"] = {},
+	["panel.gear_hint"] = {},
+	["panel.gear_key"] = {"key"},
+	["panel.gear_use_jump"] = {"n"},
+	["panel.gear_use_fly"] = {"n"},
+	["panel.gear_next"] = {"n"},
+	["panel.buy"] = {},
+	["panel.gear_on"] = {},
+	["panel.gear_off"] = {},
+	["gear.boots.name"] = {},
+	["gear.boots.desc"] = {},
+	["gear.jetpack.name"] = {},
+	["gear.jetpack.desc"] = {},
+	["skill.credits.name"] = {},
+	["skill.credits.desc"] = {"n", "per"},
+	["skill.xp.name"] = {},
+	["skill.xp.desc"] = {"n", "per"},
+	["skill.builder.name"] = {},
+	["skill.builder.desc"] = {"n"},
 }
 
 -- Fun facts: "funfact.01" .. "funfact.NN" with N = Localization.FUNFACT_COUNT, no placeholders.
@@ -741,6 +770,7 @@ local KEY_PREFIXES = {
 	"poi",
 	"meteor",
 	"explore",
+	"gear",
 }
 
 local function luauFiles(dir: string, out: { string })
@@ -793,6 +823,10 @@ for _, def in MissionData.BASE.SKILLS do
 end
 for _, def in MissionData.BASE.PETS do
 	table.insert(DYNAMIC, "pet." .. def.id .. ".name")
+end
+for _, def in MissionData.BASE.GEAR do
+	table.insert(DYNAMIC, "gear." .. def.id .. ".name")
+	table.insert(DYNAMIC, "gear." .. def.id .. ".desc")
 end
 for _, def in MissionData.BASE.VEHICLES do
 	table.insert(DYNAMIC, "ui.vehicle." .. def.id)

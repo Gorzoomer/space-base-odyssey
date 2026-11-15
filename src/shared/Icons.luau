@@ -70,6 +70,11 @@ local Icons = {
 	truck = "rbxassetid://116616146253941", -- truck: ice hauler
 	explore = "rbxassetid://140628088698623", -- map-search: exploration sites
 	repairKit = "rbxassetid://115851349850340", -- briefcase-2: the repair kit tool (not the wrench icon)
+	-- Stage 8: gear and movement.
+	boots = "rbxassetid://78828448579612", -- shoe: air boots
+	jetpack = "rbxassetid://134072488390906", -- jetpack
+	autorun = "rbxassetid://123499224545182", -- walk: auto-run
+	gas = "rbxassetid://80194315296076", -- gas-station: the gear gas tank
 }
 
 -- Earth map: NASA Visible Earth "Blue Marble" (public domain, NASA Goddard), 1024x512 equirectangular.

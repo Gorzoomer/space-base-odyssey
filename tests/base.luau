@@ -1,18 +1,21 @@
 --!strict
--- Space Base Odyssey - build-and-grow rules tests (Stages 6 and 7). Run with: lune run tests/base
+-- Space Base Odyssey - build-and-grow rules tests (Stages 6 to 8). Run with: lune run tests/base
 -- Checks MissionData.BASE is well formed and that src/shared/BaseBuild.luau follows it:
 --   A. data: build / skill / pet ids unique, levels match their lists, requirements point to real
 --      builds and never to themselves, icons exist, rewards give something; the habitat comes first;
 --   B. player level from XP (15 levels), skill points;
 --   C. build costs, requirements, level gates and the "max" stop;
 --   D. effective builds take the highest level of every present player;
---   E. skills: points, level gates, effects (speed, suit, jump); the drill is a tool now;
+--   E. skills: points, level gates, effects (speed, suit, credits, xp, builder); the drill is a tool
+--      and the jump skill is the air boots now;
 --   F. pets: collectible pets are found, never bought; bought pets need level and credits;
 --   G. automatic drills: ice per minute, silo pay;
 --   H. a new player can reach the first builds with START_CREDITS and simple work (no dead end);
 --   I. building in steps: steps per level, assemble hold;
 --   J. tools: unlocks, the drill tool upgrade (hold time, costs, gates);
---   K. food, meteorites and vehicles data.
+--   K. food, meteorites and vehicles data;
+--   L. gear (Stage 8): air boots and jetpack, buying, gas use, the gas tank; bonuses are whole numbers;
+--   M. save migration (Stage 8): the old jump skill becomes air boots, its points come back.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local BaseBuild = require("../src/shared/BaseBuild")
@@ -70,7 +73,8 @@ local EXPECTED_BUILDS = {
 	"landing_pad",
 	"ship",
 }
-local EXPECTED_SKILLS = { "speed", "tank", "jump" }
+local EXPECTED_SKILLS = { "speed", "tank", "credits", "xp", "builder" }
+local EXPECTED_GEAR = { "boots", "jetpack" }
 local EXPECTED_TOOLS = { "wrench", "drill", "brush", "repair_kit", "tablet", "food" }
 
 do
@@ -122,8 +126,14 @@ do
 	for _, id in EXPECTED_SKILLS do
 		check(skillSeen[id] == true, `A: skill {id} exists`)
 	end
+	check(#BASE.SKILLS == #EXPECTED_SKILLS, `A: {#BASE.SKILLS} skills (expected {#EXPECTED_SKILLS})`)
 	check(skillSeen.drill == nil, "A: the drill is a tool now, not a skill")
-	check(#BASE.JUMP_POWER_BONUS >= 3 and #BASE.TOOL_UPGRADES.drill.holdFactor >= 3, "A: jump and drill tables cover 3 levels")
+	check(skillSeen.jump == nil, "A: the jump skill became the air boots")
+	check((BASE :: any).JUMP_POWER_BONUS == nil, "A: JUMP_POWER_BONUS is gone")
+	check((BaseBuild :: any).hasDoubleJump == nil, "A: hasDoubleJump is gone (the boots give it)")
+	check(#BASE.TOOL_UPGRADES.drill.holdFactor >= 3, "A: drill table covers 3 levels")
+	local builderSkill = BaseBuild.skillDef(MissionData, "builder")
+	check(builderSkill ~= nil and #BASE.BUILDER_HOLD_FACTOR == builderSkill.maxLevel, "A: one builder hold factor per level")
 	check((BASE :: any).DRILL_HOLD_FACTOR == nil, "A: DRILL_HOLD_FACTOR moved to TOOL_UPGRADES.drill")
 	check(#BASE.DRILL_ICE_PER_MINUTE >= 3, "A: drill ice table covers 3 levels")
 
@@ -322,8 +332,19 @@ do
 	check(not ok and reason == "unknown", "E: unknown skill")
 	ok, reason = BaseBuild.canLearn(MissionData, {}, 10, "drill")
 	check(not ok and reason == "unknown", "E: the old drill skill is gone (it is a tool upgrade)")
-	ok, reason = BaseBuild.canLearn(MissionData, {}, 2, "jump")
-	check(not ok and reason == "level", "E: double jump needs level 3")
+	ok, reason = BaseBuild.canLearn(MissionData, {}, 10, "jump")
+	check(not ok and reason == "unknown", "E: the old jump skill is gone (air boots)")
+	for _, id in { "credits", "xp", "builder" } do
+		local def = BaseBuild.skillDef(MissionData, id)
+		if def then
+			ok, reason = BaseBuild.canLearn(MissionData, {}, def.minLevel[1] - 1, id)
+			check(not ok and reason == "level", `E: {id} 1 needs level {def.minLevel[1]}`)
+			ok, reason = BaseBuild.canLearn(MissionData, {}, def.minLevel[1], id)
+			check(ok, `E: {id} 1 at level {def.minLevel[1]}`)
+			ok, reason = BaseBuild.canLearn(MissionData, { [id] = def.maxLevel }, 15, id)
+			check(not ok and reason == "max", `E: {id} stops at {def.maxLevel}`)
+		end
+	end
 	-- Old saves: ProgressService keeps only known skills, so drill points come back as free points.
 	check(BaseBuild.skillDef(MissionData, "drill") == nil, "E: no drill skill def")
 
@@ -332,9 +353,59 @@ do
 	check(BaseBuild.suitMax(MissionData, {}) == MissionData.SUIT.MAX, "E: suit max without tank skill")
 	check(BaseBuild.suitMax(MissionData, { tank = 3 }) == MissionData.SUIT.MAX + 3 * BASE.TANK_BONUS_PER_LEVEL, "E: bigger air tank")
 	check(BaseBuild.jumpPower(MissionData, {}) == MissionData.WORLD.JUMP_POWER, "E: normal Moon jump")
-	check(BaseBuild.jumpPower(MissionData, { jump = 3 }) == MissionData.WORLD.JUMP_POWER + BASE.JUMP_POWER_BONUS[3], "E: jump bonus")
-	check(not BaseBuild.hasDoubleJump({}) and BaseBuild.hasDoubleJump({ jump = 1 }), "E: jump 1 gives the double jump")
+	check(BaseBuild.jumpPower(MissionData, { jump = 3 }) == MissionData.WORLD.JUMP_POWER, "E: an old jump level adds nothing")
 	check(BASE.DOUBLE_JUMP_FRACTION > 0 and BASE.DOUBLE_JUMP_FRACTION <= 1, "E: second jump is smaller")
+
+	-- Builder: a shorter Assemble hold per level, never zero.
+	check(BaseBuild.builderHoldFactor(MissionData, nil) == 1 and BaseBuild.builderHoldFactor(MissionData, {}) == 1, "E: no builder skill, normal hold")
+	local lastFactor = 1
+	for level = 1, #BASE.BUILDER_HOLD_FACTOR do
+		local factor = BaseBuild.builderHoldFactor(MissionData, { builder = level })
+		check(factor == BASE.BUILDER_HOLD_FACTOR[level], `E: builder {level} hold factor`)
+		check(factor < lastFactor and factor > 0, `E: builder {level} is faster, never instant`)
+		lastFactor = factor
+	end
+
+	-- Credits / XP skills: the bonus is ALWAYS a whole number (no decimals for kids), at least 1 for
+	-- any reward above 0 with the skill learned, 0 without the skill, and it grows with the level.
+	check(isWhole(BASE.REWARD_BONUS_PER_LEVEL * 10, 1), "E: bonus share is a simple tenth")
+	local allWhole, allAtLeastOne, allGrow, noneWithout = true, true, true, true
+	for base = 0, 500 do
+		local previous = 0
+		for level = 0, 3 do
+			local bonus = BaseBuild.bonusAmount(MissionData, base, level)
+			if bonus ~= math.floor(bonus) or bonus < 0 then
+				allWhole = false
+			end
+			if base > 0 and level > 0 and bonus < 1 then
+				allAtLeastOne = false
+			end
+			if (base == 0 or level == 0) and bonus ~= 0 then
+				noneWithout = false
+			end
+			if bonus < previous then
+				allGrow = false
+			end
+			previous = bonus
+		end
+	end
+	check(allWhole, "E: reward bonus is always a whole number")
+	check(allAtLeastOne, "E: reward bonus is at least 1 when the skill is learned")
+	check(noneWithout, "E: no bonus without the skill or for a 0 reward")
+	check(allGrow, "E: a higher skill level never gives less")
+	check(BaseBuild.bonusAmount(MissionData, 10, 1) == 1, "E: 10 credits at level 1 -> +1")
+	check(BaseBuild.bonusAmount(MissionData, 10, 3) == 3, "E: 10 credits at level 3 -> +3 (no float drift)")
+	check(BaseBuild.bonusAmount(MissionData, 30, 3) == 9, "E: 30 credits at level 3 -> +9 (no float drift)")
+	check(BaseBuild.bonusAmount(MissionData, 5, 1) == 1, "E: 5 credits at level 1 -> +1 (rounded up)")
+	check(BaseBuild.bonusAmount(MissionData, 1, 1) == 1, "E: even 1 credit gets +1")
+	check(BaseBuild.bonusAmount(MissionData, -5, 2) == 0, "E: no bonus for a negative amount")
+	-- Every reward in the game with every bonus level stays whole.
+	for kind, reward in BASE.REWARDS do
+		for level = 1, 3 do
+			check(isWhole(reward.credits + BaseBuild.bonusAmount(MissionData, reward.credits, level), 0), `E: {kind} credits + bonus {level} is whole`)
+			check(isWhole(reward.xp + BaseBuild.bonusAmount(MissionData, reward.xp, level), 1), `E: {kind} XP + bonus {level} is whole`)
+		end
+	end
 
 	-- Skills are a choice during the game: when the last skill level unlocks, the player still has
 	-- fewer points than every skill level together.
@@ -579,6 +650,135 @@ do
 	for _, def in BASE.PETS do
 		if def.cost then
 			check(isWhole(def.cost, 1) and isWhole(def.minLevel, 1), `K: adopted pet {def.id} has a cost and a level`)
+		end
+	end
+end
+
+----------------------------------------------------------------------------------------------------
+-- L. Gear (Stage 8)
+
+do
+	local seen: { [string]: boolean } = {}
+	local keys: { [string]: boolean } = {}
+	for _, def in BASE.GEAR do
+		check(not seen[def.id], `L: gear id {def.id} unique`)
+		seen[def.id] = true
+		check(BaseBuild.gearDef(MissionData, def.id) == def, `L: gearDef finds {def.id}`)
+		check(BaseBuild.skillDef(MissionData, def.id) == nil, `L: {def.id} is gear, not a skill`)
+		check(BaseBuild.toolDef(MissionData, def.id) == nil, `L: {def.id} is gear, not a hotbar tool`)
+		check(iconExists(def.icon), `L: gear {def.id} icon "{def.icon}" exists in Icons`)
+		check(type(def.key) == "string" and #def.key == 1 and string.upper(def.key) == def.key, `L: {def.id} has a one-letter key`)
+		check(not keys[def.key], `L: {def.id} key {def.key} is not shared`)
+		keys[def.key] = true
+		check(not ({ W = true, A = true, S = true, D = true, X = true, E = true })[def.key], `L: {def.id} key is free (not WASD, X or E)`)
+		check(isWhole(def.maxLevel, 1), `L: {def.id} maxLevel is whole`)
+		check(#def.costs == def.maxLevel and #def.minLevel == def.maxLevel and #def.use == def.maxLevel, `L: {def.id} has one cost, level and use per level`)
+		for i = 1, def.maxLevel do
+			check(isWhole(def.costs[i], 1), `L: {def.id} level {i} costs whole credits`)
+			check(isWhole(def.minLevel[i], 1) and def.minLevel[i] <= #BASE.LEVEL_XP, `L: {def.id} level {i} gate is a real level`)
+			check(isWhole(def.use[i], 1) and def.use[i] <= BASE.GAS.MAX, `L: {def.id} level {i} gas use fits the tank`)
+			if i > 1 then
+				check(def.costs[i] > def.costs[i - 1], `L: {def.id} level {i} costs more`)
+				check(def.minLevel[i] >= def.minLevel[i - 1], `L: {def.id} level {i} needs at least the level before`)
+				check(def.use[i] < def.use[i - 1], `L: {def.id} level {i} makes the gas last longer`)
+			end
+		end
+	end
+	for _, id in EXPECTED_GEAR do
+		check(seen[id] == true, `L: gear {id} exists`)
+	end
+	check(#BASE.GEAR == #EXPECTED_GEAR, `L: {#BASE.GEAR} gear pieces (expected {#EXPECTED_GEAR})`)
+	check(BaseBuild.gearDef(MissionData, "rocket_boots") == nil, "L: unknown gear")
+
+	-- Buying and upgrading.
+	local boots = BaseBuild.gearDef(MissionData, "boots")
+	if boots then
+		local ok, reason = BaseBuild.canBuyGear(MissionData, "boots", 0, boots.minLevel[1] - 1, 10 ^ 6)
+		check(not ok and reason == "level", "L: boots need the player level")
+		ok, reason = BaseBuild.canBuyGear(MissionData, "boots", 0, boots.minLevel[1], boots.costs[1] - 1)
+		check(not ok and reason == "credits", "L: boots need the credits")
+		ok, reason = BaseBuild.canBuyGear(MissionData, "boots", 0, boots.minLevel[1], boots.costs[1])
+		check(ok and reason == nil, "L: boots with level and credits")
+		ok, reason = BaseBuild.canBuyGear(MissionData, "boots", 1, boots.minLevel[2], boots.costs[2])
+		check(ok, "L: boots upgrade to level 2")
+		ok, reason = BaseBuild.canBuyGear(MissionData, "boots", 1, boots.minLevel[2] - 1, 10 ^ 6)
+		check(not ok and reason == "level", "L: boots level 2 needs the player level")
+		ok, reason = BaseBuild.canBuyGear(MissionData, "boots", boots.maxLevel, 15, 10 ^ 9)
+		check(not ok and reason == "max", "L: boots stop at their top level")
+	end
+	local ok, reason = BaseBuild.canBuyGear(MissionData, "cape", 0, 15, 10 ^ 9)
+	check(not ok and reason == "unknown", "L: unknown gear cannot be bought")
+	local jetpack = BaseBuild.gearDef(MissionData, "jetpack")
+	if boots and jetpack then
+		check(jetpack.minLevel[1] > boots.minLevel[1], "L: the jetpack comes after the boots")
+		check(jetpack.costs[1] > boots.costs[1], "L: the jetpack costs more than the boots")
+	end
+	-- Every level of every piece of gear can be reached at the top player level.
+	for _, def in BASE.GEAR do
+		for current = 0, def.maxLevel - 1 do
+			check(BaseBuild.canBuyGear(MissionData, def.id, current, #BASE.LEVEL_XP, 10 ^ 9), `L: {def.id} level {current + 1} reachable`)
+		end
+	end
+
+	-- Gas use.
+	for _, def in BASE.GEAR do
+		check(BaseBuild.gasUse(MissionData, def.id, 0) == nil, `L: {def.id} not owned uses no gas`)
+		for level = 1, def.maxLevel do
+			check(BaseBuild.gasUse(MissionData, def.id, level) == def.use[level], `L: {def.id} level {level} gas use`)
+		end
+		check(BaseBuild.gasUse(MissionData, def.id, def.maxLevel + 5) == def.use[def.maxLevel], `L: {def.id} above the top = top level`)
+	end
+	check(BaseBuild.gasUse(MissionData, "cape", 1) == nil, "L: unknown gear uses no gas")
+	if boots then
+		-- A full tank gives more than one double jump, even with the basic boots.
+		check(BASE.GAS.MAX / boots.use[1] >= 2, "L: a full tank gives at least two double jumps")
+	end
+	if jetpack then
+		-- The jetpack flies for a few seconds, not forever.
+		local seconds = BASE.GAS.MAX / jetpack.use[1]
+		check(seconds >= 2 and seconds <= 15, `L: a full tank flies the basic jetpack {seconds} s`)
+	end
+
+	-- The gas tank.
+	local gas = BASE.GAS
+	check(isWhole(gas.MAX, 1), "L: the gas tank holds a whole amount")
+	check(gas.REFILL_PER_SECOND > 0 and gas.MAX / gas.REFILL_PER_SECOND <= 10, "L: the tank refills inside in under 10 s")
+	-- The jetpack must beat Moon gravity to climb, and its climb is capped.
+	check(gas.JETPACK_ACCEL > MissionData.WORLD.MOON_GRAVITY_STUDS, "L: jetpack push beats Moon gravity")
+	check(gas.JETPACK_MAX_RISE > 0, "L: jetpack climb speed is capped")
+end
+
+----------------------------------------------------------------------------------------------------
+-- M. Save migration (Stage 8, done by ProgressService.sanitizeBase on the server)
+-- The old "jump" skill level becomes the air boots at that level (at most boots.maxLevel) for free.
+-- The skills keep only known ids, so "jump" drops out and its points come back. This mirrors those
+-- rules with BaseBuild (ProgressService needs Roblox and cannot run in Lune).
+
+do
+	local boots = BaseBuild.gearDef(MissionData, "boots")
+	check(boots ~= nil and boots.maxLevel >= 3, "M: boots have room for every old jump level (3)")
+	check(BaseBuild.skillDef(MissionData, "jump") == nil, "M: no jump skill def, so saves drop it")
+	-- The same filter ProgressService uses: known skill ids only.
+	local function keepKnown(skills: { [string]: number }): { [string]: number }
+		local kept: { [string]: number } = {}
+		for id, level in skills do
+			if BaseBuild.skillDef(MissionData, id) then
+				kept[id] = level
+			end
+		end
+		return kept
+	end
+	local oldSkills = { speed = 1, jump = 2 }
+	local playerLevel = 5
+	local before = BaseBuild.skillPoints(playerLevel, oldSkills)
+	local after = BaseBuild.skillPoints(playerLevel, keepKnown(oldSkills))
+	check(after == before + 2, "M: the 2 jump points come back")
+	check(keepKnown(oldSkills).speed == 1, "M: other skills stay")
+	if boots then
+		for jump = 1, 5 do
+			local migrated = math.clamp(jump, 1, boots.maxLevel)
+			check(migrated >= 1 and migrated <= boots.maxLevel, `M: jump {jump} -> boots {migrated}`)
+			check(BaseBuild.gasUse(MissionData, "boots", migrated) ~= nil, `M: migrated boots level {migrated} works`)
 		end
 	end
 end

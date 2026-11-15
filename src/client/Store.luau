@@ -322,6 +322,14 @@ function Store.setBase(value: BaseState)
 			end
 		end
 	end
+	local gearOn: { [string]: boolean } = {}
+	if type(raw.gearOn) == "table" then
+		for id, on in raw.gearOn do
+			if type(id) == "string" and type(on) == "boolean" then
+				gearOn[id] = on
+			end
+		end
+	end
 	local xp = numberOr(raw.xp, 0)
 	base = {
 		credits = numberOr(raw.credits, 0),
@@ -343,6 +351,8 @@ function Store.setBase(value: BaseState)
 		tools = levelMap(raw.tools),
 		foodReadyAt = if type(raw.foodReadyAt) == "number" then raw.foodReadyAt else nil,
 		scanned = scanned,
+		gear = levelMap(raw.gear), -- Stage 8
+		gearOn = gearOn,
 	}
 	emit("base")
 end

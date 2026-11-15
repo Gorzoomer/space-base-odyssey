@@ -12,6 +12,8 @@
 --     enables it when the lab is built. It sits on the kiosk screen beside the lab door.
 --   Sites.labDock: CFrame at the outer face of the lab's docking collar; LookVector points out toward
 --     the habitat. The habitat tube corridor attaches here (tube diameter up to LAB_DOCK_DIAMETER).
+--   Sites.labInterior: Stage 8, the lab's pressurized room as a round prism { centre, radius, bottomY,
+--     topY } (inner wall face, foundation to roof). World-core turns it into an inside zone.
 --   Sites.garageBays: two CFrames on the garage bay floors, facing out of the doors (-X).
 --   Sites.pois: { id, position, prompt } for the five exploration sites. The prompt ("ScanPrompt",
 --     TextKey "prompt.scan", ObjectKey "poi.<id>.name", hold 1.5) is enabled; its part has PoiId.
@@ -32,10 +34,12 @@ local Theme = require(Shared:WaitForChild("Theme"))
 export type BuildSite = { model: Model, padPosition: Vector3 }
 export type PoiRef = { id: string, position: Vector3, prompt: ProximityPrompt }
 export type Keepout = { x: number, z: number, r: number }
+export type LabInterior = { centre: Vector3, radius: number, bottomY: number, topY: number }
 export type Sites = {
 	builds: { [string]: BuildSite },
 	labPrompt: ProximityPrompt,
 	labDock: CFrame,
+	labInterior: LabInterior,
 	garageBays: { CFrame },
 	pois: { PoiRef },
 	impacts: Folder,
@@ -1318,6 +1322,14 @@ function WorldSites.build(baseFolder: Instance, helpers: Helpers?): Sites
 		},
 		labPrompt = labPrompt,
 		labDock = labDock,
+		-- The wall panels are 1 thick around LAB_RADIUS - 0.5: the room is everything within their inner
+		-- face, plus a little of the doorway so stepping in reads as inside at once.
+		labInterior = {
+			centre = LAB_CENTRE,
+			radius = LAB_RADIUS - 0.6,
+			bottomY = LAB_WALL_BOTTOM - 0.5,
+			topY = LAB_WALL_TOP,
+		},
 		garageBays = garageBays,
 		pois = pois,
 		impacts = impacts,

@@ -235,13 +235,62 @@ function BaseBuild.suitMax(data: any, skills: Levels?): number
 	return data.SUIT.MAX + levelOf(skills, "tank") * data.BASE.TANK_BONUS_PER_LEVEL
 end
 
-function BaseBuild.jumpPower(data: any, skills: Levels?): number
-	local level = levelOf(skills, "jump")
-	return data.WORLD.JUMP_POWER + (if level > 0 then data.BASE.JUMP_POWER_BONUS[level] else 0)
+-- Stage 8: there is no jump skill any more (the air boots give the double jump), so the jump power is
+-- the normal Moon jump. The skills argument is kept so older callers still work.
+function BaseBuild.jumpPower(data: any, _skills: Levels?): number
+	return data.WORLD.JUMP_POWER
 end
 
-function BaseBuild.hasDoubleJump(skills: Levels?): boolean
-	return levelOf(skills, "jump") >= 1
+-- Extra credits or XP for a reward from the "credits" / "xp" skill: REWARD_BONUS_PER_LEVEL per level,
+-- rounded UP to a whole number (0 when the skill is not learned or the reward is 0). No decimals.
+function BaseBuild.bonusAmount(data: any, base: number, skillLevel: number): number
+	if base <= 0 or skillLevel <= 0 then
+		return 0
+	end
+	return math.ceil(base * data.BASE.REWARD_BONUS_PER_LEVEL * skillLevel - 1e-9)
+end
+
+-- Assemble hold factor from the "builder" skill.
+function BaseBuild.builderHoldFactor(data: any, skills: Levels?): number
+	local level = levelOf(skills, "builder")
+	return if level > 0 then data.BASE.BUILDER_HOLD_FACTOR[level] else 1
+end
+
+function BaseBuild.gearDef(data: any, id: string): any
+	for _, def in data.BASE.GEAR do
+		if def.id == id then
+			return def
+		end
+	end
+	return nil
+end
+
+-- Can this player buy (level 0 -> 1) or upgrade a piece of gear at the Lab?
+function BaseBuild.canBuyGear(data: any, id: string, currentLevel: number, playerLevel: number, credits: number): (boolean, Reason?)
+	local def = BaseBuild.gearDef(data, id)
+	if def == nil then
+		return false, "unknown"
+	end
+	local nextLevel = currentLevel + 1
+	if nextLevel > def.maxLevel then
+		return false, "max"
+	end
+	if playerLevel < def.minLevel[nextLevel] then
+		return false, "level"
+	end
+	if credits < def.costs[nextLevel] then
+		return false, "credits"
+	end
+	return true, nil
+end
+
+-- Gas used per double jump (boots) or per second of thrust (jetpack) at a gear level (0 = not owned).
+function BaseBuild.gasUse(data: any, id: string, gearLevel: number): number?
+	local def = BaseBuild.gearDef(data, id)
+	if def == nil or gearLevel < 1 then
+		return nil
+	end
+	return def.use[math.clamp(gearLevel, 1, def.maxLevel)]
 end
 
 -- Ice drilling hold factor for a drill TOOL level (Stage 7: the drill is a tool upgraded at the Lab).

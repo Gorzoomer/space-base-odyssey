@@ -185,6 +185,8 @@ export type BaseState = {
 	tools: { [string]: number }, -- tools this player can carry -> tool level (1 = basic)
 	foodReadyAt: number?, -- workspace:GetServerTimeNow() when the greenhouse has fresh food for this player
 	scanned: { [string]: boolean }, -- exploration sites this player has scanned
+	gear: { [string]: number }, -- Stage 8: gear owned -> level ("boots", "jetpack"); missing = not owned
+	gearOn: { [string]: boolean }, -- Stage 8: gear switched on (worn and working)
 }
 
 export type BuildProgress = {
@@ -220,6 +222,8 @@ export type Action =
 	| { type: "BuyPet", id: string }
 	| { type: "ClaimSilo" } -- also from the silo prompt
 	| { type: "UpgradeTool", id: string } -- Stage 7, at the Lab (credits)
+	| { type: "BuyGear", id: string } -- Stage 8, at the Lab: buy (level 1) or upgrade boots / jetpack
+	| { type: "ToggleGear", id: string } -- Stage 8, anywhere: switch owned gear on or off (keys B / J)
 	| { type: "DebugMeteor" } -- Stage 7, Studio / place owner only: a meteorite lands now
 	| { type: "DebugGrantCredits", amount: number } -- Studio / place owner only; also grants XP = amount
 	| { type: "DebugResetBase" } -- Studio / place owner only: this player's builds, skills, credits, XP back to the start

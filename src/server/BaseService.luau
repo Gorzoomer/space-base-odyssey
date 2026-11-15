@@ -21,7 +21,14 @@
 -- prompt UI keeps the hold time it had when the prompt appeared, so a shown prompt whose hold grew
 -- from 0.6 to 2.5 seconds filled its ring at 0.6 and never triggered. A freshly enabled prompt is
 -- shown again with its own hold. Every placeholder key gets its TextParams (written before the key).
--- Skills, pets and tool upgrades are only bought at the Lab (built, and standing near
+-- Stage 8 (team feedback): GEAR worn on the suit, bought and upgraded at the Lab (BuyGear) and
+-- switched on or off anywhere (ToggleGear, keys B / J): air boots (double jump) and a jetpack. Gear
+-- levels and on/off are saved in the base record; the player attributes SBO_GearBoots and
+-- SBO_GearJetpack are the gear level while it is on (0 = off or not owned), SBO_BuilderLevel the
+-- "builder" skill (the client shortens the Assemble hold). The old "jump" skill is gone (saves get the
+-- boots, ProgressService). Skills "credits" and "xp" add BaseBuild.bonusAmount (whole numbers) to every
+-- credit and XP grant (rewards, silo, builds, collectibles); debug grants stay exact.
+-- Skills, pets, gear and tool upgrades are only bought at the Lab (built, and standing near
 -- its prompt). Tools the player may carry come from the builds standing (BaseBuild.toolsUnlocked);
 -- ToolService gives them and reports what is in hand through setToolChecker.
 --
@@ -91,6 +98,8 @@ local ACTION_TYPES: { [string]: boolean } = {
 	BuyPet = true,
 	ClaimSilo = true,
 	UpgradeTool = true,
+	BuyGear = true,
+	ToggleGear = true,
 	DebugMeteor = true,
 	DebugGrantCredits = true,
 	DebugResetBase = true,
@@ -133,6 +142,13 @@ local sendScheduled: { [Player]: boolean } = {}
 local buildListeners: { (Levels) -> () } = {}
 local equippedListeners: { (Player) -> () } = {}
 local toolsListeners: { (Player) -> () } = {}
+local gearListeners: { (Player) -> () } = {}
+
+-- Player attribute per gear id: the gear level while it is on, else 0 (Movement and SuitService read it).
+local GEAR_ATTRIBUTES: { [string]: string } = {
+	boots = "SBO_GearBoots",
+	jetpack = "SBO_GearJetpack",
+}
 
 ----------------------------------------------------------------------------------------------------
 -- Helpers
@@ -463,6 +479,27 @@ local function scannedState(base: BaseRecord): { [string]: boolean }
 	return result
 end
 
+-- Gear this player owns -> level (clamped to each def's maxLevel).
+local function gearLevelsOf(base: BaseRecord): { [string]: number }
+	local result: { [string]: number } = {}
+	for _, def in BASE.GEAR do
+		local level = math.clamp(BaseBuild.levelOf(base.gear, def.id), 0, def.maxLevel)
+		if level > 0 then
+			result[def.id] = level
+		end
+	end
+	return result
+end
+
+-- Owned gear -> switched on (true) or off (false).
+local function gearOnOf(base: BaseRecord): { [string]: boolean }
+	local result: { [string]: boolean } = {}
+	for id in gearLevelsOf(base) do
+		result[id] = base.gearOn ~= nil and base.gearOn[id] == true
+	end
+	return result
+end
+
 local function buildState(player: Player): BaseState?
 	local base = baseOf(player)
 	if base == nil then
@@ -490,6 +527,8 @@ local function buildState(player: Player): BaseState?
 		tools = toolLevelsOf(player),
 		foodReadyAt = if greenhouse then foodReady[player] or 0 else nil,
 		scanned = scannedState(base),
+		gear = gearLevelsOf(base),
+		gearOn = gearOnOf(base),
 	}
 end
 
@@ -539,14 +578,33 @@ local function applyHumanoid(player: Player, character: Model)
 	humanoid.JumpPower = BaseBuild.jumpPower(MissionData, skills)
 end
 
--- Player attributes read by the client (Sprint, double jump) and CrewService (suit). The drill hold
--- time (SBO_DrillLevel) now comes from the drill TOOL level and is set by ToolService.
+local function setPlayerAttribute(player: Player, name: string, value: any)
+	if player:GetAttribute(name) ~= value then
+		player:SetAttribute(name, value)
+	end
+end
+
+-- Gear attributes: the level of each piece while it is switched on, else 0.
+local function applyGear(player: Player)
+	local base = baseOf(player)
+	local levels = if base then gearLevelsOf(base) else {}
+	local on = if base then gearOnOf(base) else {}
+	for id, attribute in GEAR_ATTRIBUTES do
+		local level = levels[id] or 0
+		setPlayerAttribute(player, attribute, if on[id] then level else 0)
+	end
+end
+
+-- Player attributes read by the client (Sprint, gear, Assemble hold) and CrewService (suit). The
+-- drill hold time (SBO_DrillLevel) comes from the drill TOOL level and is set by ToolService.
+-- Stage 8: SBO_JumpLevel is retired (the air boots give the double jump: SBO_GearBoots).
 local function applySkillEffects(player: Player)
 	local base = baseOf(player)
 	local skills = if base then base.skills else nil
-	player:SetAttribute("SBO_SpeedBonus", BaseBuild.speedBonus(MissionData, skills))
-	player:SetAttribute("SBO_SuitMax", BaseBuild.suitMax(MissionData, skills))
-	player:SetAttribute("SBO_JumpLevel", BaseBuild.levelOf(skills, "jump"))
+	setPlayerAttribute(player, "SBO_SpeedBonus", BaseBuild.speedBonus(MissionData, skills))
+	setPlayerAttribute(player, "SBO_SuitMax", BaseBuild.suitMax(MissionData, skills))
+	setPlayerAttribute(player, "SBO_BuilderLevel", BaseBuild.levelOf(skills, "builder"))
+	applyGear(player)
 	local character = player.Character
 	if character then
 		applyHumanoid(player, character)
@@ -730,17 +788,25 @@ end
 ----------------------------------------------------------------------------------------------------
 -- Credits and XP
 
--- Adds credits and XP (either may be 0) and tells the player about a new level.
-local function grant(player: Player, credits: number, xp: number)
+-- Adds credits and XP (either may be 0) and tells the player about a new level. The "credits" and
+-- "xp" skills add their bonus (BaseBuild.bonusAmount: whole numbers) unless exact = true (debug).
+-- Returns the credits and XP really given.
+local function grant(player: Player, credits: number, xp: number, exact: boolean?): (number, number)
 	local api = progress
 	local before = baseOf(player)
 	if api == nil or before == nil then
-		return
+		return 0, 0
 	end
 	local levelBefore = levelOf(before)
+	local addCredits = math.max(0, math.floor(credits))
+	local addXp = math.max(0, math.floor(xp))
+	if not exact then
+		addCredits += BaseBuild.bonusAmount(MissionData, addCredits, BaseBuild.levelOf(before.skills, "credits"))
+		addXp += BaseBuild.bonusAmount(MissionData, addXp, BaseBuild.levelOf(before.skills, "xp"))
+	end
 	api.updateBase(player, function(base: BaseRecord)
-		base.credits += math.max(0, credits)
-		base.xp += math.max(0, xp)
+		base.credits += addCredits
+		base.xp += addXp
 	end)
 	local after = baseOf(player)
 	if after then
@@ -750,6 +816,7 @@ local function grant(player: Player, credits: number, xp: number)
 		end
 	end
 	scheduleSend(player)
+	return addCredits, addXp
 end
 
 local function rewardKind(player: Player, kind: string)
@@ -781,8 +848,7 @@ local function claimSiloFor(player: Player, quiet: boolean): boolean
 		return false
 	end
 	silo -= ice
-	local credits = ice * BASE.CREDITS_PER_SILO_ICE
-	grant(player, credits, ice * BASE.XP_PER_SILO_ICE)
+	local credits = grant(player, ice * BASE.CREDITS_PER_SILO_ICE, ice * BASE.XP_PER_SILO_ICE)
 	setSiloVisual()
 	if not quiet then
 		sayTo(player, "carl.base.silo_claimed", { n = credits })
@@ -1125,6 +1191,76 @@ local function doUpgradeTool(player: Player, id: any, trusted: boolean)
 	scheduleSend(player)
 end
 
+local function fireGear(player: Player)
+	fireListeners(gearListeners, player, "gear")
+end
+
+-- Buys (level 1, switched on at once) or upgrades a piece of gear at the Lab.
+local function doBuyGear(player: Player, id: any, trusted: boolean)
+	local api = progress
+	local base = baseOf(player)
+	if api == nil or base == nil or not isLoaded(player) then
+		reject(player, "wait")
+		return
+	end
+	if type(id) ~= "string" then
+		reject(player, "unknown")
+		return
+	end
+	if not atLab(player, trusted) then
+		return
+	end
+	local def = BaseBuild.gearDef(MissionData, id)
+	local current = BaseBuild.levelOf(gearLevelsOf(base), id)
+	local ok, reason = BaseBuild.canBuyGear(MissionData, id, current, levelOf(base), base.credits)
+	if not ok or def == nil then
+		reject(player, reason or "unknown")
+		return
+	end
+	local nextLevel = current + 1
+	local cost = def.costs[nextLevel] :: number
+	api.updateBase(player, function(saved: BaseRecord)
+		saved.credits -= cost
+		saved.gear[id] = math.max(BaseBuild.levelOf(saved.gear, id), nextLevel)
+		if nextLevel == 1 then
+			saved.gearOn[id] = true -- new gear is worn and working at once
+		end
+	end)
+	if nextLevel == 1 then
+		sayTo(player, "carl.base.gear_bought", { k = tostring(def.key) })
+	else
+		sayTo(player, "carl.base.gear_upgraded", { n = nextLevel })
+	end
+	applyGear(player)
+	fireGear(player)
+	scheduleSend(player)
+end
+
+-- Switches owned gear on or off (anywhere: keys B / J on the client).
+local function doToggleGear(player: Player, id: any)
+	local api = progress
+	local base = baseOf(player)
+	if api == nil or base == nil or not isLoaded(player) then
+		reject(player, "wait")
+		return
+	end
+	if type(id) ~= "string" or BaseBuild.gearDef(MissionData, id) == nil then
+		reject(player, "unknown")
+		return
+	end
+	if BaseBuild.levelOf(gearLevelsOf(base), id) < 1 then
+		reject(player, "not_owned")
+		return
+	end
+	local on = not (base.gearOn ~= nil and base.gearOn[id] == true)
+	api.updateBase(player, function(saved: BaseRecord)
+		saved.gearOn[id] = on
+	end)
+	applyGear(player)
+	fireGear(player)
+	scheduleSend(player)
+end
+
 local function doEquip(player: Player, slot: any, value: any)
 	local api = progress
 	local base = baseOf(player)
@@ -1225,6 +1361,7 @@ local function doResetBase(player: Player)
 	refreshPrompts()
 	refreshTools(player)
 	fireEquipped(player)
+	fireGear(player)
 	scheduleSendAll()
 end
 
@@ -1242,6 +1379,10 @@ local function dispatch(player: Player, action: any, trusted: boolean)
 		doClaimSilo(player, trusted)
 	elseif kind == "UpgradeTool" then
 		doUpgradeTool(player, action.id, trusted)
+	elseif kind == "BuyGear" then
+		doBuyGear(player, action.id, trusted)
+	elseif kind == "ToggleGear" then
+		doToggleGear(player, action.id)
 	elseif kind == "DebugMeteor" then
 		local hook = debugMeteorHook
 		if hook and isDebugAllowed(player, trusted) then
@@ -1261,7 +1402,7 @@ local function dispatch(player: Player, action: any, trusted: boolean)
 			return
 		end
 		local whole = math.floor(math.min(amount, DEBUG_MAX_GRANT))
-		grant(player, whole, whole)
+		grant(player, whole, whole, true)
 	elseif kind == "DebugResetBase" then
 		if not isDebugAllowed(player, trusted) or not isLoaded(player) then
 			return
@@ -1305,6 +1446,7 @@ local function onLoaded(player: Player)
 	recompute(false)
 	refreshTools(player)
 	fireEquipped(player)
+	fireGear(player)
 	sendNow(player)
 end
 
@@ -1712,6 +1854,28 @@ end
 function BaseService.hasScanned(player: Player, key: string): boolean
 	local base = baseOf(player)
 	return base ~= nil and base.scanned[key] == true
+end
+
+-- Stage 8: gear this player wears and has switched on -> level (a copy; off or not owned = missing).
+-- The same values are the player attributes SBO_GearBoots / SBO_GearJetpack.
+function BaseService.gearOn(player: Player): { [string]: number }
+	local result: { [string]: number } = {}
+	local base = if present[player] then baseOf(player) else nil
+	if base == nil then
+		return result
+	end
+	local on = gearOnOf(base)
+	for id, level in gearLevelsOf(base) do
+		if on[id] then
+			result[id] = level
+		end
+	end
+	return result
+end
+
+-- Stage 8: called (with the player) when that player's gear or its on/off may have changed.
+function BaseService.onGearChanged(listener: (player: Player) -> ())
+	table.insert(gearListeners, listener)
 end
 
 -- Stage 7: ExploreService handles DebugMeteor (Studio / place owner only; checked here first).

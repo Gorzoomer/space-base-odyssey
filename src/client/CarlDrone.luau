@@ -1310,7 +1310,7 @@ function CarlDrone.start()
 	end
 
 	-- Hop on the player's jump (each time the Humanoid enters Jumping) and on the double jump
-	-- (Movement.luau sets the character attribute SBO_DoubleJumpAt; it only changes velocity, so the
+	-- (Gear.luau, the air boots, sets the character attribute SBO_DoubleJumpAt; it only changes velocity, so the
 	-- Humanoid does not enter Jumping again).
 	local jumpRequested = false
 	local humanoidConnection: RBXScriptConnection? = nil

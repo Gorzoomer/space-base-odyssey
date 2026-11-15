@@ -14,8 +14,13 @@
 --   a food boost timer while player attribute SBO_FoodBoostUntil (server time) is in the future, and a
 --   small build-progress sign (a local BillboardGui) over every build pad with a build in progress
 --   (BaseState.inProgress): step x/y and what is needed next (a crate, or Assemble with the wrench).
+--   Stage 8 (field): a gas tank bar for the gear (air boots, jetpack; Gear.luau simulates the tank)
+--   with a small gear row (each owned gear's icon, lit while it is on, with its key letter B / J on
+--   keyboards), shown only when the player owns any gear; and an "Auto-run (X)" pill while auto-run
+--   is on (Sprint.luau).
 --   Top bar (Hud.newTopBar): Missions and Wardrobe buttons beside the Settings button, and the "Build
---   your base" hint pill in base mode. Stage 7: no Base button (team feedback: building from a menu
+--   your base" hint pill in base mode until the habitat and the solar panels stand (Stage 8: it used
+--   to wait for every core build). Stage 7: no Base button (team feedback: building from a menu
 --   let players upgrade everything while standing still; builds happen at the pads in the world).
 -- Screen layout (fractions of the screen):
 --   top centre   y 0.02-0.09  shift timer 0.25-0.49 | today's event 0.51-0.75
@@ -32,7 +37,8 @@
 --   centre       y 0.115-0.26 C.A.R.L. bubble (Messages.luau, x 0.29-0.71; y 0.19 in base mode)
 --                y 0.27-0.48  storm countdown and flare source (x 0.22-0.78)
 --   bottom       stacked upwards from the tool bar's top edge (see placeStack): suit air (0.085
---                tall), then carrying ice or parts (0.07), then the food boost (0.055)
+--                tall), then the gear gas tank (0.06), then auto-run (0.05), then carrying ice or
+--                parts (0.07), then the food boost (0.055)
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local GuiService = game:GetService("GuiService")
@@ -41,6 +47,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local StarterGui = game:GetService("StarterGui")
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local BaseBuild = require(Shared:WaitForChild("BaseBuild"))
@@ -85,6 +92,9 @@ local STACK_GAP = 0.012
 local SUIT_SIZE = UDim2.fromScale(0.42, 0.085)
 local CARRY_SIZE = UDim2.fromScale(0.26, 0.07)
 local FOOD_SIZE = UDim2.fromScale(0.22, 0.055)
+local GAS_SIZE = UDim2.fromScale(0.34, 0.06)
+local AUTORUN_SIZE = UDim2.fromScale(0.2, 0.05)
+local GAS_LOW_FRACTION = 0.25 -- the gas bar turns orange below this share of the tank (display only)
 local VEHICLE_PANEL_NAME = "VehiclePanel" -- VehicleClient.luau, bottom centre while driving
 -- Build-progress signs over the pads: screen-sized (pixels at UI scale 1), high above the pad so
 -- the pad's ProximityPrompt (drawn at the pad) always stays readable.
@@ -101,9 +111,18 @@ local SIGN_POLL_SECONDS = 1 -- look again for pads that were not there yet
 --   "board"  planning with the power board open.   "none"  report.
 export type Mode = "shift" | "roam" | "base" | "select" | "board" | "none"
 
+-- Stage 8 gear (Gear.luau), passed by Main.client; nil when Gear failed to load.
+export type GearDeps = {
+	gas: () -> (number, number), -- current, max
+	level: (id: string) -> number, -- owned level (0 = not owned)
+	isOn: (id: string) -> boolean,
+}
+
 export type Deps = {
 	-- Bottom edge (screen fraction) of the objectives panel, or nil while it is hidden.
 	columnTop: (() -> number?)?,
+	gear: GearDeps?,
+	autoRunning: (() -> boolean)?, -- Sprint.luau auto-run is on
 }
 
 export type HudView = {
@@ -258,6 +277,87 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		textColor = Ui.COLORS.textDark,
 		icon = Ui.ICONS.food,
 		maxText = 26,
+		visible = false,
+	})
+
+	-- Stage 8: the gear gas tank and the gear row (one chip per owned gear, lit while it is on).
+	local gasPanel = Ui.panel(field, {
+		name = "GearGas",
+		size = GAS_SIZE,
+		position = UDim2.fromScale(0.5, 0.78),
+		anchor = Vector2.new(0.5, 0),
+		transparency = 0.1,
+		corner = 0.3,
+		stroke = 2,
+		visible = false,
+	})
+	Ui.icon(gasPanel, Ui.Icons.gas, {
+		name = "GasIcon",
+		size = UDim2.fromScale(0.1, 0.7),
+		position = UDim2.fromScale(0.025, 0.5),
+		anchor = Vector2.new(0, 0.5),
+		tint = ROLE.accent,
+	})
+	local gasBar = Ui.bar(gasPanel, {
+		name = "Bar",
+		size = UDim2.fromScale(0.5, 0.62),
+		position = UDim2.fromScale(0.13, 0.5),
+		anchor = Vector2.new(0, 0.5),
+		maxText = 22,
+	})
+	type GearChip = { id: string, frame: Frame, icon: ImageLabel, key: TextLabel, stroke: UIStroke? }
+	local gearChips: { GearChip } = {}
+	for index, def in MissionData.BASE.GEAR do
+		local chip = Ui.frame(gasPanel, {
+			name = "Gear_" .. def.id,
+			size = UDim2.fromScale(0.15, 0.8),
+			position = UDim2.fromScale(0.66 + (index - 1) * 0.165, 0.5),
+			anchor = Vector2.new(0, 0.5),
+			color = ROLE.panelRaised,
+			corner = 0.3,
+			stroke = 2,
+			strokeColor = ROLE.stroke,
+			visible = false,
+		})
+		local chipIcon = Ui.icon(chip, Ui.iconImage(def.icon), {
+			name = "Icon",
+			size = UDim2.fromScale(0.56, 0.8),
+			position = UDim2.fromScale(0.05, 0.5),
+			anchor = Vector2.new(0, 0.5),
+			tint = ROLE.textDim,
+		})
+		-- The key letter (MissionData GEAR key: a keyboard key name, not a word).
+		local keyLabel = Ui.label(chip, {
+			name = "Key",
+			text = def.key,
+			size = UDim2.fromScale(0.38, 0.7),
+			position = UDim2.fromScale(0.97, 0.5),
+			anchor = Vector2.new(1, 0.5),
+			textColor = ROLE.textDim,
+			maxText = 18,
+			minText = 6,
+		})
+		table.insert(gearChips, {
+			id = def.id,
+			frame = chip,
+			icon = chipIcon,
+			key = keyLabel,
+			stroke = chip:FindFirstChildOfClass("UIStroke"),
+		})
+	end
+
+	-- Stage 8: auto-run is on (Sprint.luau).
+	local autoRunBadge = Ui.iconText(field, {
+		name = "AutoRun",
+		size = AUTORUN_SIZE,
+		position = UDim2.fromScale(0.5, 0.72),
+		anchor = Vector2.new(0.5, 0),
+		color = ROLE.accent,
+		stroke = 3,
+		strokeColor = ROLE.background,
+		textColor = Ui.COLORS.textDark,
+		icon = Ui.Icons.autorun,
+		maxText = 24,
 		visible = false,
 	})
 
@@ -435,8 +535,9 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	end
 
 	-- Bottom centre pills, stacked upwards from bottomLimit (only the visible ones take room):
-	-- suit air, then carrying ice or parts, then the food boost.
-	local stackOrder: { GuiObject } = { suitPanel, crateBadge.frame, iceBadge.frame, foodBadge.frame }
+	-- suit air, the gear gas tank, auto-run, then carrying ice or parts, then the food boost.
+	local stackOrder: { GuiObject } =
+		{ suitPanel, gasPanel, autoRunBadge.frame, crateBadge.frame, iceBadge.frame, foodBadge.frame }
 	local function placeStack()
 		local y = bottomLimit()
 		for _, item in stackOrder do
@@ -514,6 +615,9 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		placeColumn()
 	end
 
+	-- Defined below (after the gear widgets); render() calls it.
+	local renderGear: () -> ()
+
 	local function render()
 		local snap = Store.getSnapshot()
 		local stats = Store.getStats()
@@ -557,6 +661,7 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 			iceBadge.frame.Visible = false
 			suitPanel.Visible = false
 		end
+		renderGear()
 		renderWallet()
 		placeStack()
 	end
@@ -573,6 +678,47 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		placeStack()
 	end
 	player:GetAttributeChangedSignal(FOOD_BOOST_ATTRIBUTE):Connect(renderFood)
+
+	-- Stage 8: gear gas tank, gear row and the auto-run pill (tick and render place the stack after).
+	function renderGear()
+		local gear = if deps then deps.gear else nil
+		local ownsAny = false
+		if gear then
+			local keyboard = UserInputService.KeyboardEnabled
+			for _, chip in gearChips do
+				local owned = gear.level(chip.id) > 0
+				chip.frame.Visible = owned
+				if owned then
+					ownsAny = true
+					local on = gear.isOn(chip.id)
+					local color = if on then ROLE.good else ROLE.textDim
+					chip.icon.ImageColor3 = color
+					chip.key.TextColor3 = color
+					chip.key.Visible = keyboard
+					chip.icon.Position = UDim2.fromScale(if keyboard then 0.05 else 0.22, 0.5)
+					if chip.stroke then
+						chip.stroke.Color = if on then ROLE.good else ROLE.stroke
+					end
+				end
+			end
+		end
+		gasPanel.Visible = ownsAny
+		if ownsAny and gear then
+			local current, max = gear.gas()
+			local fraction = if max > 0 then current / max else 0
+			local color = if fraction <= 0.001
+				then ROLE.danger
+				elseif fraction < GAS_LOW_FRACTION then ROLE.warning
+				else ROLE.accent
+			gasBar.set(fraction, color, tostring(math.floor(current + 0.5)), nil)
+		end
+		local autoRunning = deps ~= nil and deps.autoRunning ~= nil and deps.autoRunning()
+		autoRunBadge.frame.Visible = autoRunning
+		if autoRunning then
+			local key = if UserInputService.KeyboardEnabled then "ui.autorun_key" else "ui.autorun"
+			autoRunBadge.set(Ui.Icons.autorun, Store.t(key), Ui.COLORS.textDark)
+		end
+	end
 
 	---------------------------------------------------------------------------------------------
 	-- Build-progress signs: a BillboardGui on each pad (Workspace.Base.BuildPads.<id>) with a build
@@ -758,6 +904,7 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 
 	local function tick()
 		if field.Visible then
+			renderGear() -- the gas tank drains and refills on this client
 			renderFood() -- also places the bottom stack (the tool bar comes and goes with the tools)
 		end
 		if wallet.Visible then
@@ -975,7 +1122,10 @@ function Hud.newTopBar(root: Frame, deps: TopBarDeps): TopBarView
 		local y = if mode == "shift" or mode == "board" then 0.195 else 0.115
 		compact.Position = UDim2.fromScale(0.985, y)
 
-		local showHint = mode == "base" and hasState and not Store.coreBuilt()
+		-- Stage 8 (team feedback): once the habitat and the solar panels stand, the player knows the
+		-- way (C.A.R.L. and the tips lead on), so the hint goes away.
+		local firstBuilds = Store.buildLevel("habitat") >= 1 and Store.buildLevel("solar") >= 1
+		local showHint = mode == "base" and hasState and not Store.coreBuilt() and not firstBuilds
 		hint.frame.Visible = showHint
 		if showHint and pulseConnection == nil then
 			pulseConnection = RunService.Heartbeat:Connect(function()

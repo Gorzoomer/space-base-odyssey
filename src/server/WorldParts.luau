@@ -39,7 +39,7 @@ local HUB_WALL_HEIGHT = 18
 local HUB_DOME_RX = 32.5
 local HUB_DOME_RY = 14
 local HUB_ROOF_Y = 19.5
-local HUB_ZONE_HALF = 23 -- the inside zone is the square that fits within the round wall
+local HUB_ZONE_RADIUS = 31.5 -- Stage 8: the inside zone is the whole round room (wall face at HUB_APOTHEM)
 -- Stage 7 layout points (a table: Vector3 values would each take a register in this big module).
 local S7 = {}
 -- Stage 7 geometry and construction helpers (one table for the same reason).
@@ -330,6 +330,54 @@ local function zone(parent: Instance, name: string, a: Vector3, b: Vector3): Par
 	return p
 end
 
+-- Stage 8: pressurized interiors. A shaped zone is an invisible part whose attribute SBO_ZoneShape
+-- says which solid inside it counts: "box" (the whole part), "cylinder" (the round prism around the
+-- part's local Y axis that fits in it) or "dome" (the half-ellipsoid standing on its bottom face).
+local ZONE_SHAPE_ATTRIBUTE = "SBO_ZoneShape"
+
+local function shapedZone(parent: Instance, name: string, cframe: CFrame, size: Vector3, shape: string): Part
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	p.Transparency = 1
+	p.Size = size
+	p.CFrame = cframe
+	p:SetAttribute(ZONE_SHAPE_ATTRIBUTE, shape)
+	p.Parent = parent
+	return p
+end
+
+-- True when `position` is inside the zone part's solid (its SBO_ZoneShape, or `shape` when given).
+local function zoneContains(zonePart: BasePart, position: Vector3, shape: string?): boolean
+	local kind = shape
+	if kind == nil then
+		local attribute = zonePart:GetAttribute(ZONE_SHAPE_ATTRIBUTE)
+		kind = if type(attribute) == "string" then attribute else "box"
+	end
+	local localPoint = zonePart.CFrame:PointToObjectSpace(position)
+	local size = zonePart.Size
+	local half = size / 2
+	if kind == "cylinder" then
+		if math.abs(localPoint.Y) > half.Y then
+			return false
+		end
+		local nx, nz = localPoint.X / half.X, localPoint.Z / half.Z
+		return nx * nx + nz * nz <= 1
+	elseif kind == "dome" then
+		local height = localPoint.Y + half.Y -- above the bottom face
+		if height < 0 then
+			return false
+		end
+		local nx, ny, nz = localPoint.X / half.X, height / size.Y, localPoint.Z / half.Z
+		return nx * nx + ny * ny + nz * nz <= 1
+	end
+	return math.abs(localPoint.X) <= half.X and math.abs(localPoint.Y) <= half.Y and math.abs(localPoint.Z) <= half.Z
+end
+
 -- Welds parts to an anchored root so moving the root's CFrame moves the whole group (no physics:
 -- the assembly stays anchored, and only the root's CFrame has to replicate).
 local function weldTo(root: BasePart, parts: { BasePart })
@@ -597,7 +645,7 @@ WorldParts.HUB_WALL_HEIGHT = HUB_WALL_HEIGHT
 WorldParts.HUB_DOME_RX = HUB_DOME_RX
 WorldParts.HUB_DOME_RY = HUB_DOME_RY
 WorldParts.HUB_ROOF_Y = HUB_ROOF_Y
-WorldParts.HUB_ZONE_HALF = HUB_ZONE_HALF
+WorldParts.HUB_ZONE_RADIUS = HUB_ZONE_RADIUS
 WorldParts.S7 = S7
 WorldParts.Geo = Geo
 WorldParts.GREENHOUSE_A_RX = GREENHOUSE_A_RX
@@ -714,6 +762,9 @@ WorldParts.model = model
 WorldParts.pointLight = pointLight
 WorldParts.makePrompt = makePrompt
 WorldParts.zone = zone
+WorldParts.ZONE_SHAPE_ATTRIBUTE = ZONE_SHAPE_ATTRIBUTE
+WorldParts.shapedZone = shapedZone
+WorldParts.zoneContains = zoneContains
 WorldParts.weldTo = weldTo
 WorldParts.markerPart = markerPart
 WorldParts.UPGRADE_ATTRIBUTE = UPGRADE_ATTRIBUTE

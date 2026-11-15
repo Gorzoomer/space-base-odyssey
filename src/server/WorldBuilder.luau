@@ -25,6 +25,10 @@ export type StormStage = "none" | "warning" | "storm"
 export type SystemAllocation = { LifeSupport: number, Greenhouse: number, Science: number }
 export type CollectibleRef = Secret.CollectibleRef
 export type RoverPaint = "default" | "cheese"
+-- Stage 8: one pressurized room. `part` is an invisible zone part (attribute SBO_ZoneShape: "box",
+-- "cylinder" or "dome", see WorldParts.zoneContains); it counts as inside only while build `build`
+-- stands at level `minLevel` (default 1) or more. No build = always (the lander).
+export type InsideZone = { id: string, part: BasePart, build: string?, minLevel: number?, shape: string? }
 
 export type World = {
 	spawn: SpawnLocation, -- Stage 7: inside the arrival lander
@@ -32,6 +36,9 @@ export type World = {
 	-- the shelter's), so it never counts as inside.
 	habitatZone: BasePart,
 	shelterZone: BasePart,
+	-- Stage 8: every pressurized room (hub, greenhouse tube and domes, lab and its tube, lander). The
+	-- shelter is not in it: it is a storm shelter (shelterZone), not a pressurized room.
+	insideZones: { InsideZone },
 	arrays: { ArrayRef },
 	iceNodes: { { part: BasePart, prompt: ProximityPrompt } },
 	processorPrompt: ProximityPrompt,
@@ -126,7 +133,7 @@ local HUB_WALL_HEIGHT = WorldParts.HUB_WALL_HEIGHT
 local HUB_DOME_RX = WorldParts.HUB_DOME_RX
 local HUB_DOME_RY = WorldParts.HUB_DOME_RY
 local HUB_ROOF_Y = WorldParts.HUB_ROOF_Y
-local HUB_ZONE_HALF = WorldParts.HUB_ZONE_HALF
+local HUB_ZONE_RADIUS = WorldParts.HUB_ZONE_RADIUS
 local S7 = WorldParts.S7
 local Geo = WorldParts.Geo
 local GREENHOUSE_A_RX = WorldParts.GREENHOUSE_A_RX
@@ -220,6 +227,7 @@ local model = WorldParts.model
 local pointLight = WorldParts.pointLight
 local makePrompt = WorldParts.makePrompt
 local zone = WorldParts.zone
+local shapedZone = WorldParts.shapedZone
 local weldTo = WorldParts.weldTo
 local markerPart = WorldParts.markerPart
 local UPGRADE_ATTRIBUTE = WorldParts.UPGRADE_ATTRIBUTE
@@ -941,7 +949,14 @@ local function buildHabitat(base: Instance): HabitatRefs
 	leakLight.Enabled = false
 	local leakPrompt = makePrompt(leakPart, "prompt.repair", "Fix leak", 2)
 
-	local zonePart = zone(base, "HabitatZone", v(-HUB_ZONE_HALF, 0.5, -HUB_ZONE_HALF), v(HUB_ZONE_HALF, 17.5, HUB_ZONE_HALF))
+	-- Stage 8: the whole round room, floor to ceiling (the doorways' inner half counts too).
+	local zonePart = shapedZone(
+		base,
+		"HabitatZone",
+		CFrame.new(v(0, 9.25, 0)),
+		Vector3.new(HUB_ZONE_RADIUS * 2, 17.5, HUB_ZONE_RADIUS * 2),
+		"cylinder"
+	)
 
 	return {
 		model = hab,
@@ -990,6 +1005,10 @@ type GreenhouseRefs = {
 	plants: { Part },
 	centre: Vector3,
 	foodPrompt: ProximityPrompt,
+	-- Stage 8: pressurized zones (the hub tube, dome A, dome B).
+	tubeZone: Part,
+	domeZone: Part,
+	dome2Zone: Part,
 }
 
 local GREENHOUSE_GLASS: Style = {
@@ -1105,7 +1124,9 @@ local function buildGreenhouse(base: Instance): GreenhouseRefs
 	local lineZ = HABITAT_CENTRE.Z
 	local hubX = HABITAT_CENTRE.X - (HUB_APOTHEM + HUB_WALL / 2)
 	local entryX = a.X + math.sqrt(GREENHOUSE_A_RX * GREENHOUSE_A_RX - (lineZ - a.Z) * (lineZ - a.Z))
-	Geo.walkTube(gh, Vector3.new(hubX, 0, lineZ), Vector3.new(entryX - 3, 0, lineZ))
+	local tubeFrom = Vector3.new(hubX, 0, lineZ)
+	local tubeTo = Vector3.new(entryX - 3, 0, lineZ)
+	Geo.walkTube(gh, tubeFrom, tubeTo)
 	vcylinder(gh, "Floor", 0.5, GREENHOUSE_A_RX * 2, a + Vector3.new(0, 0.25, 0), floorStyle)
 	local entryAngle = math.atan2(entryX - a.X, lineZ - a.Z)
 	local segmentsA = 14
@@ -1203,6 +1224,26 @@ local function buildGreenhouse(base: Instance): GreenhouseRefs
 		})
 	end
 
+	-- Stage 8: pressurized zones. The tube's zone runs 3 studs into the hub and 2 more into dome A, so
+	-- walking through the doorways never reads as outside.
+	local tubeDir = flatUnit(tubeTo - tubeFrom, -Vector3.xAxis)
+	local zoneFrom = tubeFrom - tubeDir * 3
+	local zoneTo = tubeTo + tubeDir * 2
+	local zoneMid = Vector3.new((zoneFrom.X + zoneTo.X) / 2, TUBE_AXIS_Y, (zoneFrom.Z + zoneTo.Z) / 2)
+	local tubeRadius = TUBE_APOTHEM - 0.1 -- the round inside of the octagon (its corners are hull)
+	local tubeZone = shapedZone(
+		base,
+		"GreenhouseTubeZone",
+		CFrame.fromMatrix(zoneMid, Vector3.new(-tubeDir.Z, 0, tubeDir.X), tubeDir),
+		Vector3.new(tubeRadius * 2, (zoneTo - zoneFrom).Magnitude, tubeRadius * 2),
+		"cylinder"
+	)
+	local function domeZone(name: string, centre: Vector3, rx: number, ry: number): Part
+		local r = rx - 0.4 -- inner face of the glass
+		local h = ry - 0.4
+		return shapedZone(base, name, CFrame.new(centre + Vector3.new(0, h / 2, 0)), Vector3.new(r * 2, h, r * 2), "dome")
+	end
+
 	return {
 		model = gh,
 		model2 = gh2,
@@ -1211,6 +1252,9 @@ local function buildGreenhouse(base: Instance): GreenhouseRefs
 		plants = refs.plants,
 		centre = a + Vector3.new(0, 3, 0),
 		foodPrompt = foodPrompt,
+		tubeZone = tubeZone,
+		domeZone = domeZone("GreenhouseZone", a, GREENHOUSE_A_RX, GREENHOUSE_A_RY),
+		dome2Zone = domeZone("GreenhouseDome2Zone", b, GREENHOUSE_B_RX, GREENHOUSE_B_RY),
 	}
 end
 
@@ -1799,6 +1843,7 @@ function WorldBuilder.build(data: any): World
 	-- The tube corridor from the hub to the lab's docking collar (shown with the lab). Without a dock
 	-- from WorldSites it stops LAB_TUBE_INSET from the lab centre.
 	local labTube: Model? = nil
+	local labTubeZone: Part? = nil
 	if siteBuilds.lab then
 		local tube = model(base, "LabTube")
 		local dockCf = if sites and typeof(sites.labDock) == "CFrame" then sites.labDock :: CFrame else nil
@@ -1838,6 +1883,19 @@ function WorldBuilder.build(data: any): World
 			end
 		end
 		labTube = tube
+		-- Stage 8: its pressurized zone, the round inside of the corridor (a little into both modules).
+		local axis = (to - from).Unit
+		local across = axis:Cross(Vector3.yAxis)
+		across = if across.Magnitude > 1e-3 then across.Unit else Vector3.xAxis
+		local zoneFrom = from - axis * 2
+		local zoneTo = to + axis * 3
+		labTubeZone = shapedZone(
+			base,
+			"LabTubeZone",
+			CFrame.fromMatrix((zoneFrom + zoneTo) / 2, across, axis),
+			Vector3.new(diameter - 0.8, (zoneTo - zoneFrom).Magnitude, diameter - 0.8),
+			"cylinder"
+		)
 	end
 
 	-- Rover tracks between the buildings (laid out above, so boulders keep off them).
@@ -2336,6 +2394,35 @@ function WorldBuilder.build(data: any): World
 		end
 	elseif labPrompt then
 		labPrompt.Enabled = false
+	end
+
+	-- Stage 8: every pressurized room (CrewService: inside = any active zone). The lab's comes from
+	-- WorldSites (its round room, floor to roof).
+	local insideZones: { InsideZone } = {
+		{ id = "hub", part = habitat.zone, build = "habitat", minLevel = 1, shape = "cylinder" },
+		{ id = "greenhouse_tube", part = greenhouse.tubeZone, build = "greenhouse", minLevel = 1, shape = "cylinder" },
+		{ id = "greenhouse_a", part = greenhouse.domeZone, build = "greenhouse", minLevel = 1, shape = "dome" },
+		{ id = "greenhouse_b", part = greenhouse.dome2Zone, build = "greenhouse", minLevel = 2, shape = "dome" },
+		{ id = "lander", part = lander.zone :: BasePart, shape = "box" },
+	}
+	if labEntry then
+		local interior = sites and sites.labInterior
+		if type(interior) == "table" and typeof(interior.centre) == "Vector3" and type(interior.radius) == "number"
+			and type(interior.bottomY) == "number" and type(interior.topY) == "number"
+		then
+			local height = interior.topY - interior.bottomY
+			local labZone = shapedZone(
+				base,
+				"LabZone",
+				CFrame.new(Vector3.new(interior.centre.X, interior.bottomY + height / 2, interior.centre.Z)),
+				Vector3.new(interior.radius * 2, height, interior.radius * 2),
+				"cylinder"
+			)
+			table.insert(insideZones, { id = "lab", part = labZone, build = "lab", minLevel = 1, shape = "cylinder" })
+		end
+		if labTubeZone then
+			table.insert(insideZones, { id = "lab_tube", part = labTubeZone, build = "lab", minLevel = 1, shape = "cylinder" })
+		end
 	end
 
 	-- The habitat only counts as inside once it stands: its zone moves far below the ground until
@@ -2957,6 +3044,7 @@ function WorldBuilder.build(data: any): World
 		spawn = lander.spawn,
 		habitatZone = habitat.zone,
 		shelterZone = shelter.zone,
+		insideZones = insideZones,
 		arrays = arrays,
 		iceNodes = iceNodes,
 		processorPrompt = habitat.processorPrompt,
@@ -3001,11 +3089,10 @@ function WorldBuilder.build(data: any): World
 	}
 end
 
--- Point-in-box test for the zone parts (works for rotated parts too).
+-- Point-in-zone test for the zone parts (works for rotated parts too). Stage 8: shaped zones
+-- (attribute SBO_ZoneShape "cylinder" or "dome") test their round solid, the others their box.
 function WorldBuilder.isInZone(zonePart: BasePart, position: Vector3): boolean
-	local localPos = zonePart.CFrame:PointToObjectSpace(position)
-	local half = zonePart.Size / 2
-	return math.abs(localPos.X) <= half.X and math.abs(localPos.Y) <= half.Y and math.abs(localPos.Z) <= half.Z
+	return WorldParts.zoneContains(zonePart, position)
 end
 
 return WorldBuilder

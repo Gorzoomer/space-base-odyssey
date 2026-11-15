@@ -5,7 +5,12 @@
 -- Lab's prompt (a ProximityPrompt named "LabPrompt", wired in Main.client) and closes when they walk
 -- away from it.
 --   * Header: credits, player level with an XP bar, skill points.
---   * Skills tab: speed, tank, jump cards with level pips and a Learn button (Action LearnSkill).
+--   * Skills tab: speed, tank, credits, xp, builder cards with level pips, the effect at the next
+--     level (whole numbers only) and a Learn button (Action LearnSkill). Stage 8: the old "jump" skill
+--     is gone; the double jump comes from the air boots.
+--   * Gear tab (Stage 8): the air boots and the jetpack. What each does, the key that switches it on
+--     (B / J), level pips, the gas it uses (and what the next level uses: lower is better), a Buy /
+--     Upgrade button (Action BuyGear) and, once owned, an On / Off button (Action ToggleGear).
 --   * Tools tab: every tool of MissionData.BASE.TOOLS: what it is for, whether the player has it (or
 --     which build unlocks it), and for tools with upgrades (the ice drill) level pips, the next cost
 --     and an Upgrade button (Action UpgradeTool).
@@ -39,6 +44,18 @@ local BASE = MissionData.BASE
 local SKILLS: { BaseBuild.SkillDef } = BASE.SKILLS :: any
 local PETS: { BaseBuild.PetDef } = BASE.PETS :: any
 
+-- Stage 8 gear: use[i] = gas per double jump (boots) or per second of thrust (jetpack) at level i.
+type GearDef = {
+	id: string,
+	icon: string,
+	key: string,
+	maxLevel: number,
+	costs: { number },
+	minLevel: { number },
+	use: { number },
+}
+local GEAR: { GearDef } = BASE.GEAR :: any
+
 type ToolDef = { id: string, icon: string, unlock: string?, consumable: boolean? }
 local TOOLS: { ToolDef } = BASE.TOOLS :: any
 type ToolUpgrade = { maxLevel: number, costs: { number }, minLevel: { number }, holdFactor: { number }? }
@@ -61,7 +78,7 @@ export type Deps = {
 	showMessage: any, -- reserved for local hints (the C.A.R.L. bubble sits under this panel)
 }
 
-export type Tab = "skills" | "tools" | "pets"
+export type Tab = "skills" | "gear" | "tools" | "pets"
 
 export type BasePanelView = {
 	open: () -> (),
@@ -124,6 +141,17 @@ local function toolLevels(base: BaseState): { [string]: number }
 		result[id] = 1
 	end
 	return result
+end
+
+-- Gear this player owns -> level (Stage 8; an older server without BaseState.gear: none).
+local function gearLevels(base: BaseState): { [string]: number }
+	local gear: any = (base :: any).gear
+	return if type(gear) == "table" then gear else {}
+end
+
+local function gearIsOn(base: BaseState, id: string): boolean
+	local gearOn: any = (base :: any).gearOn
+	return type(gearOn) == "table" and gearOn[id] == true
 end
 
 -- Why something is blocked. The reason is the same one the server gives (BaseBuild); the panel can
@@ -401,7 +429,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 	})
 	local title = Ui.label(panel, {
 		name = "Title",
-		size = UDim2.fromScale(0.18, 0.08),
+		size = UDim2.fromScale(0.15, 0.08),
 		position = UDim2.fromScale(0.08, 0.075),
 		anchor = Vector2.new(0, 0.5),
 		alignX = Enum.TextXAlignment.Left,
@@ -409,18 +437,22 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 		maxText = 36,
 		zindex = Z + 2,
 	})
+	title.TextWrapped = false -- "Laboratorio" shrinks instead of splitting
 
 	local currentTab: Tab = "skills"
 	local render: () -> () -- defined below
 
 	local TABS: { { id: Tab, key: string, icon: string, color: Color3 } } = {
 		{ id = "skills", key = "panel.tab_skills", icon = Ui.Icons.skills, color = ROLE.accent },
+		{ id = "gear", key = "panel.tab_gear", icon = Ui.Icons.jetpack, color = ROLE.warning },
 		{ id = "tools", key = "panel.tab_tools", icon = Ui.Icons.failure, color = ROLE.good },
 		{ id = "pets", key = "panel.tab_pets", icon = Ui.Icons.paw, color = ROLE.reward },
 	}
-	local TAB_X = 0.28
-	local TAB_W = 0.19
-	local TAB_STEP = 0.2
+	-- Four tabs between the title (ends at 0.23) and the close button (starts at 0.905). Labels shrink
+	-- to fit on one line (singleLine), so "Herramientas" never wraps.
+	local TAB_X = 0.24
+	local TAB_W = 0.155
+	local TAB_STEP = 0.163
 	local tabButtons: { [Tab]: TextButton } = {}
 	for index, tab in TABS do
 		local button = Ui.button(panel, {
@@ -560,6 +592,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 	-----------------------------------------------------------------------------------------------
 	local CARD_W = 0.235
 	local CARD_GAP = (1 - CARD_W * 4) / 3
+	local CARD_GAP_TIGHT = 0.015 -- five or more cards (the Skills tab) share the width with small gaps
 
 	local function topLine(page: Frame, color: Color3): (TextLabel, TextLabel)
 		local left = Ui.label(page, {
@@ -587,12 +620,18 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 
 	-- Card `index` of `count`, centred in the page.
 	local function card(page: Frame, index: number, count: number, name: string, strokeColor: Color3): (Frame, UIStroke)
-		local total = count * CARD_W + (count - 1) * CARD_GAP
+		local width = CARD_W
+		local gap = CARD_GAP
+		if count > 4 then
+			gap = CARD_GAP_TIGHT
+			width = (1 - (count - 1) * gap) / count
+		end
+		local total = count * width + (count - 1) * gap
 		local left = (1 - total) / 2
 		local frame = Ui.frame(page, {
 			name = name,
-			size = UDim2.fromScale(CARD_W, 0.87),
-			position = UDim2.fromScale(left + (index - 1) * (CARD_W + CARD_GAP), 0.13),
+			size = UDim2.fromScale(width, 0.87),
+			position = UDim2.fromScale(left + (index - 1) * (width + gap), 0.13),
 			color = ROLE.panelRaised,
 			corner = 0.08,
 			stroke = 2,
@@ -651,6 +690,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 			maxText = 26,
 			zindex = Z + 3,
 		})
+		name.TextWrapped = false -- five cards are narrow: the name shrinks instead of splitting
 		local desc = Ui.body(frame, {
 			name = "Desc",
 			size = UDim2.fromScale(0.88, 0.2),
@@ -722,15 +762,26 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 		table.insert(skillCards, entry)
 	end
 
-	-- The effect shown in a skill's text: what the next level gives (the top level when maxed).
+	-- The effect shown in a skill's text: what the next level gives (the top level when maxed). Every
+	-- number a kid sees is a whole number (team feedback: no decimals).
+	local function percent(fraction: number): number
+		return math.floor(fraction * 100 + 0.5)
+	end
 	local function skillEffect(id: string, level: number, maxLevel: number): Params
 		local target = math.clamp(level + 1, 1, maxLevel)
 		if id == "speed" then
-			return { n = formatNumber(target * BASE.SPEED_BONUS_PER_LEVEL) }
+			-- The bonus is in studs/s (1.5 per level); shown as a share of the walking speed.
+			return { n = percent(target * BASE.SPEED_BONUS_PER_LEVEL / MissionData.WORLD.WALK_SPEED) }
 		elseif id == "tank" then
 			return { n = formatNumber(target * BASE.TANK_BONUS_PER_LEVEL) }
-		elseif id == "jump" then
-			return { n = formatNumber(BASE.JUMP_POWER_BONUS[target]) }
+		elseif id == "credits" or id == "xp" then
+			-- "Get 1 more for every 10": the extra on a reward of `per` (BaseBuild.bonusAmount rounds up,
+			-- the same rule the server uses), with `per` = 1 / REWARD_BONUS_PER_LEVEL.
+			local per = math.max(1, math.floor(1 / BASE.REWARD_BONUS_PER_LEVEL + 0.5))
+			return { n = BaseBuild.bonusAmount(MissionData, per, target), per = per }
+		elseif id == "builder" then
+			-- Hold factor 0.8 = the Assemble hold takes 20% less time.
+			return { n = percent(1 - BASE.BUILDER_HOLD_FACTOR[target]) }
 		end
 		return {}
 	end
@@ -771,6 +822,302 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 			end
 			entry.stroke.Color = if allowed then ROLE.good else ROLE.stroke
 			entry.stroke.Thickness = if allowed then 3 else 2
+		end
+	end
+
+	-----------------------------------------------------------------------------------------------
+	-- Gear tab (Stage 8): one wide card per piece of gear (air boots, jetpack)
+	-----------------------------------------------------------------------------------------------
+	local GEAR_COLOR = ROLE.warning -- sunrise orange, the colour of the Gear tab
+	local GEAR_CARD_GAP = 0.03
+	local gearTitle, gearHint = topLine(pages["gear"], GEAR_COLOR)
+	type GearCard = {
+		id: string,
+		stroke: UIStroke,
+		badgeScale: UIScale,
+		icon: ImageLabel,
+		name: TextLabel,
+		keyText: TextLabel,
+		desc: TextLabel,
+		use: Pill,
+		nextUse: TextLabel,
+		pips: Pips,
+		cost: Pill,
+		reason: TextLabel,
+		buy: TextButton,
+		toggle: TextButton,
+		allowed: boolean,
+		owned: boolean,
+		lastPress: number,
+		lastToggle: number,
+	}
+	local gearCards: { GearCard } = {}
+	local shownGear: { [string]: number } = {}
+	local gearWidth = (1 - (#GEAR - 1) * GEAR_CARD_GAP) / math.max(1, #GEAR)
+	for index, def in GEAR do
+		local frame = Ui.frame(pages["gear"], {
+			name = `Gear_{def.id}`,
+			size = UDim2.fromScale(gearWidth, 0.87),
+			position = UDim2.fromScale((index - 1) * (gearWidth + GEAR_CARD_GAP), 0.13),
+			color = ROLE.panelRaised,
+			corner = 0.06,
+			stroke = 2,
+			strokeColor = ROLE.stroke,
+			zindex = Z + 2,
+		})
+		local stroke = frame:FindFirstChildOfClass("UIStroke") :: UIStroke
+		local badge = Ui.frame(frame, {
+			name = "Badge",
+			size = UDim2.fromScale(0.24, 0.26),
+			position = UDim2.fromScale(0.04, 0.04),
+			color = ROLE.background,
+			corner = 0.5,
+			aspect = 1,
+			stroke = 3,
+			strokeColor = GEAR_COLOR,
+			zindex = Z + 3,
+		})
+		local badgeScale = Instance.new("UIScale")
+		badgeScale.Parent = badge
+		local icon = Ui.icon(badge, Ui.iconImage(def.icon), {
+			name = "Icon",
+			size = UDim2.fromScale(0.62, 0.62),
+			position = UDim2.fromScale(0.5, 0.5),
+			anchor = Vector2.new(0.5, 0.5),
+			tint = GEAR_COLOR,
+			zindex = Z + 4,
+		})
+		local name = Ui.label(frame, {
+			name = "Name",
+			size = UDim2.fromScale(0.64, 0.11),
+			position = UDim2.fromScale(0.32, 0.05),
+			alignX = Enum.TextXAlignment.Left,
+			textColor = GEAR_COLOR,
+			maxText = 30,
+			zindex = Z + 3,
+		})
+		name.TextWrapped = false
+		-- "Press B to turn on or off": the key from MissionData (B for boots, J for the jetpack).
+		local keyText = Ui.body(frame, {
+			name = "Key",
+			size = UDim2.fromScale(0.64, 0.12),
+			position = UDim2.fromScale(0.32, 0.17),
+			textColor = ROLE.textDim,
+			maxText = 18,
+			minText = 7,
+			zindex = Z + 3,
+		})
+		local desc = Ui.body(frame, {
+			name = "Desc",
+			size = UDim2.fromScale(0.92, 0.13),
+			position = UDim2.fromScale(0.04, 0.33),
+			maxText = 20,
+			minText = 8,
+			zindex = Z + 3,
+		})
+		-- Gas used now, and what the next level uses (lower is better).
+		local use = makePill(frame, {
+			name = "Gas",
+			size = UDim2.fromScale(0.56, 0.1),
+			position = UDim2.fromScale(0.04, 0.48),
+			color = ROLE.background,
+			textColor = ROLE.accent,
+			maxText = 20,
+		}, Ui.Icons.gas, ROLE.accent, Z + 3)
+		use.icon.Size = UDim2.fromScale(0.62, 0.62)
+		use.icon.Position = UDim2.fromScale(0.03, 0.5)
+		use.label.Size = UDim2.fromScale(0.8, 0.8)
+		use.label.Position = UDim2.fromScale(0.17, 0.5)
+		use.label.TextWrapped = false
+		local nextUse = Ui.body(frame, {
+			name = "NextGas",
+			size = UDim2.fromScale(0.34, 0.1),
+			position = UDim2.fromScale(0.96, 0.48),
+			anchor = Vector2.new(1, 0),
+			alignX = Enum.TextXAlignment.Right,
+			textColor = ROLE.good,
+			maxText = 17,
+			minText = 7,
+			zindex = Z + 3,
+		})
+		local pips = makePips(frame, {
+			name = "Pips",
+			size = UDim2.fromScale(0.3, 0.07),
+			position = UDim2.fromScale(0.04, 0.62),
+		}, def.maxLevel, Z + 3)
+		local cost = makePill(frame, {
+			name = "Cost",
+			size = UDim2.fromScale(0.3, 0.09),
+			position = UDim2.fromScale(0.96, 0.605),
+			anchor = Vector2.new(1, 0),
+			color = ROLE.background,
+			textColor = ROLE.star,
+			maxText = 24,
+			visible = false,
+		}, Ui.Icons.coin, ROLE.star, Z + 3)
+		local reason = Ui.body(frame, {
+			name = "Reason",
+			size = UDim2.fromScale(0.92, 0.08),
+			position = UDim2.fromScale(0.5, 0.72),
+			anchor = Vector2.new(0.5, 0),
+			alignX = Enum.TextXAlignment.Center,
+			textColor = ROLE.warning,
+			maxText = 16,
+			minText = 7,
+			zindex = Z + 3,
+		})
+		local entry: GearCard
+		local buy = Ui.button(frame, {
+			name = "Buy",
+			size = UDim2.fromScale(0.56, 0.14),
+			position = UDim2.fromScale(0.04, 0.82),
+			color = Ui.COLORS.go,
+			icon = Ui.Icons.coin,
+			corner = 0.35,
+			stroke = 2,
+			maxText = 24,
+			minText = 8,
+			zindex = Z + 3,
+		}, function()
+			local base = getBase()
+			if base == nil or not entry.allowed or os.clock() - entry.lastPress < PRESS_COOLDOWN then
+				return
+			end
+			-- Same check as the server, with the newest state.
+			local level = gearLevels(base)[def.id] or 0
+			if not BaseBuild.canBuyGear(MissionData, def.id, level, base.level, base.credits) then
+				return
+			end
+			entry.lastPress = os.clock()
+			local action: any = { type = "BuyGear", id = def.id }
+			Store.send(action)
+		end)
+		singleLine(buy)
+		local toggle = Ui.button(frame, {
+			name = "Toggle",
+			size = UDim2.fromScale(0.32, 0.14),
+			position = UDim2.fromScale(0.96, 0.82),
+			anchor = Vector2.new(1, 0),
+			color = Ui.COLORS.secondary,
+			icon = Ui.ICONS.check,
+			corner = 0.35,
+			stroke = 2,
+			maxText = 24,
+			minText = 8,
+			zindex = Z + 3,
+			visible = false,
+		}, function()
+			local base = getBase()
+			if base == nil or not entry.owned or os.clock() - entry.lastToggle < PRESS_COOLDOWN then
+				return
+			end
+			entry.lastToggle = os.clock()
+			local action: any = { type = "ToggleGear", id = def.id }
+			Store.send(action)
+		end)
+		singleLine(toggle)
+		entry = {
+			id = def.id,
+			stroke = stroke,
+			badgeScale = badgeScale,
+			icon = icon,
+			name = name,
+			keyText = keyText,
+			desc = desc,
+			use = use,
+			nextUse = nextUse,
+			pips = pips,
+			cost = cost,
+			reason = reason,
+			buy = buy,
+			toggle = toggle,
+			allowed = false,
+			owned = false,
+			lastPress = -math.huge,
+			lastToggle = -math.huge,
+		}
+		table.insert(gearCards, entry)
+	end
+
+	-- "Uses 25 gas per jump" (boots) or "Uses 30 gas each second" (jetpack).
+	local function gasText(id: string, amount: number): string
+		local key = if id == "jetpack" then "panel.gear_use_fly" else "panel.gear_use_jump"
+		return Store.t(key, { n = formatNumber(amount) })
+	end
+
+	local function renderGear(base: BaseState)
+		gearTitle.Text = Store.t("panel.tab_gear")
+		gearHint.Text = Store.t("panel.gear_hint")
+		local levels = gearLevels(base)
+		for _, entry in gearCards do
+			local def: GearDef? = BaseBuild.gearDef(MissionData, entry.id)
+			if def == nil then
+				continue
+			end
+			local level = levels[entry.id] or 0
+			local owned = level > 0
+			local maxed = level >= def.maxLevel
+			local on = owned and gearIsOn(base, entry.id)
+			entry.owned = owned
+			entry.name.Text = Store.t("gear." .. entry.id .. ".name")
+			entry.keyText.Text = Store.t("panel.gear_key", { key = def.key })
+			entry.desc.Text = Store.t("gear." .. entry.id .. ".desc")
+			entry.icon.ImageColor3 = if owned then GEAR_COLOR else ROLE.textDim
+			entry.icon.ImageTransparency = if owned then 0 else 0.4
+			if shownGear[entry.id] ~= nil and level > (shownGear[entry.id] :: number) then
+				pop(entry.badgeScale)
+			end
+			shownGear[entry.id] = level
+
+			-- Gas: what it uses now (level 1 before buying), and what the next level will use.
+			local nowUse = BaseBuild.gasUse(MissionData, entry.id, math.max(level, 1)) or def.use[1]
+			entry.use.label.Text = gasText(entry.id, nowUse)
+			local nextUse = if owned and not maxed then BaseBuild.gasUse(MissionData, entry.id, level + 1) else nil
+			entry.nextUse.Text = if nextUse ~= nil then Store.t("panel.gear_next", { n = formatNumber(nextUse) }) else ""
+
+			entry.pips.set(level, def.maxLevel, GEAR_COLOR)
+			local allowed, reason = BaseBuild.canBuyGear(MissionData, entry.id, level, base.level, base.credits)
+			entry.allowed = allowed
+			local nextCost = if maxed then nil else def.costs[level + 1]
+			entry.cost.frame.Visible = nextCost ~= nil
+			if nextCost ~= nil then
+				entry.cost.label.Text = if nextCost == 0 then Store.t("panel.free") else formatNumber(nextCost)
+				entry.cost.label.TextColor3 = if base.credits >= nextCost then ROLE.star else ROLE.textDim
+			end
+
+			-- Buy / Upgrade: wide until the gear is owned, then it shares the row with On / Off.
+			entry.buy.Size = if owned then UDim2.fromScale(0.56, 0.14) else UDim2.fromScale(0.92, 0.14)
+			if maxed then
+				Ui.setButton(entry.buy, Store.t("panel.max"), Ui.ICONS.check)
+				Ui.setButtonLook(entry.buy, true, Ui.COLORS.secondary)
+				entry.buy.AutoButtonColor = false
+				entry.reason.Text = ""
+			else
+				local label = Store.t(if owned then "panel.upgrade" else "panel.buy")
+				local image = if not allowed then Ui.ICONS.lock elseif owned then Ui.Icons.upgrade else Ui.Icons.coin
+				Ui.setButton(entry.buy, label, image)
+				Ui.setButtonLook(entry.buy, allowed, Ui.COLORS.go)
+				local params: Params = {}
+				if reason == "level" then
+					params.n = def.minLevel[level + 1]
+					params.level = def.minLevel[level + 1]
+				elseif reason == "credits" then
+					params.n = def.costs[level + 1]
+					params.cost = def.costs[level + 1]
+				end
+				entry.reason.Text = if allowed then "" else reasonText(reason, params)
+			end
+
+			-- On / Off: shows the state; a tap switches it (the B / J keys do the same anywhere).
+			entry.toggle.Visible = owned
+			if owned then
+				Ui.setButton(entry.toggle, Store.t(if on then "panel.gear_on" else "panel.gear_off"), if on then Ui.ICONS.check else Ui.ICONS.close)
+				Ui.setButtonLook(entry.toggle, true, if on then ROLE.good else Ui.COLORS.secondary)
+			end
+
+			-- Glows lime when it can be bought or upgraded now, orange while it is switched on.
+			entry.stroke.Color = if allowed then ROLE.good elseif on then GEAR_COLOR else ROLE.stroke
+			entry.stroke.Thickness = if allowed or on then 3 else 2
 		end
 	end
 
@@ -1312,6 +1659,8 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 		if base ~= nil then
 			if currentTab == "skills" then
 				renderSkills(base)
+			elseif currentTab == "gear" then
+				renderGear(base)
 			elseif currentTab == "tools" then
 				renderTools(base)
 			else
@@ -1333,6 +1682,9 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 					end
 					for id, value in toolLevels(base) do
 						shownTools[id] = value
+					end
+					for id, value in gearLevels(base) do
+						shownGear[id] = value
 					end
 				end
 			end

@@ -11,6 +11,8 @@
 -- while a full-screen panel is open (mission select, power board, report, Lab, Wardrobe and the other
 -- modal screens), and the C.A.R.L. bubble moves with the screen mode (Messages.setMode) so it never
 -- sits at the bottom centre while the player walks around with tools.
+-- Stage 8: gear (Gear.luau: air boots and jetpack, keys B / J, the client-side gas tank) is loaded
+-- with pcall and feeds the HUD gas bar; auto-run (Sprint.luau, key X) stops while a panel is open.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -92,6 +94,52 @@ local function loadPanel(name: string, deps: any): PanelView?
 	return result
 end
 
+-- Full-screen panels (by their frame names under the root). While one is open the mouse is freed,
+-- the tool bar is hidden and auto-run stops.
+local MODAL_PANELS = {
+	"MissionSelect", "Report", "PowerBoard", "Settings", "Sources", "Collection", "FindCard",
+	"BasePanel", "Wardrobe", "ExploreCard",
+}
+local function anyPanelOpen(): boolean
+	for _, name in MODAL_PANELS do
+		local panel = root:FindFirstChild(name)
+		if panel and panel:IsA("GuiObject") and panel.Visible then
+			return true
+		end
+	end
+	return false
+end
+
+-- Stage 8 gear (pcall: a broken Gear module never breaks the client; the HUD then shows no gas bar).
+local gearModule: any = nil
+do
+	local ok, result = pcall(function(): any
+		local moduleScript = Client:WaitForChild("Gear", 5)
+		if moduleScript == nil then
+			error("Gear not found")
+		end
+		return require(moduleScript :: any)
+	end)
+	if ok and type(result) == "table" and type(result.start) == "function" and type(result.gas) == "function" then
+		gearModule = result
+	else
+		warn(`[SpaceBaseOdyssey] Gear unavailable: {result}`)
+	end
+end
+local gearDeps: Hud.GearDeps? = if gearModule
+	then {
+		gas = function(): (number, number)
+			return gearModule.gas()
+		end,
+		level = function(id: string): number
+			return gearModule.level(id)
+		end,
+		isOn = function(id: string): boolean
+			return gearModule.isOn(id)
+		end,
+	}
+	else nil
+
 local messages = Messages.new(root)
 local sources = Sources.new(root)
 local collection = Collection.new(root, { showMessage = messages.show })
@@ -113,10 +161,14 @@ local missionSelect = MissionSelect.new(root, {
 })
 local powerBoard = PowerBoard.new(root, messages.show, sources.addButton)
 local objectives = Objectives.new(root)
+local sprint = Sprint.new(root, { panelOpen = anyPanelOpen })
 -- The HUD meters sit in the left column, right under the objectives panel.
-local hud = Hud.new(root, { columnTop = objectives.getBottom })
+local hud = Hud.new(root, {
+	columnTop = objectives.getBottom,
+	gear = gearDeps,
+	autoRunning = sprint.isAutoRunning,
+})
 local report = Report.new(root, sources.addButton)
-local sprint = Sprint.new(root)
 -- Settings button (top right) and panel: language, volumes, C.A.R.L. options, redeem code.
 local settings = Settings.new(root)
 
@@ -190,10 +242,6 @@ local topBar = Hud.newTopBar(root, {
 -- (playtest: the "new secret" card). A visible GuiButton with Modal = true frees the mouse, so one
 -- invisible Modal button is shown whenever any full-screen panel is open.
 do
-	local MODAL_PANELS = {
-		"MissionSelect", "Report", "PowerBoard", "Settings", "Sources", "Collection", "FindCard",
-		"BasePanel", "Wardrobe", "ExploreCard",
-	}
 	local unlock = Instance.new("TextButton")
 	unlock.Name = "MouseUnlock"
 	unlock.Text = ""
@@ -203,15 +251,6 @@ do
 	unlock.Visible = false
 	unlock.Selectable = false
 	unlock.Parent = root
-	local function anyOpen(): boolean
-		for _, name in MODAL_PANELS do
-			local panel = root:FindFirstChild(name)
-			if panel and panel:IsA("GuiObject") and panel.Visible then
-				return true
-			end
-		end
-		return false
-	end
 	-- Roblox's tool bar draws over our panels' bottom buttons: hide it while one is open (the tools
 	-- stay in the backpack; the number keys work again once the panel closes).
 	local hotbarOn: boolean? = nil
@@ -239,7 +278,7 @@ do
 		return false
 	end
 	RunService.Heartbeat:Connect(function()
-		local open = anyOpen()
+		local open = anyPanelOpen()
 		if unlock.Visible ~= open then
 			unlock.Visible = open
 		end
@@ -476,9 +515,17 @@ Onboarding.start({
 	show = messages.show,
 	showTip = messages.showTip,
 	setGuide = powerBoard.setGuide,
+	gearLevel = if gearModule then gearModule.level else nil,
 })
 DemoKeys.start()
 Movement.start()
+-- Stage 8 gear: keys B / J, touch buttons, the double jump, the jetpack and the gas tank.
+if gearModule then
+	local ok, result = pcall(gearModule.start, root, { showTip = messages.showTip })
+	if not ok then
+		warn(`[SpaceBaseOdyssey] Gear failed to start: {result}`)
+	end
+end
 -- Stage 7 drivable vehicles: chase camera, speed readout and exit hint (src/client/VehicleClient.luau).
 task.spawn(function()
 	local ok, result = pcall(function()

@@ -18,7 +18,9 @@
 --   build_antenna, build_shelter): one tip that says what to build, in Planning and in the shift.
 --   A new tool unlocked (brush, repair kit, tablet, food) or the lab / garage just built: one tip
 --   that says what it is for. The first meteorite crater seen with the tablet: how to scan it.
---   The "jump" skill learned: how to double jump.
+--   Stage 8: gear just bought at the Lab (air boots, jetpack): how to switch it on and use it (key
+--   tips on keyboards, button tips on touch screens). Auto-run: once per session, the first time the
+--   player walks outside the finished habitat in base mode.
 -- Build steps come from BaseState.inProgress (or the pad attribute SBO_Phase when the Store does
 -- not carry it yet); a carried crate from BaseState.carryingCrate or the player attribute
 -- SBO_CarryingCrate.
@@ -27,6 +29,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local MissionData = require(Shared:WaitForChild("MissionData"))
@@ -66,11 +69,18 @@ local BUILT_TIPS: { [string]: string } = {
 	garage = "tip.garage_built",
 }
 local CORE_BUILDS: { string } = { "solar", "greenhouse", "antenna", "shelter" }
+-- Stage 8: gear just bought (keys quoted in full so the localization test checks them).
+local GEAR_TIPS: { [string]: { keys: string, touch: string } } = {
+	boots = { keys = "tip.gear_boots", touch = "tip.gear_boots_touch" },
+	jetpack = { keys = "tip.gear_jetpack", touch = "tip.gear_jetpack_touch" },
+}
 
 export type Deps = {
 	show: (ref: TextRef) -> (), -- urgent: shown before queued tips
 	showTip: (ref: TextRef, phase: string?) -> (),
 	setGuide: (guide: PowerBoard.Guide?) -> (),
+	-- Stage 8: owned gear level (Gear.level); without it BaseState.gear is read.
+	gearLevel: ((id: string) -> number)?,
 }
 
 local Onboarding = {}
@@ -384,22 +394,55 @@ function Onboarding.start(deps: Deps)
 		end
 	end)
 
-	-- The "jump" skill: explain the double jump right after it is learned (not on every join: the
-	-- first BaseState only records the level).
-	local knownJump: number? = nil
+	-- Stage 8 gear: explain it right after it is bought (not on every join: the first BaseState only
+	-- records what the player owns).
+	local function gearLevel(id: string): number
+		if deps.gearLevel then
+			return deps.gearLevel(id)
+		end
+		local state: any = Store.getBase()
+		local value = if type(state) == "table" and type(state.gear) == "table" then state.gear[id] else nil
+		return if type(value) == "number" then value else 0
+	end
+	local knownGear: { [string]: number }? = nil
 	Store.onChanged(function(kind: Store.ChangeKind)
-		if kind ~= "base" then
+		if kind ~= "base" or Store.getBase() == nil then
 			return
 		end
-		local state = Store.getBase()
-		if state == nil then
+		local levels: { [string]: number } = {}
+		for id in GEAR_TIPS do
+			levels[id] = gearLevel(id)
+		end
+		local old = knownGear
+		if old ~= nil then
+			local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+			for id, keys in GEAR_TIPS do
+				if (old[id] or 0) < 1 and levels[id] >= 1 then
+					deps.showTip({ key = if touch then keys.touch else keys.keys })
+				end
+			end
+		end
+		knownGear = levels
+	end)
+
+	-- Auto-run: once per session, the first time the player is outside with the habitat built.
+	local autoRunTipShown = false
+	local function autoRunTip()
+		if autoRunTipShown or not Store.isBaseMode() then
 			return
 		end
-		local jumpLevel = state.skills.jump or 0
-		if knownJump ~= nil and (knownJump :: number) < 1 and jumpLevel >= 1 then
-			deps.showTip({ key = "tip.double_jump" })
+		local stats = Store.getStats()
+		if stats == nil or stats.inside or level(Store.getBase(), "habitat") < 1 then
+			return
 		end
-		knownJump = jumpLevel
+		autoRunTipShown = true
+		local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+		deps.showTip({ key = if touch then "tip.autorun_touch" else "tip.autorun" }, "Briefing")
+	end
+	Store.onChanged(function(kind: Store.ChangeKind)
+		if kind == "stats" then
+			autoRunTip()
+		end
 	end)
 
 	-- Stage 7: a tool just unlocked, or the lab / garage just built: say what it is for. The first

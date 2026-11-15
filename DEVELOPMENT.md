@@ -262,6 +262,26 @@ Found in that test: Roblox refuses to set a script source over 200,000 character
 - **Raw "{n}" in marker labels:** the labels now fill in the numbers.
 - **Cheese pet:** the helmet that cut through its body is gone; it has a tiny antenna with a blinking light.
 
+**04:20 – Stage 8: pressurized modules, gear, new skills, auto-run.** From the team's round 5 playtest:
+- **Inside zones:** the greenhouse, the lab, the tube and the outer ring of the hub counted as outside (suit air drained, no eating). Each pressurized module now has a shaped zone (box, cylinder or dome) that counts once it is built: the whole round hub, the tube, greenhouse domes 1 and 2, the lab and the lander. A geometry check confirmed the zones overlap along the walking path.
+- **Gear, bought and upgraded at the Lab (new Gear tab), switched on with a key:**
+  - Air boots (B): a double jump, with gas puffing from the soles.
+  - Jetpack (J): hold Jump in the air to fly up with cold gas jets, like NASA's MMU and SAFER.
+  - Both share one gas tank with its own bar. It refills inside pressurized modules, and upgrades make each use cost less gas.
+  - Everyone sees the boot covers and the two jetpack tanks on the suit.
+- **Skills:** the jump skill became the boots; old saves get free boots at that level and their points back. New skills:
+  - credits and xp: each level adds 10% of every reward, rounded up, so kids only ever see whole numbers;
+  - builder: a shorter Assemble hold.
+- **Auto-run:** X walks forward along the camera direction. X or any WASD key cancels it, and Shift still switches run and walk.
+- **Fix found in the Studio test:** the HUD called the gear renderer before it was defined, which stopped the HUD at start.
+- **Other:** the "Build your base" hint hides once the habitat and panels stand.
+
+Tested in Studio (assistant-driven):
+- Inside zones at the hub centre and edges, the tube, both domes and the lab; outside between domes.
+- Gear bought at the Lab; the boots and jetpack models visible on the suit.
+- Holding Space with the jetpack climbed 42 studs in 2.5 s.
+- X auto-run moved 46 studs in 2 s; pressing A stopped it at once.
+
 ## Decisions
 
 | Decision | Who decided | Why |

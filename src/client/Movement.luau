@@ -1,43 +1,35 @@
 --!strict
--- Space Base Odyssey - movement skills (Stage 6), applied on this client:
---   * Double jump: with player attribute SBO_JumpLevel >= 1 (the "jump" skill, set by the server's
---     BaseService), pressing jump once more while falling gives a second, smaller jump: a puff of gas
---     from the life-support backpack. Upward speed = Humanoid.JumpPower * BASE.DOUBLE_JUMP_FRACTION.
---     Once per air time. Real science: on the Moon there is no air to push on, so only gas thrust
---     could do this.
+-- Space Base Odyssey - shorter prompt holds from tool and skill levels, applied on this client.
+-- Prompt hold times cannot be set per player on the server, so this local change is the only place
+-- it happens. The original HoldDuration is kept in the prompt attribute SBO_BaseHold so a factor
+-- never compounds; when the server itself changes HoldDuration, the new value becomes the original.
 --   * Faster drilling (Stage 7): the player attribute SBO_DrillLevel is the level of the ice drill
---     TOOL (set by the server's ToolService; upgraded at the Lab). The ice drill prompts need a
---     shorter hold: original HoldDuration * BaseBuild.drillHoldFactor(data, level). The original
---     value is kept in the prompt attribute SBO_BaseHold so the factor never compounds. Prompt hold
---     times cannot be set per player on the server, so this local change is the only place it happens.
--- The character gets the attribute SBO_DoubleJumpAt (server time) on every double jump, so other
--- client scripts (C.A.R.L.) can react.
+--     TOOL (set by the server's ToolService; upgraded at the Lab). Ice drill prompts (TextKey
+--     "prompt.drill") hold for original * BaseBuild.drillHoldFactor(data, level).
+--   * Faster building (Stage 8): the "builder" skill. The player attribute SBO_BuilderLevel (set by
+--     the server's BaseService) shortens the build pads' "AssemblePrompt" hold to
+--     original * BaseBuild.builderHoldFactor(data, skills). It is applied as soon as the prompt
+--     exists (also while it is switched off), so the player never sees the long hold first.
+-- Roblox's prompt UI keeps the hold time a prompt had when it appeared (BaseService header), so a
+-- level change never touches a prompt on screen: it waits until that prompt hides.
+-- Stage 8: the double jump moved to the air boots (Gear.luau); there is no jump skill any more.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
+local ProximityPromptService = game:GetService("ProximityPromptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local MissionData = require(Shared:WaitForChild("MissionData"))
 local BaseBuild = require(Shared:WaitForChild("BaseBuild"))
-local Theme = require(Shared:WaitForChild("Theme"))
 
-local JUMP_LEVEL_ATTRIBUTE = "SBO_JumpLevel"
 local DRILL_LEVEL_ATTRIBUTE = "SBO_DrillLevel"
+local BUILDER_LEVEL_ATTRIBUTE = "SBO_BuilderLevel"
 local BASE_HOLD_ATTRIBUTE = "SBO_BaseHold"
-local DOUBLE_JUMP_AT_ATTRIBUTE = "SBO_DoubleJumpAt"
 -- Prompts whose TextKey is one of these are ice drill prompts (WorldBuilder: makePrompt "prompt.drill").
 local DRILL_KEYS: { [string]: boolean } = { ["prompt.drill"] = true }
-
--- Feel tuning (not gameplay numbers).
-local MIN_AIR_SECONDS = 0.15 -- the first jump must leave the ground before the second one counts
-local NEW_PRESS_GAP = 0.12 -- a held jump key repeats JumpRequest; a real new press comes after a gap
-local PUFF_PARTS = 3
-local PUFF_SECONDS = 0.45
-local PUFF_START_SIZE = 0.5
-local PUFF_END_SIZE = 2
+local ASSEMBLE_PROMPT_NAME = "AssemblePrompt" -- BaseService: the wrench step at a build pad
+local HOLD_TOLERANCE = 0.001 -- HoldDuration is stored as a float
 
 local Movement = {}
 
@@ -48,161 +40,91 @@ local function attributeLevel(player: Player, name: string): number
 	return if type(value) == "number" and value == value then math.max(0, math.floor(value)) else 0
 end
 
--- Upward speed of the second jump. JumpPower is a speed; with JumpHeight mode use v = sqrt(2 g h).
-local function doubleJumpSpeed(humanoid: Humanoid): number
-	local fraction: number = MissionData.BASE.DOUBLE_JUMP_FRACTION
-	if humanoid.UseJumpPower then
-		return humanoid.JumpPower * fraction
+type Kind = "drill" | "builder"
+
+local function kindOf(prompt: ProximityPrompt): Kind?
+	if prompt.Name == ASSEMBLE_PROMPT_NAME then
+		return "builder"
 	end
-	return math.sqrt(2 * workspace.Gravity * math.max(0, humanoid.JumpHeight)) * fraction
+	local key = prompt:GetAttribute("TextKey")
+	if type(key) == "string" and DRILL_KEYS[key] then
+		return "drill"
+	end
+	return nil
 end
 
--- A small cream gas puff below the backpack (local parts only, cleaned up quickly).
-local function puff(root: BasePart)
-	local origin = root.CFrame * CFrame.new(0, -0.6, 0.9) -- behind and below: the backpack nozzles
-	for index = 1, PUFF_PARTS do
-		local ball = Instance.new("Part")
-		ball.Name = "SBO_JumpPuff"
-		ball.Shape = Enum.PartType.Ball
-		ball.Anchored = true
-		ball.CanCollide = false
-		ball.CanQuery = false
-		ball.CanTouch = false
-		ball.CastShadow = false
-		ball.Material = Enum.Material.SmoothPlastic
-		ball.Color = Theme.PALETTE.cream
-		ball.Transparency = 0.35
-		ball.Size = Vector3.one * PUFF_START_SIZE
-		local spread = (index - (PUFF_PARTS + 1) / 2) * 0.5
-		ball.CFrame = origin * CFrame.new(spread, 0, 0)
-		ball.Parent = workspace
-		local tween = TweenService:Create(ball, TweenInfo.new(PUFF_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			Size = Vector3.one * PUFF_END_SIZE,
-			Transparency = 1,
-			CFrame = origin * CFrame.new(spread * 2, -1.6, 0.4),
-		})
-		tween.Completed:Connect(function()
-			ball:Destroy()
-		end)
-		tween:Play()
-	end
-end
+local function startPromptHolds(player: Player)
+	-- Prompt -> its kind and the HoldDuration this script last set (weak keys: removed prompts go away).
+	local kinds: { [ProximityPrompt]: Kind } = setmetatable({}, { __mode = "k" }) :: any
+	local applied: { [ProximityPrompt]: number } = setmetatable({}, { __mode = "k" }) :: any
+	local shown: { [ProximityPrompt]: boolean } = setmetatable({}, { __mode = "k" }) :: any
+	local pending: { [ProximityPrompt]: boolean } = setmetatable({}, { __mode = "k" }) :: any
 
--- Double jump -----------------------------------------------------------------------------------
-
-local function startDoubleJump(player: Player)
-	local humanoid: Humanoid? = nil
-	local airborneAt: number? = nil
-	local used = false
-	local lastRequest = 0
-
-	local GROUND_STATES: { [Enum.HumanoidStateType]: boolean } = {
-		[Enum.HumanoidStateType.Landed] = true,
-		[Enum.HumanoidStateType.Running] = true,
-		[Enum.HumanoidStateType.RunningNoPhysics] = true,
-		[Enum.HumanoidStateType.Climbing] = true,
-		[Enum.HumanoidStateType.Swimming] = true,
-		[Enum.HumanoidStateType.Seated] = true,
-		[Enum.HumanoidStateType.Dead] = true,
-	}
-
-	local function onCharacter(character: Model)
-		local instance = character:WaitForChild("Humanoid", 10)
-		if not instance or not instance:IsA("Humanoid") then
-			return
+	local function factor(kind: Kind): number
+		if kind == "drill" then
+			-- Level 0 (no drill yet) and 1 (basic drill) both use the normal hold time.
+			local level = math.max(1, attributeLevel(player, DRILL_LEVEL_ATTRIBUTE))
+			return BaseBuild.drillHoldFactor(MissionData, level)
 		end
-		local found = instance :: Humanoid
-		humanoid = found
-		airborneAt = nil
-		used = false
-		found.StateChanged:Connect(function(_old: Enum.HumanoidStateType, new: Enum.HumanoidStateType)
-			if humanoid ~= found then
-				return
-			end
-			if GROUND_STATES[new] then
-				airborneAt = nil
-				used = false
-			elseif new == Enum.HumanoidStateType.Jumping or new == Enum.HumanoidStateType.Freefall then
-				airborneAt = airborneAt or os.clock()
-			end
-		end)
-	end
-	player.CharacterAdded:Connect(onCharacter)
-	if player.Character then
-		task.spawn(onCharacter, player.Character)
+		local level = attributeLevel(player, BUILDER_LEVEL_ATTRIBUTE)
+		return BaseBuild.builderHoldFactor(MissionData, { builder = level })
 	end
 
-	UserInputService.JumpRequest:Connect(function()
-		local now = os.clock()
-		local gap = now - lastRequest
-		lastRequest = now
-		local current = humanoid
-		if current == nil or used or airborneAt == nil then
+	local function apply(prompt: ProximityPrompt)
+		local kind = kinds[prompt]
+		if kind == nil then
 			return
 		end
-		if attributeLevel(player, JUMP_LEVEL_ATTRIBUTE) < 1 or current.Health <= 0 then
-			return
-		end
-		if gap < NEW_PRESS_GAP or now - (airborneAt :: number) < MIN_AIR_SECONDS then
-			return
-		end
-		local state = current:GetState()
-		if state ~= Enum.HumanoidStateType.Freefall and state ~= Enum.HumanoidStateType.Jumping then
-			return
-		end
-		local character = current.Parent
-		local rootInstance = if character then character:FindFirstChild("HumanoidRootPart") else nil
-		if not rootInstance or not rootInstance:IsA("BasePart") then
-			return
-		end
-		local root = rootInstance :: BasePart
-		used = true
-		local velocity = root.AssemblyLinearVelocity
-		root.AssemblyLinearVelocity = Vector3.new(velocity.X, doubleJumpSpeed(current), velocity.Z)
-		puff(root)
-		if character then
-			character:SetAttribute(DOUBLE_JUMP_AT_ATTRIBUTE, workspace:GetServerTimeNow())
-		end
-	end)
-end
-
--- Faster ice drilling (drill tool level) -------------------------------------------------------
-
-local function startDrillTool(player: Player)
-	local drillPrompts: { [ProximityPrompt]: boolean } = setmetatable({}, { __mode = "k" }) :: any
-
-	local function factor(): number
-		-- Level 0 (no drill yet) and 1 (basic drill) both use the normal hold time.
-		local level = math.max(1, attributeLevel(player, DRILL_LEVEL_ATTRIBUTE))
-		return BaseBuild.drillHoldFactor(MissionData, level)
-	end
-
-	local function apply(prompt: ProximityPrompt, value: number)
 		local original = prompt:GetAttribute(BASE_HOLD_ATTRIBUTE)
-		if type(original) ~= "number" then
+		local last = applied[prompt]
+		-- First time, or the server set a new hold since: that value is the original now.
+		if type(original) ~= "number" or (last ~= nil and math.abs(prompt.HoldDuration - last) > HOLD_TOLERANCE) then
 			original = prompt.HoldDuration
 			prompt:SetAttribute(BASE_HOLD_ATTRIBUTE, original)
 		end
-		prompt.HoldDuration = (original :: number) * value
+		local value = (original :: number) * factor(kind)
+		applied[prompt] = value
+		if math.abs(prompt.HoldDuration - value) > HOLD_TOLERANCE then
+			prompt.HoldDuration = value
+			applied[prompt] = prompt.HoldDuration -- the float the engine really stored
+		end
 	end
 
 	local function consider(instance: Instance)
-		if not instance:IsA("ProximityPrompt") or drillPrompts[instance :: any] then
+		if not instance:IsA("ProximityPrompt") then
 			return
 		end
-		local key = instance:GetAttribute("TextKey")
-		if type(key) == "string" and DRILL_KEYS[key] then
-			local prompt = instance :: ProximityPrompt
-			drillPrompts[prompt] = true
-			apply(prompt, factor())
+		local prompt = instance :: ProximityPrompt
+		if kinds[prompt] then
+			return
 		end
+		local kind = kindOf(prompt)
+		if kind == nil then
+			return
+		end
+		kinds[prompt] = kind
+		apply(prompt)
+		prompt:GetPropertyChangedSignal("Enabled"):Connect(function()
+			if prompt.Enabled then
+				apply(prompt)
+			end
+		end)
+		prompt:GetPropertyChangedSignal("HoldDuration"):Connect(function()
+			local last = applied[prompt]
+			if last == nil or math.abs(prompt.HoldDuration - last) > HOLD_TOLERANCE then
+				apply(prompt) -- changed by the server: keep the shorter hold
+			end
+		end)
 	end
 
-	local function applyAll()
-		local value = factor()
-		for prompt in drillPrompts do
-			if prompt.Parent then
-				apply(prompt, value)
+	local function applyKind(kind: Kind)
+		for prompt, promptKind in kinds do
+			if promptKind == kind and prompt.Parent then
+				if shown[prompt] then
+					pending[prompt] = true -- on screen now: change it once it hides
+				else
+					apply(prompt)
+				end
 			end
 		end
 	end
@@ -211,7 +133,23 @@ local function startDrillTool(player: Player)
 	for _, descendant in workspace:GetDescendants() do
 		consider(descendant)
 	end
-	player:GetAttributeChangedSignal(DRILL_LEVEL_ATTRIBUTE):Connect(applyAll)
+	ProximityPromptService.PromptShown:Connect(function(prompt: ProximityPrompt)
+		consider(prompt) -- normally already known from DescendantAdded
+		shown[prompt] = true
+	end)
+	ProximityPromptService.PromptHidden:Connect(function(prompt: ProximityPrompt)
+		shown[prompt] = nil
+		if pending[prompt] then
+			pending[prompt] = nil
+			apply(prompt)
+		end
+	end)
+	player:GetAttributeChangedSignal(DRILL_LEVEL_ATTRIBUTE):Connect(function()
+		applyKind("drill")
+	end)
+	player:GetAttributeChangedSignal(BUILDER_LEVEL_ATTRIBUTE):Connect(function()
+		applyKind("builder")
+	end)
 end
 
 function Movement.start()
@@ -219,9 +157,7 @@ function Movement.start()
 		return
 	end
 	started = true
-	local player = Players.LocalPlayer
-	startDoubleJump(player)
-	startDrillTool(player)
+	startPromptHolds(Players.LocalPlayer)
 end
 
 return table.freeze(Movement)

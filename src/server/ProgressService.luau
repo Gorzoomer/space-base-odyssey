@@ -25,6 +25,10 @@
 -- saves. Migration of Stage 6 saves: a save with any build but no habitat gets habitat = 1 (the
 -- habitat became a build in Stage 7, nobody loses their base); the removed "drill" skill becomes
 -- drill tool level skill + 1 (its skill points come back too, because spent points are counted).
+-- Stage 8 adds base.gear (air boots / jetpack levels bought at the Lab, only grow between saves) and
+-- base.gearOn (which owned gear is switched on; saved as it is). Migration of Stage 7 saves: the
+-- removed "jump" skill becomes air boots at that level (at most the boots' maxLevel), switched on, for
+-- free; the jump levels drop out of the skills, so their skill points come back.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local DataStoreService = game:GetService("DataStoreService")
@@ -58,6 +62,8 @@ export type BaseRecord = {
 	equipped: Types.Equipped?,
 	tools: { [string]: number }, -- Stage 7: tool upgrade levels (ids of MissionData.BASE.TOOL_UPGRADES)
 	scanned: { [string]: boolean }, -- Stage 7: scanned exploration keys ("poi:<id>")
+	gear: { [string]: number }, -- Stage 8: gear levels (ids of MissionData.BASE.GEAR; missing = not owned)
+	gearOn: { [string]: boolean }, -- Stage 8: owned gear switched on (true) or off (false)
 }
 
 type Record = {
@@ -79,7 +85,7 @@ type Record = {
 -- Technical settings (not gameplay numbers).
 local STORE_NAME = "SBO_Progress_v1"
 local KEY_PREFIX = "u_"
-local DATA_VERSION = 3 -- 2 = Stage 6 "base" field, 3 = Stage 7 tools and scanned (older saves migrate)
+local DATA_VERSION = 4 -- 2 = Stage 6 "base", 3 = Stage 7 tools and scanned, 4 = Stage 8 gear (older saves migrate)
 local MAX_STORED_NUMBER = 1e9 -- credits and XP are clamped to this when read from storage
 local SAVE_INTERVAL_SECONDS = 8 -- DataStores allow one write per key about every 6 seconds
 local LOAD_ATTEMPTS = 3
@@ -162,6 +168,8 @@ local function defaultBase(): BaseRecord
 		equipped = nil,
 		tools = {},
 		scanned = {},
+		gear = {},
+		gearOn = {},
 	}
 end
 
@@ -201,6 +209,23 @@ end
 
 local function findToolUpgrade(id: string): { maxLevel: number }?
 	return (MissionData.BASE.TOOL_UPGRADES :: any)[id]
+end
+
+local function findGear(id: string): { maxLevel: number }?
+	return BaseBuild.gearDef(MissionData, id)
+end
+
+-- On/off of known gear ids (booleans only).
+local function sanitizeGearOn(value: any): { [string]: boolean }
+	local result: { [string]: boolean } = {}
+	if type(value) == "table" then
+		for id, flag in value do
+			if type(id) == "string" and type(flag) == "boolean" and findGear(id) ~= nil then
+				result[id] = flag
+			end
+		end
+	end
+	return result
 end
 
 -- A scanned key: short, letters, digits, "_", "-" and ":" only (for example "poi:old_lander").
@@ -265,6 +290,21 @@ local function sanitizeBase(value: any): BaseRecord
 		local migrated = math.clamp(math.floor(oldDrill) + 1, 1, drillUpgrade.maxLevel)
 		tools.drill = math.max(tools.drill or 0, migrated)
 	end
+	-- Stage 8: the old "jump" skill -> air boots at that level, switched on (sanitizeLevels below drops
+	-- "jump" from the skills, so its points come back).
+	local gear = sanitizeLevels(value.gear, findGear)
+	local gearOn = sanitizeGearOn(value.gearOn)
+	local oldJump = if type(oldSkills) == "table" then oldSkills.jump else nil
+	local boots = findGear("boots")
+	if type(oldJump) == "number" and oldJump == oldJump and oldJump >= 1 and boots then
+		local migrated = math.clamp(math.floor(oldJump), 1, boots.maxLevel)
+		if migrated > (gear.boots or 0) then
+			gear.boots = migrated
+		end
+		if gearOn.boots == nil then
+			gearOn.boots = true
+		end
+	end
 	return {
 		credits = sanitizeNumber(value.credits),
 		xp = sanitizeNumber(value.xp),
@@ -274,6 +314,8 @@ local function sanitizeBase(value: any): BaseRecord
 		equipped = sanitizeEquipped(value.equipped),
 		tools = tools,
 		scanned = sanitizeScanned(value.scanned),
+		gear = gear,
+		gearOn = gearOn,
 	}
 end
 
@@ -295,11 +337,13 @@ local function cloneBase(base: BaseRecord): BaseRecord
 		equipped = if base.equipped then table.clone(base.equipped) else nil,
 		tools = table.clone(base.tools),
 		scanned = table.clone(base.scanned),
+		gear = table.clone(base.gear),
+		gearOn = table.clone(base.gearOn),
 	}
 end
 
 -- What gets stored. `stored` = what is in the DataStore now (another server may have saved).
--- Credits and equipped: this server's values. XP, builds, skills, pets: never lower than stored,
+-- Credits, equipped and gearOn: this server's values. XP, builds, skills, pets, tools, gear: never lower than stored,
 -- unless the player reset their base in this server.
 local function mergeBase(stored: any, current: BaseRecord, reset: boolean): any
 	local merged = cloneBase(current)
@@ -312,6 +356,12 @@ local function mergeBase(stored: any, current: BaseRecord, reset: boolean): any
 		maxLevels(merged.tools, old.tools)
 		union(merged.scanned, old.scanned)
 		merged.scanned = sanitizeScanned(merged.scanned)
+		maxLevels(merged.gear, old.gear)
+		for id, on in old.gearOn do
+			if merged.gearOn[id] == nil then
+				merged.gearOn[id] = on -- gear another server bought (or migrated) keeps its switch
+			end
+		end
 	end
 	return merged
 end
@@ -528,6 +578,10 @@ local function addPlayer(player: Player)
 		union(base.pets, earned.pets)
 		maxLevels(base.tools, earned.tools)
 		union(base.scanned, earned.scanned)
+		maxLevels(base.gear, earned.gear)
+		for id, on in earned.gearOn do
+			base.gearOn[id] = on
+		end
 		if base.equipped == nil then
 			base.equipped = earned.equipped
 		end
@@ -838,7 +892,7 @@ function ProgressService.updateBase(player: Player, change: (base: BaseRecord) -
 	return true
 end
 
--- Puts the player's builds, skills, credits, XP, tool upgrades and scanned sites back to the start
+-- Puts the player's builds, skills, credits, XP, tool upgrades, gear and scanned sites back to the start
 -- (DebugResetBase). Bought pets and what they wear are kept. The next save replaces the stored base instead of merging.
 function ProgressService.resetBase(player: Player): boolean
 	local record = records[player]

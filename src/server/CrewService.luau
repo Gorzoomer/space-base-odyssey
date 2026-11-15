@@ -9,6 +9,10 @@
 -- room, so suits refill there and C.A.R.L. brings a player with an empty suit back to it. The
 -- habitat is built like everything else and counts as inside only once it stands. zoneOf tells the
 -- rooms apart ("go back inside" in first steps means the habitat).
+-- Stage 8: every pressurized module counts as inside once it stands (world.insideZones: the hub's
+-- whole round room, the greenhouse tube and domes, the lab and its tube, the lander), so suits refill
+-- and food can be eaten anywhere in the base. The player attribute SBO_Inside mirrors "inside" for the
+-- client (gear gas refills there). The regolith shelter stays a storm shelter, as before.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -25,8 +29,9 @@ type Crew = {
 	suitMax: number, -- SUIT.MAX plus the tank skill, read from the player attribute every tick
 	inside: boolean,
 	sheltered: boolean,
-	inHabitat: boolean,
+	inHabitat: boolean, -- Stage 8: any pressurized base module (hub, greenhouse, lab, their tubes)
 	inLander: boolean,
+	room: string?, -- the inside zone id the player stands in (nil outside or in the shelter)
 	carryingIce: boolean,
 	countRefill: boolean, -- suit dropped below the refill threshold; count it when full again
 	rescueTopUp: boolean, -- the next top-up after a rescue is already counted
@@ -51,13 +56,18 @@ local LOW_WARNING_FRACTION = 0.25 -- C.A.R.L. warns once below 25% of MAX
 local RESCUE_OFFSET = Vector3.new(0, 4, 0)
 
 local SUIT = MissionData.SUIT
+local INSIDE_ATTRIBUTE = "SBO_Inside"
+local ZONE_SHAPE_ATTRIBUTE = "SBO_ZoneShape" -- WorldParts.ZONE_SHAPE_ATTRIBUTE
+local LANDER_ROOM = "lander"
+
+-- Stage 8: WorldBuilder.InsideZone (a pressurized room; counts while its build stands at minLevel).
+type InsideZone = { id: string, part: BasePart, build: string?, minLevel: number?, shape: string? }
 
 local CrewService = {}
 
 local crews: { [Player]: Crew } = {}
-local habitatZone: BasePart? = nil
 local shelterZone: BasePart? = nil
-local landerZone: BasePart? = nil
+local insideZones: { InsideZone } = {}
 local spawnLocation: SpawnLocation? = nil
 local remotes: Remotes? = nil
 local worldRef: any = nil
@@ -74,6 +84,35 @@ local function insideBox(zone: BasePart?, position: Vector3): boolean
 	local localPoint = zone.CFrame:PointToObjectSpace(position)
 	local half = zone.Size / 2
 	return math.abs(localPoint.X) <= half.X and math.abs(localPoint.Y) <= half.Y and math.abs(localPoint.Z) <= half.Z
+end
+
+-- Same test as WorldParts.zoneContains: "cylinder" = the round prism around the part's local Y axis,
+-- "dome" = the half-ellipsoid standing on its bottom face, anything else = the whole box.
+local function insideZone(zone: InsideZone, position: Vector3): boolean
+	local zonePart = zone.part
+	local shape = zone.shape
+	if shape == nil then
+		local attribute = zonePart:GetAttribute(ZONE_SHAPE_ATTRIBUTE)
+		shape = if type(attribute) == "string" then attribute else "box"
+	end
+	local localPoint = zonePart.CFrame:PointToObjectSpace(position)
+	local size = zonePart.Size
+	local half = size / 2
+	if shape == "cylinder" then
+		if math.abs(localPoint.Y) > half.Y then
+			return false
+		end
+		local nx, nz = localPoint.X / half.X, localPoint.Z / half.Z
+		return nx * nx + nz * nz <= 1
+	elseif shape == "dome" then
+		local height = localPoint.Y + half.Y
+		if height < 0 then
+			return false
+		end
+		local nx, ny, nz = localPoint.X / half.X, height / size.Y, localPoint.Z / half.Z
+		return nx * nx + ny * ny + nz * nz <= 1
+	end
+	return insideBox(zonePart, position)
 end
 
 local function getRoot(player: Player): BasePart?
@@ -128,7 +167,67 @@ local function structureBuilt(id: string): boolean
 	return not ok or built == true
 end
 
-type BuiltNow = { habitat: boolean, shelter: boolean }
+-- Stage 8: the level a build stands at (world.buildLevel; isBuilt gives 0 / 1). Worlds without either
+-- keep the old, fully built base.
+local function structureLevel(id: string): number
+	local buildLevel = worldRef and worldRef.buildLevel
+	if type(buildLevel) == "function" then
+		local ok, level = pcall(buildLevel, id)
+		if ok and type(level) == "number" then
+			return level
+		end
+	end
+	local isBuilt = worldRef and worldRef.isBuilt
+	if type(isBuilt) == "function" then
+		return if structureBuilt(id) then 1 else 0
+	end
+	return math.huge
+end
+
+-- Asked once per tick for everyone: is the shelter built, and which pressurized rooms stand.
+type BuiltNow = { shelter: boolean, zones: { InsideZone } }
+
+local function builtNow(): BuiltNow
+	local levels: { [string]: number } = {}
+	local zones: { InsideZone } = {}
+	for _, zone in insideZones do
+		local build = zone.build
+		if build == nil then
+			table.insert(zones, zone)
+			continue
+		end
+		local level = levels[build]
+		if level == nil then
+			level = structureLevel(build)
+			levels[build] = level
+		end
+		if level >= (zone.minLevel or 1) then
+			table.insert(zones, zone)
+		end
+	end
+	return { shelter = structureBuilt("shelter"), zones = zones }
+end
+
+-- The inside zone `position` is in (a base module wins over the lander), or nil.
+local function roomAt(position: Vector3, zones: { InsideZone }): string?
+	local found: string? = nil
+	for _, zone in zones do
+		if insideZone(zone, position) then
+			if zone.id ~= LANDER_ROOM then
+				return zone.id
+			end
+			found = zone.id
+		end
+	end
+	return found
+end
+
+-- Mirrors "inside" on the player for the client (only written when it changes).
+local function setInsideAttribute(player: Player, inside: boolean)
+	if player:GetAttribute(INSIDE_ATTRIBUTE) ~= inside then
+		player:SetAttribute(INSIDE_ATTRIBUTE, inside)
+	end
+end
 
 local function sendMessage(player: Player, key: string)
 	if remotes then
@@ -219,7 +318,9 @@ local function updateCrew(player: Player, crew: Crew, dt: number, built: BuiltNo
 		crew.sheltered = false
 		crew.inHabitat = false
 		crew.inLander = false
+		crew.room = nil
 		crew.measured = false
+		setInsideAttribute(player, false)
 		return
 	end
 
@@ -233,9 +334,12 @@ local function updateCrew(player: Player, crew: Crew, dt: number, built: BuiltNo
 	local position = root.Position
 	local wasInside, wasSheltered = crew.inside, crew.sheltered
 	crew.sheltered = built.shelter and insideBox(shelterZone, position)
-	crew.inHabitat = built.habitat and insideBox(habitatZone, position)
-	crew.inLander = insideBox(landerZone, position)
-	crew.inside = crew.sheltered or crew.inHabitat or crew.inLander
+	local room = if crew.sheltered then nil else roomAt(position, built.zones)
+	crew.room = room
+	crew.inHabitat = room ~= nil and room ~= LANDER_ROOM
+	crew.inLander = room == LANDER_ROOM
+	crew.inside = crew.sheltered or room ~= nil
+	setInsideAttribute(player, crew.inside)
 	if not crew.measured then
 		crew.measured = true
 	elseif wasInside ~= crew.inside or wasSheltered ~= crew.sheltered then
@@ -301,6 +405,7 @@ local function addPlayer(player: Player)
 		sheltered = false,
 		inHabitat = false,
 		inLander = false,
+		room = nil,
 		carryingIce = false,
 		countRefill = false,
 		rescueTopUp = false,
@@ -310,6 +415,7 @@ local function addPlayer(player: Player)
 		connections = {},
 	}
 	crews[player] = crew
+	setInsideAttribute(player, false)
 	table.insert(
 		crew.connections,
 		player.CharacterAdded:Connect(function()
@@ -333,19 +439,50 @@ local function removePlayer(player: Player)
 	crews[player] = nil
 end
 
--- world: WorldBuilder.World (uses habitatZone, shelterZone, landerZone, spawn, and isBuilt when present).
+local function isZonePart(value: any): boolean
+	return typeof(value) == "Instance" and value:IsA("BasePart")
+end
+
+-- world.insideZones (Stage 8), or the older habitatZone + landerZone when it is missing.
+local function readInsideZones(world: any): { InsideZone }
+	local list: { InsideZone } = {}
+	local given = world.insideZones
+	if type(given) == "table" then
+		for index, zone in given do
+			if type(zone) == "table" and isZonePart(zone.part) then
+				local id = if type(zone.id) == "string" then zone.id else `zone_{index}`
+				table.insert(list, {
+					id = id,
+					part = zone.part,
+					build = if type(zone.build) == "string" then zone.build else nil,
+					minLevel = if type(zone.minLevel) == "number" then zone.minLevel else nil,
+					shape = if type(zone.shape) == "string" then zone.shape else nil,
+				})
+			end
+		end
+		if #list > 0 then
+			return list
+		end
+	end
+	if isZonePart(world.habitatZone) then
+		table.insert(list, { id = "hub", part = world.habitatZone, build = "habitat" })
+	end
+	if isZonePart(world.landerZone) then
+		table.insert(list, { id = LANDER_ROOM, part = world.landerZone })
+	else
+		warn("[SpaceBaseOdyssey] world has no landerZone; only the habitat and shelter are inside")
+	end
+	return list
+end
+
+-- world: WorldBuilder.World (uses insideZones, or habitatZone and landerZone; shelterZone, spawn,
+-- and buildLevel / isBuilt when present).
 function CrewService.start(world: any, remoteEvents: Remotes)
 	assert(not started, "CrewService already started")
 	started = true
 	worldRef = world
-	habitatZone = world.habitatZone
 	shelterZone = world.shelterZone
-	local lander = world.landerZone
-	if typeof(lander) == "Instance" and lander:IsA("BasePart") then
-		landerZone = lander
-	else
-		warn("[SpaceBaseOdyssey] world has no landerZone; only the habitat and shelter are inside")
-	end
+	insideZones = readInsideZones(world)
 	spawnLocation = world.spawn
 	remotes = remoteEvents
 
@@ -363,7 +500,7 @@ function CrewService.start(world: any, remoteEvents: Remotes)
 			local dt = math.min(now - last, 1)
 			last = now
 			-- Asked once per tick for everyone.
-			local built: BuiltNow = { habitat = structureBuilt("habitat"), shelter = structureBuilt("shelter") }
+			local built = builtNow()
 			for player, crew in crews do
 				if player.Parent == nil then
 					continue
@@ -417,7 +554,9 @@ function CrewService.isInside(player: Player): boolean
 	return crew ~= nil and crew.inside
 end
 
--- Stage 7: which room the player is in: "shelter", "habitat", "lander" or "outside".
+-- Stage 7: which room the player is in: "shelter", "habitat", "lander" or "outside". Stage 8: every
+-- pressurized base module (hub, greenhouse, lab and their tubes) is "habitat" here, so "go back inside"
+-- counts from any of them; roomOf tells them apart.
 function CrewService.zoneOf(player: Player): string
 	local crew = crews[player]
 	if crew == nil or not crew.inside then
@@ -432,6 +571,19 @@ function CrewService.zoneOf(player: Player): string
 	return "outside"
 end
 
+-- Stage 8: the inside zone id the player stands in ("hub", "greenhouse_tube", "greenhouse_a",
+-- "greenhouse_b", "lab", "lab_tube", "lander"), "shelter" or "outside".
+function CrewService.roomOf(player: Player): string
+	local crew = crews[player]
+	if crew == nil or not crew.inside then
+		return "outside"
+	elseif crew.sheltered then
+		return "shelter"
+	end
+	return crew.room or "outside"
+end
+
+-- Stage 8: true in any pressurized base module (not the lander or the shelter).
 function CrewService.isInHabitat(player: Player): boolean
 	local crew = crews[player]
 	return crew ~= nil and crew.inHabitat

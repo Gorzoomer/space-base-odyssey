@@ -129,7 +129,7 @@ MissionData.STORM = table.freeze({
 	FLARE_AT_SECONDS = 40, -- seconds into the shift when the flare is spotted
 })
 
--- Build and grow the base (GAME, Stages 6-7). A new player lands in the arrival lander (the spawn)
+-- Build and grow the base (GAME, Stages 6-8). A new player lands in the arrival lander (the spawn)
 -- and builds the whole base: the habitat first, then everything else. Credits come from useful work
 -- (ice, repairs, days finished, data sent, exploring); experience (XP) raises the player level, which
 -- unlocks bigger builds and gives skill points. Pure numbers; the rules live in BaseBuild.luau.
@@ -194,15 +194,39 @@ MissionData.BASE = table.freeze({
 	-- Player level i needs LEVEL_XP[i] total XP. Each level above 1 gives one skill point.
 	LEVEL_XP = table.freeze({ 0, 40, 100, 180, 280, 400, 550, 730, 940, 1200, 1500, 1850, 2250, 2700, 3200 }),
 	-- Skills (learned at the Lab): each level costs one skill point and needs the player level in minLevel.
+	-- Stage 8 (team feedback): the jump skill became the air boots (GEAR); three new skills took its place.
+	-- speed: faster walking/running; tank: bigger suit air tank; credits: more credits from every reward;
+	-- xp: more experience from every reward; builder: shorter "Assemble" hold at build pads.
 	SKILLS = table.freeze({
 		table.freeze({ id = "speed", icon = "run", maxLevel = 3, minLevel = table.freeze({ 2, 4, 6 }) }),
 		table.freeze({ id = "tank", icon = "lungs", maxLevel = 3, minLevel = table.freeze({ 2, 4, 6 }) }),
-		table.freeze({ id = "jump", icon = "rocket", maxLevel = 3, minLevel = table.freeze({ 3, 5, 7 }) }),
+		table.freeze({ id = "credits", icon = "coin", maxLevel = 3, minLevel = table.freeze({ 3, 6, 9 }) }),
+		table.freeze({ id = "xp", icon = "xp", maxLevel = 3, minLevel = table.freeze({ 3, 6, 9 }) }),
+		table.freeze({ id = "builder", icon = "build", maxLevel = 3, minLevel = table.freeze({ 2, 5, 8 }) }),
 	}),
 	SPEED_BONUS_PER_LEVEL = 1.5, -- studs/s added to walking and running (and the running threshold)
 	TANK_BONUS_PER_LEVEL = 25, -- suit air added to SUIT.MAX
-	JUMP_POWER_BONUS = table.freeze({ 0, 4, 8 }), -- by jump level; level 1 already gives a double jump
-	DOUBLE_JUMP_FRACTION = 0.8, -- the second jump (a backpack gas puff) is 80% of a normal jump
+	-- credits / xp skills: each level adds this share of a reward, ROUNDED UP to a whole number, so a
+	-- kid never sees decimals and every level adds at least 1 (BaseBuild.bonusAmount).
+	REWARD_BONUS_PER_LEVEL = 0.1,
+	BUILDER_HOLD_FACTOR = table.freeze({ 0.8, 0.65, 0.5 }), -- Assemble hold time, by builder level
+	DOUBLE_JUMP_FRACTION = 0.8, -- the air boots' second jump is 80% of a normal jump
+	-- Gear (Stage 8): accessories worn on the suit, bought and upgraded at the Lab, switched on and off
+	-- with a key (not in the tool bar). Both run on compressed gas from one GAS tank (real: NASA's MMU
+	-- and SAFER jetpacks fly with cold nitrogen gas jets). The tank refills inside pressurized modules.
+	-- boots: a second jump in the air, gas puffing from the soles; jetpack: hold Jump in the air to fly.
+	-- use[i] = gas per double jump (boots) or per second of thrust (jetpack) at gear level i (upgrades
+	-- make it last longer). costs[i] / minLevel[i] for gear level i (level 1 = buying it).
+	GEAR = table.freeze({
+		table.freeze({ id = "boots", icon = "boots", key = "B", maxLevel = 3, costs = table.freeze({ 60, 100, 160 }), minLevel = table.freeze({ 3, 5, 7 }), use = table.freeze({ 25, 18, 12 }) }),
+		table.freeze({ id = "jetpack", icon = "jetpack", key = "J", maxLevel = 3, costs = table.freeze({ 200, 260, 340 }), minLevel = table.freeze({ 6, 8, 10 }), use = table.freeze({ 30, 22, 15 }) }),
+	}),
+	GAS = table.freeze({
+		MAX = 100,
+		REFILL_PER_SECOND = 40, -- inside a pressurized module (habitat, tubes, greenhouse, lab, lander)
+		JETPACK_ACCEL = 60, -- studs/s^2 of upward push while thrusting (Moon gravity is 32.4)
+		JETPACK_MAX_RISE = 22, -- studs/s: the jetpack never climbs faster than this
+	}),
 	-- Tools the player carries (Roblox Tools in the backpack bar). A task needs its tool IN HAND:
 	-- no drill, no ice (team feedback). unlock = build id that must stand (nil = from the start).
 	-- wrench: assemble build steps; drill: crater ice; brush: dusty panels; repair_kit: leaks;
