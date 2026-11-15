@@ -288,7 +288,7 @@ Tested in Studio (assistant-driven):
 - A Clash-of-Clans-style base hierarchy with the habitat as the town hall.
 - An economy calibrated so players cannot unlock everything at once.
 
-**07:45 – Stage 9: open-world progression.**
+**07:35 – Stage 9: open-world progression.**
 - **Start menu:** Continue, New game, Load game (three slots showing base level, player level, credits and date), Settings and Credits (team, data sources, AI disclosure). Then Solo or With friends.
   - Saves use Roblox DataStores, which have no cost.
   - Solo uses a reserved server in the published game.
