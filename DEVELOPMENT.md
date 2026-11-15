@@ -343,6 +343,7 @@ Tested in Studio (assistant-driven):
   - Dome A to dome B and hub to lab are now walk-through tubes with floors, doorways and a gentle ramp to the lab floor.
   - Pressurized zones cover the whole path.
   - Glass hatches close the doorways until the greenhouse level 2 and the lab are built.
+  - Team follow-up: greenhouse dome A now sits on the hub tube's line (it was 8 studs off, so the tube met the dome at a slant). Dome B and the lab pad moved with it.
 
 Tested in Studio (assistant-driven):
 - Start menu, New game, Solo.

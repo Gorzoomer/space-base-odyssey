@@ -45,10 +45,10 @@ local S7 = {}
 -- Stage 7 geometry and construction helpers (one table for the same reason).
 local Geo = {}
 S7.TANK_OFFSET = Vector3.new(24.5, 0, -13) -- water tank, from the hub centre
-S7.GREENHOUSE_A = Vector3.new(-62, 0, 8)
+S7.GREENHOUSE_A = Vector3.new(-62, 0, 0) -- Stage 10: centred on the hub tube (it entered the dome off-centre at z 8)
 local GREENHOUSE_A_RX = 16
 local GREENHOUSE_A_RY = 14
-S7.GREENHOUSE_B = Vector3.new(-66, 0, 44) -- level 2: a second dome north of the first
+S7.GREENHOUSE_B = Vector3.new(-66, 0, 36) -- level 2: a second dome north of the first (moved with dome A)
 local GREENHOUSE_B_RX = 14
 local GREENHOUSE_B_RY = 12
 local TUBE_AXIS_Y = 4.5 -- walk-through tube: octagon around this axis

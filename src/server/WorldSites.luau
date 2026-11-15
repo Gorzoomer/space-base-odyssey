@@ -68,7 +68,7 @@ local WorldSites = {}
 
 local HABITAT_CENTRE = Vector3.new(0, 0, 0)
 local LAB_CENTRE = Vector3.new(-55, 0, -35)
-local LAB_PAD = Vector3.new(-70, 0, -18)
+local LAB_PAD = Vector3.new(-74, 0, -21) -- Stage 10: clear of greenhouse dome A (now centred on the hub tube)
 local GARAGE_CENTRE = Vector3.new(95, 0, 75)
 local GARAGE_PAD = Vector3.new(70, 0, 44) -- in front of bay 1, clear of the larger bays
 local LANDING_PAD_CENTRE = Vector3.new(-110, 0, -180)
