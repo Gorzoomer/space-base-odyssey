@@ -33,6 +33,9 @@ local CLASS_BASE_FLUX: { [string]: number } = { A = 1e-8, B = 1e-7, C = 1e-6, M 
 local FALSE_ALARM_MIN_AGE_SECONDS = 2 * SECONDS_PER_DAY
 
 export type FlareSource = "live" | "archive"
+-- What the mission needs from the replayed flare: "particles" = a flare DONKI links to a particle
+-- storm, "none" = a big flare without one (a real false alarm), "any" = either.
+export type FlareWant = "particles" | "none" | "any"
 
 local SpaceWeatherService = {}
 
@@ -180,16 +183,20 @@ function SpaceWeatherService._parse(flrList: any, sepList: any, fetchedAt: strin
 end
 
 -- Chooses from `liveList` first, then the archive. `avoid` holds flare IDs already used this mission.
+-- The flare always keeps its real `particles` value: if no flare matches `want`, the closest honest
+-- choice is returned and the caller reads `particles` from it.
 function SpaceWeatherService._choose(
 	liveList: { ArchivedFlare },
-	requireParticles: boolean,
+	want: FlareWant,
 	rng: Random,
 	avoid: { [string]: boolean }?
 ): (ArchivedFlare, FlareSource)
 	local function filter(list: { ArchivedFlare }, minFlux: number?, skipUsed: boolean): { ArchivedFlare }
 		local pool = {}
 		for _, flare in list do
-			if requireParticles and not flare.particles then
+			if want == "particles" and not flare.particles then
+				continue
+			elseif want == "none" and flare.particles then
 				continue
 			end
 			if minFlux and (classFlux(flare.class) or 0) < minFlux then
@@ -213,7 +220,7 @@ function SpaceWeatherService._choose(
 			return archivePool[rng:NextInteger(1, #archivePool)], "archive"
 		end
 	end
-	-- Only reachable if the archive had no flare with particles; replay any archived flare.
+	-- Only reachable if the archive had no matching flare; replay any archived flare.
 	local all = SpaceWeatherArchive.FLARES
 	return all[rng:NextInteger(1, #all)], "archive"
 end
@@ -343,15 +350,16 @@ function SpaceWeatherService.onChanged(listener: (LiveWeather) -> ())
 end
 
 -- Pool: live flares of class M5 or stronger, plus every archived flare. Live flares are preferred when
--- one qualifies. `avoid` (optional) lists flare IDs already replayed this mission; they are skipped
--- while another choice exists.
+-- one matches `want`. `avoid` (optional) lists flare IDs already replayed this mission; they are
+-- skipped while another choice exists. The returned source is "live" only for a flare from this
+-- server's own live query.
 function SpaceWeatherService.pickFlare(
-	requireParticles: boolean,
+	want: FlareWant,
 	rng: Random,
 	avoid: { [string]: boolean }?
 ): (ArchivedFlare, FlareSource)
 	local liveList = if live and live.status == "live" then liveFlares else {}
-	return SpaceWeatherService._choose(liveList, requireParticles, rng, avoid)
+	return SpaceWeatherService._choose(liveList, want, rng, avoid)
 end
 
 -- ISO time of the live query, or nil when there is no live data.

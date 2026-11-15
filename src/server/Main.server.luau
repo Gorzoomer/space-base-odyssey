@@ -12,6 +12,7 @@ local MissionData = require(Shared:WaitForChild("MissionData"))
 local WorldBuilder = require(script.Parent:WaitForChild("WorldBuilder"))
 local CrewService = require(script.Parent:WaitForChild("CrewService"))
 local MissionService = require(script.Parent:WaitForChild("MissionService"))
+local ProgressService = require(script.Parent:WaitForChild("ProgressService"))
 local SpaceWeatherService = require(script.Parent:WaitForChild("SpaceWeatherService"))
 
 local RESPAWN_DELAY_SECONDS = 3
@@ -42,7 +43,10 @@ end
 
 local remotes = MissionService.createRemotes()
 CrewService.start(world, { playerStats = remotes.playerStats, message = remotes.message })
-MissionService.start(world, CrewService)
+-- Saved progress and the hidden collectibles (prompts, rewards) start before the mission loop so the
+-- mission select screen knows what is unlocked.
+ProgressService.start(world, { progress = remotes.progress, collected = remotes.collected, message = remotes.message })
+MissionService.start(world, CrewService, ProgressService)
 
 local function loadCharacter(player: Player)
 	if player.Parent == nil then

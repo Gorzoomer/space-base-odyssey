@@ -15,8 +15,7 @@ local Ui = require(script.Parent.Ui)
 
 local Hud = {}
 
-local EARTH_LINK_ICON = "📡"
-local FLARE_SOURCE_ICON = "🛰️"
+local ROLE = Ui.ROLE
 
 -- "2024-05-10T06:54Z" -> "2024-05-10".
 local function shortDate(value: string): string
@@ -46,16 +45,18 @@ function Hud.new(root: Frame): HudView
 		size = UDim2.fromScale(0.27, 0.07),
 		position = UDim2.fromScale(0.22, 0.13),
 		color = Ui.COLORS.panel,
-		transparency = 0.15,
+		transparency = 0.1,
 		stroke = 2,
 		maxText = 30,
+		icon = Ui.ICONS.timer,
+		tint = ROLE.accent,
 	})
 	local eventBanner = Ui.iconText(screen, {
 		name = "Event",
 		size = UDim2.fromScale(0.27, 0.07),
 		position = UDim2.fromScale(0.51, 0.13),
 		color = Ui.COLORS.panelLight,
-		transparency = 0.15,
+		transparency = 0.1,
 		stroke = 2,
 		maxText = 30,
 	})
@@ -68,7 +69,9 @@ function Hud.new(root: Frame): HudView
 		anchor = Vector2.new(0.5, 0),
 		color = Ui.COLORS.warning,
 		stroke = 5,
+		strokeColor = ROLE.background,
 		textColor = Ui.COLORS.textDark,
+		icon = Ui.ICONS.warning,
 		maxText = 64,
 		visible = false,
 	})
@@ -83,6 +86,8 @@ function Hud.new(root: Frame): HudView
 		transparency = 0.1,
 		stroke = 2,
 		maxText = 24,
+		icon = Ui.ICONS.satellite,
+		tint = ROLE.accent,
 		visible = false,
 	})
 	-- A wide, short pill: keep the icon narrow so the text gets the room.
@@ -101,6 +106,7 @@ function Hud.new(root: Frame): HudView
 		transparency = 0.15,
 		stroke = 2,
 		maxText = 22,
+		icon = Ui.ICONS.antenna,
 		visible = false,
 	})
 
@@ -111,7 +117,7 @@ function Hud.new(root: Frame): HudView
 		anchor = Vector2.new(0.5, 0),
 		color = Ui.COLORS.storm,
 		stroke = 5,
-		strokeColor = Color3.fromRGB(255, 255, 255),
+		strokeColor = ROLE.text,
 		maxText = 56,
 		outline = true,
 		visible = false,
@@ -124,26 +130,27 @@ function Hud.new(root: Frame): HudView
 		anchor = Vector2.new(0.5, 0),
 		color = Ui.COLORS.ice,
 		stroke = 3,
+		strokeColor = ROLE.background,
 		textColor = Ui.COLORS.textDark,
+		icon = Ui.ICONS.ice,
 		maxText = 32,
 		visible = false,
 	})
 
-	local suitPanel = Ui.frame(screen, {
+	local suitPanel = Ui.panel(screen, {
 		name = "Suit",
 		size = UDim2.fromScale(0.46, 0.1),
 		position = UDim2.fromScale(0.5, 0.86),
 		anchor = Vector2.new(0.5, 0),
-		color = Ui.COLORS.panel,
 		transparency = 0.1,
 		corner = 0.3,
-		stroke = 3,
 		visible = false,
 	})
 	local suitIcon = Ui.icon(suitPanel, Ui.ICONS.suit, {
-		size = UDim2.fromScale(0.13, 0.86),
-		position = UDim2.fromScale(0.02, 0.5),
+		size = UDim2.fromScale(0.11, 0.7),
+		position = UDim2.fromScale(0.03, 0.5),
 		anchor = Vector2.new(0, 0.5),
+		tint = ROLE.suit,
 	})
 	local suitName = Ui.label(suitPanel, {
 		name = "Name",
@@ -169,17 +176,25 @@ function Hud.new(root: Frame): HudView
 		meters.render()
 		suitName.Text = Store.t("ui.meter.suit")
 		if snap then
-			eventBanner.set(Ui.EVENT_ICONS[snap.todayEvent] or "", Store.t("event." .. snap.todayEvent))
+			local event = snap.todayEvent
+			eventBanner.set(Ui.EVENT_ICONS[event] or "", Store.t("event." .. event), Ui.EVENT_COLORS[event])
 		end
 		local shift = if snap then snap.shift else nil
 		earthLink.frame.Visible = shift ~= nil
 		if shift then
 			local linked = shift.antennaLinked
-			earthLink.set(EARTH_LINK_ICON, Store.t(if linked then "ui.earth_link_on" else "ui.earth_link_off"))
-			earthLink.frame.BackgroundColor3 = if linked then Ui.COLORS.go else Ui.COLORS.panel
+			local background = if linked then ROLE.accent else Ui.COLORS.panel
+			local foreground = Ui.contrastText(background)
+			earthLink.set(
+				Ui.ICONS.antenna,
+				Store.t(if linked then "ui.earth_link_on" else "ui.earth_link_off"),
+				if linked then foreground else ROLE.textDim
+			)
+			earthLink.label.TextColor3 = foreground
+			earthLink.frame.BackgroundColor3 = background
 		end
 		if stats then
-			iceBadge.set(Ui.ICONS.ice, Store.t("ui.carrying_ice"))
+			iceBadge.set(Ui.ICONS.ice, Store.t("ui.carrying_ice"), Ui.COLORS.textDark)
 			iceBadge.frame.Visible = stats.carryingIce
 
 			local suitShown = (not stats.inside) or stats.suitO2 < suitMax
@@ -187,8 +202,8 @@ function Hud.new(root: Frame): HudView
 			local percent = math.clamp(stats.suitO2 / suitMax * 100, 0, 100)
 			local zone = Simulation.meterZone(percent, "air", MissionData)
 			local shown = math.floor(stats.suitO2 + 0.5)
-			suitBar.set(stats.suitO2 / suitMax, Ui.zoneColor(zone), `{shown} {Ui.ZONE_ICONS[zone]}`)
-			suitIcon.Text = if stats.inside then Ui.ICONS.shelter else Ui.ICONS.suit
+			suitBar.set(stats.suitO2 / suitMax, Ui.zoneColor(zone), tostring(shown), Ui.ZONE_ICONS[zone])
+			Ui.setIcon(suitIcon, if stats.inside then Ui.ICONS.home else Ui.ICONS.suit)
 		else
 			iceBadge.frame.Visible = false
 			suitPanel.Visible = false
@@ -210,6 +225,8 @@ function Hud.new(root: Frame): HudView
 		local now = workspace:GetServerTimeNow()
 		local secondsLeft = math.max(0, math.ceil(shift.endsAt - now))
 		timer.set(Ui.ICONS.timer, Store.t("ui.shift_time", { seconds = secondsLeft }))
+		-- Tutorials never end on the clock (the server waits for the objectives): hide a clock at zero.
+		timer.frame.Visible = not (Store.missionKind() == "Tutorial" and secondsLeft <= 0)
 
 		-- A "false alarm" flare brings no particles: the warning still shows, the storm never does.
 		local particlesExpected = not (snap.spaceWeather and snap.spaceWeather.particles == false)
@@ -227,24 +244,24 @@ function Hud.new(root: Frame): HudView
 		countdown.frame.Visible = warning
 		if warning and arrivesAt then
 			local seconds = math.max(0, math.ceil(arrivesAt - now))
-			countdown.set(Ui.ICONS.warning, Store.t("ui.storm_in", { seconds = seconds }))
+			countdown.set(Ui.ICONS.warning, Store.t("ui.storm_in", { seconds = seconds }), Ui.COLORS.textDark)
 			-- Pulse twice a second to grab attention (text and icon carry the meaning, not the colour).
 			local pulse = math.floor(now * 2) % 2 == 0
-			countdown.frame.BackgroundColor3 = if pulse then Ui.COLORS.warning else Ui.COLORS.accent
+			countdown.frame.BackgroundColor3 = if pulse then Ui.COLORS.warning else Ui.COLORS.star
 		end
 
 		local weather = snap.spaceWeather
 		flareSource.frame.Visible = warning and weather ~= nil
 		if warning and weather then
 			local key = if weather.source == "live" then "ui.flare_source_live" else "ui.flare_source_archive"
-			flareSource.set(FLARE_SOURCE_ICON, Store.t(key, { date = shortDate(weather.flareDate) }))
+			flareSource.set(Ui.ICONS.satellite, Store.t(key, { date = shortDate(weather.flareDate) }))
 		end
 
 		stormNow.frame.Visible = storming
 		if storming then
 			local stats = Store.getStats()
-			local glyph = if stats and stats.sheltered then Ui.ICONS.shelter else Ui.ICONS.storm
-			stormNow.set(glyph, Store.t("ui.storm_now"))
+			local image = if stats and stats.sheltered then Ui.ICONS.shelter else Ui.ICONS.storm
+			stormNow.set(image, Store.t("ui.storm_now"), ROLE.text)
 		end
 	end
 

@@ -23,9 +23,11 @@ local ROW_GAP = 8
 local LIST_PADDING = 12
 local SCROLL_BAR = 16
 
-local SOURCES_ICON = "🛰️"
-local CLOSE_ICON = "✖️"
-local SOURCE_ICON = "📚"
+local ICONS = Ui.Icons
+local ROLE = Ui.ROLE
+local SOURCES_ICON = ICONS.satellite
+local CLOSE_ICON = ICONS.close
+local SOURCE_ICON = ICONS.book
 
 local Sources = {}
 
@@ -75,7 +77,8 @@ end
 
 type Fact = {
 	key: string,
-	icon: string,
+	icon: string, -- image from Icons.luau
+	tint: Color3,
 	params: { [string]: string | number },
 }
 
@@ -83,33 +86,65 @@ type Fact = {
 local gravityPercent = math.floor(REAL.MOON_GRAVITY_MS2 / REAL.EARTH_GRAVITY_MS2 * 1000 + 0.5) / 10
 
 local FACTS: { Fact } = {
-	{ key = "fact.gravity", icon = "🌙", params = { percent = formatNumber(gravityPercent, 1) } },
-	{ key = "fact.light_delay", icon = "📡", params = { moon = formatNumber(REAL.MOON_EARTH_LIGHT_TIME_S, 1) } },
+	{ key = "fact.gravity", icon = ICONS.calm, tint = ROLE.text, params = { percent = formatNumber(gravityPercent, 1) } },
+	{
+		key = "fact.light_delay",
+		icon = ICONS.antenna,
+		tint = ROLE.accent,
+		params = { moon = formatNumber(REAL.MOON_EARTH_LIGHT_TIME_S, 1) },
+	},
 	{
 		key = "fact.mars_delay",
-		icon = "🔴",
+		icon = ICONS.planet,
+		tint = ROLE.warning,
 		params = {
 			min = formatNumber(REAL.MARS_LIGHT_TIME_MIN_MIN, 0),
 			max = formatNumber(REAL.MARS_LIGHT_TIME_MAX_MIN, 0),
 		},
 	},
-	{ key = "fact.oxygen", icon = "💨", params = { kg = formatNumber(REAL.O2_PER_CREW_KG_DAY, 1) } },
-	{ key = "fact.water", icon = "💧", params = { kg = formatNumber(REAL.WATER_PER_CREW_KG_DAY, 1) } },
-	{ key = "fact.food", icon = "🍎", params = { kcal = formatNumber(REAL.FOOD_KCAL_PER_DAY, 0) } },
-	{ key = "fact.lettuce", icon = "🥬", params = { days = formatNumber(REAL.LETTUCE_DAYS_TO_HARVEST_ISS, 0) } },
-	{ key = "fact.dose_moon", icon = "☢️", params = { msv = formatNumber(REAL.LUNAR_SURFACE_DOSE_MSV_DAY, 2) } },
-	{ key = "fact.dose_earth", icon = "🌍", params = { msv = formatNumber(REAL.EARTH_SURFACE_DOSE_MSV_YEAR, 1) } },
-	{ key = "fact.shelter", icon = "🛡️", params = {} },
-	{ key = "fact.sep", icon = "⏱️", params = { min = formatNumber(REAL.SEP_ARRIVAL_MINUTES, 0) } },
+	{ key = "fact.oxygen", icon = ICONS.air, tint = ROLE.air, params = { kg = formatNumber(REAL.O2_PER_CREW_KG_DAY, 1) } },
+	{ key = "fact.water", icon = ICONS.drop, tint = ROLE.accent, params = { kg = formatNumber(REAL.WATER_PER_CREW_KG_DAY, 1) } },
+	{ key = "fact.food", icon = ICONS.food, tint = ROLE.food, params = { kcal = formatNumber(REAL.FOOD_KCAL_PER_DAY, 0) } },
+	{
+		key = "fact.lettuce",
+		icon = ICONS.greenhouse,
+		tint = ROLE.good,
+		params = { days = formatNumber(REAL.LETTUCE_DAYS_TO_HARVEST_ISS, 0) },
+	},
+	{
+		key = "fact.dose_moon",
+		icon = ICONS.dose,
+		tint = ROLE.dose,
+		params = { msv = formatNumber(REAL.LUNAR_SURFACE_DOSE_MSV_DAY, 2) },
+	},
+	{
+		key = "fact.dose_earth",
+		icon = ICONS.earth,
+		tint = ROLE.accent,
+		params = { msv = formatNumber(REAL.EARTH_SURFACE_DOSE_MSV_YEAR, 1) },
+	},
+	{ key = "fact.shelter", icon = ICONS.shield, tint = ROLE.warning, params = {} },
+	{ key = "fact.sep", icon = ICONS.clock, tint = ROLE.warning, params = { min = formatNumber(REAL.SEP_ARRIVAL_MINUTES, 0) } },
 	{
 		key = "fact.sunlight",
-		icon = "🌞",
+		icon = ICONS.panel,
+		tint = ROLE.star,
 		params = { days = formatNumber(REAL.SHACKLETON_RIM_SUNLIT_DAYS_PER_YEAR, 0) },
 	},
-	{ key = "fact.cold", icon = "❄️", params = { k = formatNumber(REAL.COLDEST_LUNAR_TEMP_K, 0) } },
-	{ key = "fact.ice", icon = "🧊", params = { percent = formatNumber(REAL.LCROSS_WATER_ICE_PERCENT, 1) } },
-	{ key = "fact.flare_vs_storm", icon = "☀️", params = {} },
-	{ key = "fact.career_limit", icon = "🚀", params = { msv = formatNumber(REAL.CAREER_DOSE_LIMIT_MSV, 0) } },
+	{ key = "fact.cold", icon = ICONS.ice, tint = ROLE.accent, params = { k = formatNumber(REAL.COLDEST_LUNAR_TEMP_K, 0) } },
+	{
+		key = "fact.ice",
+		icon = ICONS.drop,
+		tint = ROLE.accent,
+		params = { percent = formatNumber(REAL.LCROSS_WATER_ICE_PERCENT, 1) },
+	},
+	{ key = "fact.flare_vs_storm", icon = ICONS.storm, tint = ROLE.warning, params = {} },
+	{
+		key = "fact.career_limit",
+		icon = ICONS.rocket,
+		tint = ROLE.reward,
+		params = { msv = formatNumber(REAL.CAREER_DOSE_LIMIT_MSV, 0) },
+	},
 }
 
 local SOURCE_KEYS: { string } = {
@@ -127,7 +162,7 @@ local SOURCE_KEYS: { string } = {
 
 type TextRow = {
 	frame: Frame,
-	icon: TextLabel,
+	icon: ImageLabel,
 	label: TextLabel,
 	height: number,
 }
@@ -143,15 +178,18 @@ function Sources.new(root: Frame): SourcesView
 	})
 	screen.Active = true -- blocks taps from reaching the screen underneath
 
-	local title = Ui.label(screen, {
+	local title = Ui.iconText(screen, {
 		name = "Title",
 		size = UDim2.fromScale(0.6, 0.09),
 		position = UDim2.fromScale(0.5, 0.02),
 		anchor = Vector2.new(0.5, 0),
 		textColor = Ui.COLORS.accent,
-		maxText = 48,
-		outline = true,
+		icon = SOURCES_ICON,
+		maxText = 44,
 	})
+	title.icon.Size = UDim2.fromScale(0.08, 0.8)
+	title.label.Size = UDim2.fromScale(0.86, 0.9)
+	title.label.Position = UDim2.fromScale(0.12, 0.5)
 
 	local list = Instance.new("ScrollingFrame")
 	list.Name = "List"
@@ -166,7 +204,8 @@ function Sources.new(root: Frame): SourcesView
 	list.ScrollBarImageColor3 = Ui.COLORS.accent
 	list.CanvasSize = UDim2.new(0, 0, 0, 0)
 	list.ZIndex = 2
-	Ui.stroke(list, 3)
+	Ui.corner(list, 0.04)
+	Ui.stroke(list)
 	list.Parent = screen
 
 	local padding = Instance.new("UIPadding")
@@ -185,7 +224,14 @@ function Sources.new(root: Frame): SourcesView
 	local rowCount = 0
 	local allRows: { TextRow } = {}
 
-	local function addRow(icon: string, height: number, color: Color3, textColor: Color3, maxText: number): TextRow
+	local function addRow(
+		icon: string,
+		tint: Color3,
+		height: number,
+		color: Color3,
+		textColor: Color3,
+		maxText: number
+	): TextRow
 		rowCount += 1
 		local frame = Ui.frame(list, {
 			name = `Row{rowCount}`,
@@ -197,13 +243,13 @@ function Sources.new(root: Frame): SourcesView
 		})
 		local iconLabel = Ui.icon(frame, icon, {
 			name = "Icon",
-			size = UDim2.new(0, height - 8, 1, -8),
-			position = UDim2.new(0, 6, 0.5, 0),
+			size = UDim2.new(0, height - 18, 1, -18),
+			position = UDim2.new(0, 12, 0.5, 0),
 			anchor = Vector2.new(0, 0.5),
-			maxText = 40,
+			tint = tint,
 			zindex = 4,
 		})
-		local label = Ui.label(frame, {
+		local label = Ui.body(frame, {
 			name = "Text",
 			size = UDim2.new(1, -(height + 14), 1, -8),
 			position = UDim2.new(0, height + 4, 0.5, 0),
@@ -219,19 +265,20 @@ function Sources.new(root: Frame): SourcesView
 	end
 
 	-- Space weather first: what the server knows right now, then the saved archive.
-	local weatherStatus = addRow(SOURCES_ICON, ROW_HEIGHT, Ui.COLORS.panelLight, Ui.COLORS.accent, 28)
-	local weatherChecked = addRow("🕒", ROW_HEIGHT, Ui.COLORS.panelLight, Ui.COLORS.text, 28)
-	local weatherLatest = addRow("☀️", ROW_HEIGHT, Ui.COLORS.panelLight, Ui.COLORS.text, 28)
-	local weatherArchive = addRow("💾", ROW_HEIGHT, Ui.COLORS.panelLight, Ui.COLORS.text, 28)
+	local panelLight = Ui.COLORS.panelLight
+	local weatherStatus = addRow(SOURCES_ICON, ROLE.accent, ROW_HEIGHT, panelLight, Ui.COLORS.accent, 24)
+	local weatherChecked = addRow(ICONS.clock, ROLE.text, ROW_HEIGHT, panelLight, Ui.COLORS.text, 24)
+	local weatherLatest = addRow(ICONS.storm, ROLE.warning, ROW_HEIGHT, panelLight, Ui.COLORS.text, 24)
+	local weatherArchive = addRow(ICONS.data, ROLE.textDim, ROW_HEIGHT, panelLight, Ui.COLORS.text, 24)
 
 	local factRows: { [string]: TextRow } = {}
 	for _, fact in FACTS do
-		factRows[fact.key] = addRow(fact.icon, ROW_HEIGHT, Ui.COLORS.panelLight, Ui.COLORS.text, 28)
+		factRows[fact.key] = addRow(fact.icon, fact.tint, ROW_HEIGHT, panelLight, Ui.COLORS.text, 24)
 	end
 
 	local sourceRows: { [string]: TextRow } = {}
 	for _, key in SOURCE_KEYS do
-		sourceRows[key] = addRow(SOURCE_ICON, SOURCE_ROW_HEIGHT, Ui.COLORS.panel, Ui.COLORS.textSoft, 22)
+		sourceRows[key] = addRow(SOURCE_ICON, ROLE.textDim, SOURCE_ROW_HEIGHT, Ui.COLORS.panel, Ui.COLORS.textSoft, 20)
 	end
 
 	-- The canvas height is computed from the fixed row heights (AutomaticCanvasSize is unreliable
@@ -255,8 +302,8 @@ function Sources.new(root: Frame): SourcesView
 		position = UDim2.fromScale(0.5, 0.845),
 		anchor = Vector2.new(0.5, 0),
 		color = Ui.COLORS.go,
-		stroke = 4,
-		maxText = 48,
+		icon = CLOSE_ICON,
+		maxText = 44,
 		zindex = 2,
 	}, function()
 		screen.Visible = false
@@ -268,7 +315,7 @@ function Sources.new(root: Frame): SourcesView
 		local snap = Store.getSnapshot()
 		local live: Store.LiveWeather? = if snap then snap.liveWeather else nil
 		if live and live.status == "live" then
-			weatherStatus.icon.Text = SOURCES_ICON
+			weatherStatus.icon.Image = SOURCES_ICON
 			weatherStatus.label.Text = Store.t("ui.weather_live", { n = live.flaresLast30Days or 0 })
 			-- Live data always says when it was fetched.
 			if live.fetchedAt then
@@ -286,7 +333,7 @@ function Sources.new(root: Frame): SourcesView
 			end
 		else
 			-- Still fetching, HttpService off, or the request failed: say so, never pretend it is live.
-			weatherStatus.icon.Text = "📦"
+			weatherStatus.icon.Image = ICONS.data
 			weatherStatus.label.Text = Store.t("ui.weather_offline")
 			weatherChecked.frame.Visible = false
 			weatherLatest.frame.Visible = false
@@ -296,10 +343,10 @@ function Sources.new(root: Frame): SourcesView
 	end
 
 	local function render()
-		title.Text = `{SOURCES_ICON} {Store.t("ui.sources_title")}`
-		closeButton.Text = `{CLOSE_ICON} {Store.t("ui.close")}`
+		title.label.Text = Store.t("ui.sources_title")
+		Ui.setButton(closeButton, Store.t("ui.close"))
 		for _, button in buttons do
-			button.Text = `{SOURCES_ICON} {Store.t("ui.sources_button")}`
+			Ui.setButton(button, Store.t("ui.sources_button"))
 		end
 		for _, fact in FACTS do
 			factRows[fact.key].label.Text = Store.t(fact.key, fact.params)
@@ -327,11 +374,13 @@ function Sources.new(root: Frame): SourcesView
 	local function addButton(parent: Instance, props: Ui.Props): TextButton
 		local withDefaults: Ui.Props = table.clone(props)
 		withDefaults.name = props.name or "SourcesButton"
-		withDefaults.color = props.color or Ui.COLORS.panelLight
-		withDefaults.stroke = props.stroke or 3
+		withDefaults.color = props.color or Ui.COLORS.secondary
+		withDefaults.strokeColor = props.strokeColor or ROLE.accent
+		withDefaults.icon = props.icon or SOURCES_ICON
+		withDefaults.tint = props.tint or ROLE.accent
 		withDefaults.maxText = props.maxText or 24
 		local button = Ui.button(parent, withDefaults, open)
-		button.Text = `{SOURCES_ICON} {Store.t("ui.sources_button")}`
+		Ui.setButton(button, Store.t("ui.sources_button"))
 		table.insert(buttons, button)
 		return button
 	end

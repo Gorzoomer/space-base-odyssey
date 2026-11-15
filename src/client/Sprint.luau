@@ -40,12 +40,11 @@ function Sprint.new(root: Frame): SprintView
 
 	local button: TextButton
 	local function render()
-		local glyph = if running then Ui.ICONS.run else Ui.ICONS.walk
-		button.Text = `{glyph} {Store.t("ui.run")}`
-		Ui.setButtonLook(button, true, if running then Ui.COLORS.go else Ui.COLORS.panelLight)
+		Ui.setButton(button, Store.t("ui.run"), Ui.ICONS.run)
+		Ui.setButtonLook(button, true, if running then Ui.COLORS.go else Ui.COLORS.secondary)
 		local stroke = button:FindFirstChildOfClass("UIStroke")
 		if stroke then
-			stroke.Color = if running then Color3.fromRGB(255, 255, 255) else Ui.COLORS.outline
+			stroke.Color = if running then Ui.ROLE.text else Ui.ROLE.stroke
 		end
 	end
 
@@ -61,7 +60,8 @@ function Sprint.new(root: Frame): SprintView
 		size = UDim2.fromScale(0.2, 0.14),
 		position = UDim2.fromScale(0.97, 0.5),
 		anchor = Vector2.new(1, 0.5),
-		color = Ui.COLORS.panelLight,
+		color = Ui.COLORS.secondary,
+		icon = Ui.ICONS.run,
 		maxText = 40,
 		zindex = 6,
 		visible = false,

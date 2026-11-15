@@ -106,20 +106,32 @@ local function trimToSupply(state: MissionState)
 	end
 end
 
-function Simulation.newMission(data: any, seed: number?): MissionState
+-- Optional overrides used by tutorial and story missions (src/shared/Missions.luau).
+export type MissionConfig = {
+	totalDays: number?, -- default data.MISSION.TOTAL_DAYS
+	schedule: { EventId }?, -- default: the fixed onboarding days, then the shuffled events
+}
+
+function Simulation.newMission(data: any, seed: number?, config: MissionConfig?): MissionState
 	local schedule: { EventId } = {}
-	for _, event in data.EVENTS.FIXED do
-		table.insert(schedule, event)
+	if config and config.schedule then
+		schedule = table.clone(config.schedule)
+	else
+		for _, event in data.EVENTS.FIXED do
+			table.insert(schedule, event)
+		end
+		local rest = if seed then shuffled(data.EVENTS.SHUFFLED, seed) else table.clone(data.EVENTS.SHUFFLED)
+		for _, event in rest do
+			table.insert(schedule, event)
+		end
 	end
-	local rest = if seed then shuffled(data.EVENTS.SHUFFLED, seed) else table.clone(data.EVENTS.SHUFFLED)
-	for _, event in rest do
-		table.insert(schedule, event)
-	end
+	local totalDays = if config and config.totalDays then config.totalDays else data.MISSION.TOTAL_DAYS
+	assert(totalDays >= 1 and totalDays == math.floor(totalDays), "totalDays must be a whole number >= 1")
 
 	local cleanArrays = data.POWER.ARRAYS
 	return {
 		day = 0,
-		totalDays = data.MISSION.TOTAL_DAYS,
+		totalDays = totalDays,
 		schedule = schedule,
 		todayEvent = "None",
 		allocation = { LifeSupport = 2, Greenhouse = 1, Science = 1 },

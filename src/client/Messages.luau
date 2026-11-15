@@ -54,41 +54,52 @@ local function friendlyParams(params: { [string]: string | number }?): { [string
 end
 
 function Messages.new(root: Frame): MessagesView
-	local bubble = Ui.frame(root, {
+	-- C.A.R.L. speaks in cyan (systems and guidance): raised night panel, cyan border and name tag.
+	local bubble = Ui.panel(root, {
 		name = "CarlBubble",
 		size = MENU_SIZE,
 		position = MENU_POSITION,
-		color = Ui.COLORS.bubble,
+		color = Ui.ROLE.panelRaised,
 		corner = 0.2,
 		stroke = 4,
-		strokeColor = Ui.COLORS.plus,
+		strokeColor = Ui.ROLE.accent,
 		zindex = 50,
 		visible = false,
 	})
-	local icon = Ui.icon(bubble, Ui.ICONS.robot, {
-		size = UDim2.fromScale(0.22, 0.6),
-		position = UDim2.fromScale(0.03, 0.5),
+	local iconBadge = Ui.frame(bubble, {
+		name = "IconBadge",
+		size = UDim2.fromScale(0.2, 0.56),
+		position = UDim2.fromScale(0.04, 0.55),
 		anchor = Vector2.new(0, 0.5),
+		color = Ui.ROLE.background,
+		corner = 0.5,
 		aspect = 1,
 		zindex = 51,
 	})
-	icon.Name = "Icon"
+	Ui.icon(iconBadge, Ui.ICONS.robot, {
+		name = "Icon",
+		size = UDim2.fromScale(0.72, 0.72),
+		position = UDim2.fromScale(0.5, 0.5),
+		anchor = Vector2.new(0.5, 0.5),
+		tint = Ui.ROLE.accent,
+		zindex = 52,
+	})
 	local nameTag = Ui.label(bubble, {
 		name = "Name",
 		size = UDim2.fromScale(0.4, 0.3),
 		position = UDim2.fromScale(0.25, -0.12),
-		color = Ui.COLORS.plus,
-		corner = 0.4,
+		color = Ui.ROLE.accent,
+		textColor = Ui.COLORS.textDark,
+		corner = 0.5,
 		maxText = 26,
 		zindex = 52,
 	})
-	local text = Ui.label(bubble, {
+	local text = Ui.body(bubble, {
 		name = "Text",
-		size = UDim2.fromScale(0.7, 0.72),
-		position = UDim2.fromScale(0.27, 0.2),
-		textColor = Ui.COLORS.textDark,
-		alignX = Enum.TextXAlignment.Left,
-		maxText = 30,
+		size = UDim2.fromScale(0.68, 0.72),
+		position = UDim2.fromScale(0.28, 0.2),
+		textColor = Ui.ROLE.text,
+		maxText = 26,
 		zindex = 51,
 	})
 

@@ -48,6 +48,7 @@ Every number and its source is listed in [DATA_SOURCES.md](DATA_SOURCES.md).
 - [x] Stage 1: playable mission loop on the Moon
 - [x] Stage 2: live NASA data, real-data screen, Earth link
 - [x] Stage 3: base reacts to decisions, guided first days, task markers, C.A.R.L. drone
+- [x] Stage 4: training and story missions, hidden secrets, visual identity with icons
 - [ ] Playtests with people outside the team
 - [ ] Public release
 
@@ -71,6 +72,7 @@ Tests: `lune run tests/balance` and `lune run tests/localization` ([Lune](https:
 | `src/client` | Interface and guidance (synced to `StarterPlayer.StarterPlayerScripts.Client`) |
 | `tests` | Balance and localization tests |
 | `DATA_SOURCES.md` | Every real-world number with its source |
+| `THIRD_PARTY_NOTICES.md` | Licences of third-party assets (Tabler Icons) |
 | `DEVELOPMENT.md` | Development log: decisions, tests, use of AI |
 | `SUBMISSION.md` | Drafts of the Space Apps project page |
 

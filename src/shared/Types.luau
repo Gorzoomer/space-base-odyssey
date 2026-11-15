@@ -5,6 +5,7 @@
 -- All player-facing text travels as localization keys; clients translate (see Localization).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
+local Missions = require(script.Parent.Missions)
 local Simulation = require(script.Parent.Simulation)
 
 export type SystemId = Simulation.SystemId
@@ -14,6 +15,8 @@ export type Outcome = Simulation.Outcome
 export type Allocation = Simulation.Allocation
 export type DayRecord = Simulation.DayRecord
 export type ShiftResult = Simulation.ShiftResult
+export type MissionKind = Missions.MissionKind
+export type ObjectiveId = Missions.ObjectiveId
 
 -- Briefing: lobby and guided intro. Planning: power board, no clock. Shift: real-time work outside.
 -- Report: timeline of the mission with causes and stars.
@@ -60,6 +63,40 @@ export type ShiftState = {
 	iceCoresDelivered: number,
 }
 
+-- One objective of the running mission. textKey is "obj.<id>"; objectives whose text shows the
+-- target ("Finish {n} days": complete_days, deliver_ice_total, stars_at_least) take target as {n}.
+export type ObjectiveState = {
+	id: string,
+	textKey: string,
+	progress: number,
+	target: number,
+	done: boolean,
+}
+
+-- The mission being played (nil in Briefing, the mission select screen).
+export type MissionInfo = {
+	id: string,
+	kind: string, -- MissionKind
+	titleKey: string, -- "mission.<id>.title"
+	objectives: { ObjectiveState },
+}
+
+-- Set in Report. missingKeys are the textKeys ("obj.<id>") of objectives that were not met.
+export type MissionResult = {
+	success: boolean,
+	missingKeys: { string },
+}
+
+-- One card on the mission select screen. Unlocked / completed use every player in the server.
+export type MissionCard = {
+	id: string,
+	kind: string, -- MissionKind
+	titleKey: string,
+	icon: string, -- key in Icons
+	unlocked: boolean,
+	completed: boolean,
+}
+
 export type Snapshot = {
 	phase: Phase,
 	day: number,
@@ -77,6 +114,22 @@ export type Snapshot = {
 	shift: ShiftState?,
 	spaceWeather: SpaceWeather?,
 	liveWeather: LiveWeather?,
+	mission: MissionInfo?,
+	missionResult: MissionResult?,
+	missions: { MissionCard },
+}
+
+-- Saved progress of one player, sent only to that player (Remotes.PROGRESS).
+export type Progress = {
+	completed: { [string]: boolean }, -- mission ids
+	collectibles: { [string]: boolean }, -- "mini_earth" | "laika" | "cheese" | "mars_potato"
+}
+
+-- Sent to one player right after a collectible pickup (Remotes.COLLECTED).
+export type Collected = {
+	id: string,
+	isNew: boolean,
+	allFound: boolean, -- the player now owns all four
 }
 
 -- Per-player data, sent only to that player.
@@ -90,15 +143,18 @@ export type PlayerStats = {
 -- Client -> server requests.
 export type Action =
 	{ type: "SetCells", system: SystemId, cells: number }
-	| { type: "StartMission" }
+	-- missionId nil = the next unlocked mission. Allowed in Briefing and Report ("Try again").
+	| { type: "StartMission", missionId: string? }
 	| { type: "StartShift" }
-	| { type: "Restart" }
+	| { type: "Restart" } -- Report -> Briefing (mission select)
 	| { type: "SetLanguage", language: "en" | "es" }
 	-- Owner-only, Studio or the place owner: deterministic testing and video recording.
 	| { type: "DebugForceEvent", event: EventId }
 	| { type: "DebugSkipToDay", day: number }
 	| { type: "DebugSeed", seed: number }
 	| { type: "DebugEndShift" }
+	| { type: "DebugUnlockAll" } -- every mission unlocked for this server session (not saved)
+	| { type: "DebugGrantCollectible", id: string }
 
 -- Names of the RemoteEvents the server creates in ReplicatedStorage.Remotes.
 local Remotes = table.freeze({
@@ -107,6 +163,8 @@ local Remotes = table.freeze({
 	PLAYER_STATS = "PlayerStats", -- server -> one client: PlayerStats
 	MESSAGE = "AssistantMessage", -- server -> client: TextRef from the C.A.R.L. assistant
 	ACTION = "Action", -- client -> server: Action
+	PROGRESS = "Progress", -- server -> one client: Progress (on join and on change)
+	COLLECTED = "Collected", -- server -> one client: Collected (right after a pickup)
 })
 
 return table.freeze({

@@ -24,9 +24,13 @@ type Crew = {
 	countRefill: boolean, -- suit dropped below the refill threshold; count it when full again
 	rescueTopUp: boolean, -- the next top-up after a rescue is already counted
 	lowWarned: boolean,
+	measured: boolean, -- inside / sheltered hold a real reading for the current character
 	lastSent: PlayerStats?,
 	connections: { RBXScriptConnection },
 }
+
+-- Called when a player's measured zone changes (never for the first reading after a spawn).
+export type ZoneListener = (player: Player, inside: boolean, sheltered: boolean, wasInside: boolean, wasSheltered: boolean) -> ()
 
 type Remotes = {
 	playerStats: RemoteEvent,
@@ -51,6 +55,7 @@ local remotes: Remotes? = nil
 local shiftActive = false
 local refillCount = 0
 local started = false
+local zoneListeners: { ZoneListener } = {}
 
 local function insideBox(zone: BasePart?, position: Vector3): boolean
 	if zone == nil then
@@ -122,6 +127,7 @@ local function rescue(player: Player, crew: Crew)
 	local character = player.Character
 	if character and spawnLocation then
 		character:PivotTo(spawnLocation.CFrame + RESCUE_OFFSET)
+		crew.measured = false -- a teleport, not a walk back inside
 	end
 	crew.suitO2 = SUIT.RESCUE_REFILL
 	crew.carryingIce = false
@@ -132,17 +138,35 @@ local function rescue(player: Player, crew: Crew)
 	sendMessage(player, "carl.rescued")
 end
 
+local function notifyZone(player: Player, inside: boolean, sheltered: boolean, wasInside: boolean, wasSheltered: boolean)
+	for _, listener in zoneListeners do
+		local ok, err = pcall(listener, player, inside, sheltered, wasInside, wasSheltered)
+		if not ok then
+			warn(`[SpaceBaseOdyssey] zone listener failed: {err}`)
+		end
+	end
+end
+
 local function updateCrew(player: Player, crew: Crew, dt: number)
 	local root = getRoot(player)
 	if root == nil then
+		-- No living character: no reading. The next spawn starts a fresh measurement, so dying or
+		-- respawning is never reported as walking in or out.
 		crew.inside = false
 		crew.sheltered = false
+		crew.measured = false
 		return
 	end
 
 	local position = root.Position
+	local wasInside, wasSheltered = crew.inside, crew.sheltered
 	crew.sheltered = insideBox(shelterZone, position)
 	crew.inside = crew.sheltered or insideBox(habitatZone, position)
+	if not crew.measured then
+		crew.measured = true
+	elseif wasInside ~= crew.inside or wasSheltered ~= crew.sheltered then
+		notifyZone(player, crew.inside, crew.sheltered, wasInside, wasSheltered)
+	end
 
 	if crew.inside then
 		if crew.suitO2 < SUIT.MAX then
@@ -203,6 +227,7 @@ local function addPlayer(player: Player)
 		countRefill = false,
 		rescueTopUp = false,
 		lowWarned = false,
+		measured = false,
 		lastSent = nil,
 		connections = {},
 	}
@@ -213,6 +238,7 @@ local function addPlayer(player: Player)
 			-- A fresh character starts with a full suit and empty hands.
 			fillSuit(crew)
 			crew.carryingIce = false
+			crew.measured = false
 		end)
 	)
 end
@@ -308,6 +334,23 @@ function CrewService.setCarrying(player: Player, carrying: boolean)
 	end
 	crew.carryingIce = carrying
 	sendStatsIfChanged(player, crew)
+end
+
+-- Inside / outside and shelter transitions. go_outside, return_inside and reach_shelter objectives
+-- are counted from these (MissionService).
+function CrewService.onZoneChanged(listener: ZoneListener)
+	table.insert(zoneListeners, listener)
+end
+
+-- Players whose living character is inside the regolith shelter right now.
+function CrewService.shelteredPlayers(): { Player }
+	local list = {}
+	for player, crew in crews do
+		if player.Parent ~= nil and crew.sheltered then
+			table.insert(list, player)
+		end
+	end
+	return list
 end
 
 -- Returns the suit refills counted since the last call (or since the shift started) and resets it.

@@ -95,6 +95,45 @@ Tested in Studio:
 - F9 and F8 by key press.
 - A 15 s storm warning without the antenna, with the drone beam to the shelter and the replay label for the real X3.9 flare of 10 May 2024.
 
+**About 17:15 – Team review of the build.** The team asked for:
+- A real visual identity and custom icons instead of emoji.
+- Fixes for unpleasant graphics: the habitat was washed out.
+- Tutorial missions and a story mode with a partial ending.
+- Truly hidden secrets.
+
+The team chose:
+- The "Lunar Sunrise" palette.
+- The open Tabler icon set, recoloured.
+- Their own four original collectibles (Mini Earth, Laika, cheese with a helmet, Mars potato) as hidden secrets. Each gives a reward, and all four open a fifth secret.
+
+**18:42 – Stage 4: missions, secrets and identity.**
+- **Visual identity:**
+  - `Theme.luau` holds the palette and semantic colours.
+  - 45 Tabler icons (MIT) uploaded and tinted in game; no emoji left in the UI.
+- **Lighting:**
+  - The template's second bloom and blur were removed and the interior lights limited, so the habitat is readable.
+  - Outdoor light was rebalanced: grey regolith, hard shadows, black sky.
+- **Missions:**
+  - Four training missions: first steps, power board, base tasks, storm drill.
+  - Three story chapters: arrival, storm season, something breaks.
+  - The third chapter ends partially ("Mars is next... and secrets remain").
+  - Free play unlocks after the story.
+  - Progress is saved with DataStores once the game is published.
+- **Secrets:**
+  - Mini Earth on hidden ledges behind the antenna.
+  - Laika in a lunar lava tube. Real science: LRO imaged lunar pits.
+  - Cheese in a niche in the darkest corner of the crater.
+  - Mars potato in a crawl space under the habitat.
+
+  Each shows a myth-versus-science card and gives a reward: Earth skin for C.A.R.L., a magenta backpack, cheese-yellow rover paint, the team flag. All four open a hidden observatory with a telescope pointed at Mars ("Next mission: Mars").
+
+Tested in Studio:
+- The mission select screen.
+- Training 1 completed by walking out and back in.
+- Laika picked up in the lava tube with a real key press, then the card.
+- The observatory door opening only after all four finds, with the teaser localized.
+- The backpack and team flag rewards.
+
 ## Decisions
 
 | Decision | Who decided | Why |
@@ -107,6 +146,9 @@ Tested in Studio:
 | Shelter as a decision, not a power sink | Team, on AI recommendation | Scientific accuracy: mass protects, not power. |
 | Real DONKI flares, replays labelled as replays | Team, on AI recommendation | The challenge forbids presenting static data as live. |
 | No NASA logos, text attribution only | Team | NASA brand rules and Space Apps AI rules. |
+| Visual identity "Lunar Sunrise", Tabler icons | Team | Consistent, kid-friendly look; human-made MIT icons. |
+| Four original collectibles plus an observatory | Team | The team's own first idea, kept without any agency letters. |
+| Tutorial plus a 3-chapter story | Team, on AI recommendation | Teaches every mechanic, then lets kids apply it. |
 | Roblox Studio as the engine | Team | Team skills; Roblox was used in earlier Space Apps editions. |
 
 ## Testing evidence

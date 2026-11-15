@@ -1,8 +1,11 @@
 --!strict
 -- Space Base Odyssey - C.A.R.L., the helper drone: a client-only model that floats beside the local
--- astronaut's right shoulder. Its core glows cyan when all is well, yellow when the suit air is low
--- or a task is urgent, red-purple during a storm warning or storm. In a storm a bright beam points
--- from C.A.R.L. to the shelter door until the player is safe inside.
+-- astronaut's right shoulder. Its core glows cyan when all is well, orange when the suit air is low,
+-- a task is urgent or a storm warning is on, red while storm particles are here (Theme "Lunar
+-- Sunrise" roles). In a storm an orange beam (the shelter colour) points from C.A.R.L. to the
+-- shelter door until the player is safe inside.
+-- Reward: a player who found the hidden mini Earth gets C.A.R.L.'s "Earth skin" (blue body with
+-- green land and a cream cloud); it is local to that player.
 -- Anchored Parts moved every frame (no physics); it never collides, blocks clicks or casts shadows.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
@@ -14,6 +17,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local MissionData = require(Shared:WaitForChild("MissionData"))
 
 local Store = require(script.Parent.Store)
+local Theme = require(Shared:WaitForChild("Theme"))
 
 -- Suit air below the meters' yellow zone counts as low (same 0-100 scale as the HUD bar).
 local SUIT_LOW = MissionData.METERS.YELLOW_ZONE * MissionData.SUIT.MAX / 100
@@ -28,14 +32,22 @@ local BOB_SPEED = 2.2
 local PROPELLER_SPEED = 18 -- radians per second
 local COLOR_RATE = 4
 
-local COLOR_BODY = Color3.fromRGB(236, 240, 248)
-local COLOR_VISOR = Color3.fromRGB(24, 30, 48)
-local COLOR_EYE = Color3.fromRGB(220, 250, 255)
-local COLOR_METAL = Color3.fromRGB(150, 156, 170)
-local CORE_NORMAL = Color3.fromRGB(0, 220, 255)
-local CORE_ALERT = Color3.fromRGB(255, 210, 30)
-local CORE_STORM = Color3.fromRGB(225, 40, 150)
-local BEAM_COLOR = Color3.fromRGB(255, 240, 140)
+local PALETTE = Theme.PALETTE
+local ROLE = Theme.ROLE
+local COLOR_BODY = PALETTE.cream
+local COLOR_VISOR = PALETTE.night
+local COLOR_EYE = PALETTE.cyan
+local COLOR_METAL = PALETTE.creamDim
+local CORE_NORMAL = ROLE.accent -- cyan: systems and guidance
+local CORE_ALERT = ROLE.warning -- orange: warnings
+local CORE_STORM = ROLE.danger -- red: particles are here
+local BEAM_COLOR = ROLE.warning -- orange: the way to the shelter
+
+-- Earth skin (reward for the hidden mini Earth): ocean, land and cloud, all from the palette.
+local EARTH_OCEAN = PALETTE.cyan:Lerp(PALETTE.night, 0.45)
+local EARTH_LAND = PALETTE.lime
+local EARTH_CLOUD = PALETTE.cream
+local EARTH_COLLECTIBLE = "mini_earth"
 
 local SHELTER_MARKER = "ShelterDoor"
 
@@ -75,8 +87,10 @@ local function rootPart(): BasePart?
 end
 
 local function coreTarget(stage: Store.StormStage): Color3
-	if stage ~= "none" then
+	if stage == "storm" then
 		return CORE_STORM
+	elseif stage == "warning" then
+		return CORE_ALERT
 	end
 	local stats = Store.getStats()
 	if stats and stats.suitO2 < SUIT_LOW then
@@ -121,8 +135,22 @@ function CarlDrone.start()
 	local bulb = newPart(model, "CoreBulb", Enum.PartType.Ball, Vector3.new(0.4, 0.4, 0.4), CORE_NORMAL, neon)
 	add(bulb, CFrame.new(0, -0.72, 0))
 	-- Fins and propeller.
-	add(newPart(model, "FinLeft", Enum.PartType.Block, Vector3.new(0.1, 0.4, 0.55), COLOR_METAL, plastic), CFrame.new(-0.78, -0.05, 0.25))
-	add(newPart(model, "FinRight", Enum.PartType.Block, Vector3.new(0.1, 0.4, 0.55), COLOR_METAL, plastic), CFrame.new(0.78, -0.05, 0.25))
+	local finLeft = newPart(model, "FinLeft", Enum.PartType.Block, Vector3.new(0.1, 0.4, 0.55), COLOR_METAL, plastic)
+	add(finLeft, CFrame.new(-0.78, -0.05, 0.25))
+	local finRight = newPart(model, "FinRight", Enum.PartType.Block, Vector3.new(0.1, 0.4, 0.55), COLOR_METAL, plastic)
+	add(finRight, CFrame.new(0.78, -0.05, 0.25))
+	-- Earth skin details: land bumps and a cloud on the back and sides (hidden by default).
+	local skinParts: { BasePart } = {}
+	local function addSkin(name: string, size: number, color: Color3, offset: CFrame)
+		local part = newPart(model, name, Enum.PartType.Ball, Vector3.new(size, size, size), color, plastic)
+		part.Transparency = 1
+		add(part, offset)
+		table.insert(skinParts, part)
+	end
+	addSkin("LandA", 0.62, EARTH_LAND, CFrame.new(0.42, 0.26, 0.4))
+	addSkin("LandB", 0.55, EARTH_LAND, CFrame.new(-0.5, 0.02, 0.38))
+	addSkin("LandC", 0.45, EARTH_LAND, CFrame.new(0.06, -0.38, 0.52))
+	addSkin("Cloud", 0.4, EARTH_CLOUD, CFrame.new(-0.18, 0.56, 0.3))
 	add(
 		newPart(model, "Mast", Enum.PartType.Cylinder, Vector3.new(0.35, 0.12, 0.12), COLOR_METAL, plastic),
 		CFrame.new(0, 0.86, 0) * CFrame.Angles(0, 0, math.rad(90))
@@ -162,6 +190,27 @@ function CarlDrone.start()
 
 	model.PrimaryPart = body
 	model.Parent = workspace
+
+	local earthSkin: boolean? = nil
+	local function applySkin()
+		local wanted = Store.hasCollectible(EARTH_COLLECTIBLE)
+		if wanted == earthSkin then
+			return
+		end
+		earthSkin = wanted
+		body.Color = if wanted then EARTH_OCEAN else COLOR_BODY
+		finLeft.Color = if wanted then EARTH_LAND else COLOR_METAL
+		finRight.Color = if wanted then EARTH_LAND else COLOR_METAL
+		for _, part in skinParts do
+			part.Transparency = if wanted then 0 else 1
+		end
+	end
+	applySkin()
+	Store.onChanged(function(kind: Store.ChangeKind)
+		if kind == "progress" then
+			applySkin()
+		end
+	end)
 
 	local parts: { BasePart } = {}
 	for _, piece in pieces do

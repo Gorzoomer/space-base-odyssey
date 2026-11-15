@@ -1,5 +1,9 @@
 --!strict
 -- Space Base Odyssey - server-authoritative mission loop: phases, actions, shift tasks and storms.
+-- Briefing is the mission select screen. A mission (src/shared/Missions.luau) sets the number of days,
+-- the event schedule, which storms bring particles and the objectives counted here. Tutorials end as
+-- soon as their objectives are done and never fail; story chapters and free play are scored when the
+-- last day ends.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -9,6 +13,7 @@ local ServerStorage = game:GetService("ServerStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local MissionData = require(Shared:WaitForChild("MissionData"))
+local Missions = require(Shared:WaitForChild("Missions"))
 local Simulation = require(Shared:WaitForChild("Simulation"))
 local SpaceWeatherArchive = require(Shared:WaitForChild("SpaceWeatherArchive"))
 local Types = require(Shared:WaitForChild("Types"))
@@ -27,31 +32,52 @@ type LiveWeather = Types.LiveWeather
 type TextRef = Types.TextRef
 type ArchivedFlare = SpaceWeatherArchive.ArchivedFlare
 type Params = { [string]: string | number }
+type Mission = Missions.Mission
+type Objective = Missions.Objective
+type ObjectiveId = Missions.ObjectiveId
+type FlareWant = SpaceWeatherService.FlareWant
 
 export type Remotes = {
 	snapshot: RemoteEvent,
 	playerStats: RemoteEvent,
 	message: RemoteEvent,
 	action: RemoteEvent,
+	progress: RemoteEvent,
+	collected: RemoteEvent,
 }
 
 -- The parts of CrewService this module uses.
 export type Crew = {
 	setShiftActive: (active: boolean) -> (),
 	isPresent: (player: Player) -> boolean,
+	isInside: (player: Player) -> boolean,
 	isSheltered: (player: Player) -> boolean,
 	isCarrying: (player: Player) -> boolean,
 	setCarrying: (player: Player, carrying: boolean) -> (),
 	takeRefillCount: () -> number,
+	onZoneChanged: (
+		listener: (player: Player, inside: boolean, sheltered: boolean, wasInside: boolean, wasSheltered: boolean) -> ()
+	) -> (),
+}
+
+-- The parts of ProgressService this module uses.
+export type ProgressApi = {
+	completedUnion: () -> { [string]: boolean },
+	markCompleted: (players: { Player }, missionId: string) -> (),
+	grantCollectible: (player: Player, id: string) -> (),
+	onChanged: (listener: () -> ()) -> (),
 }
 
 type StormStage = "quiet" | "warning" | "storm" | "over"
 
 type ShiftData = {
 	startedAt: number,
+	flareAt: number, -- server time when today's flare is spotted (storm days)
 	arraysCleaned: number,
 	leakRepaired: boolean,
-	exposed: { [Player]: boolean },
+	exposed: { [Player]: boolean }, -- exposed at any time today (dose)
+	stormExposed: { [Player]: boolean }, -- exposed during the current storm (survive_storm)
+	sheltered: { [Player]: boolean }, -- reached the shelter during the current warning or storm
 	flare: ArchivedFlare?,
 	stage: StormStage,
 	falseAlarm: boolean,
@@ -63,11 +89,18 @@ local DEPLETED_ICE_TRANSPARENCY = 0.7
 local MAX_ACTIONS_PER_SECOND = 20
 local MAX_SEED = 2147483646
 local EVENTS: { EventId } = { "None", "Dust", "SolarStorm", "EquipmentFailure" }
+-- GAME: in a tutorial the shift timer never ends the day before the objectives are done; it adds
+-- this much time instead. A storm missed in a tutorial comes back after the mission's flare delay.
+local TUTORIAL_EXTRA_SECONDS = 30
+-- GAME: an extended tutorial shift can take many suit refills (each costs base air). Training counts
+-- at most this many, the worst case tests/missions proves can never empty a meter in one day.
+local TUTORIAL_MAX_REFILLS = 4
 
 local MissionService = {}
 
 local world: any = nil
 local crew: Crew = nil :: any
+local progress: ProgressApi? = nil
 local remotes: Remotes? = nil
 local started = false
 
@@ -93,6 +126,17 @@ local applied: { dusty: { [number]: boolean }, leak: boolean?, linked: boolean?,
 local appliedAllocation: Simulation.Allocation? = nil -- last plan shown on the base (setSystemVisuals)
 
 local actionWindows: { [Player]: { start: number, count: number } } = {}
+
+-- Mission being played (nil in Briefing) and its objective counters.
+local missionDef: Mission? = nil
+local objectiveProgress: { [string]: number } = {}
+local wentOutside: { [Player]: boolean } = {} -- return_inside only counts after going out
+local missionResult: Types.MissionResult? = nil
+local unlockAll = false -- DebugUnlockAll, this server session only
+local pendingFirstEvent: EventId? = nil -- DebugForceEvent in Briefing, applied at StartMission
+local finishing = false -- inside finishShift: auto-complete waits for the day to close
+local autoCompleteQueued = false
+local broadcastQueued = false
 
 ----------------------------------------------------------------------------------------------------
 -- Helpers
@@ -181,6 +225,142 @@ local function flareParams(flare: ArchivedFlare): Params
 end
 
 ----------------------------------------------------------------------------------------------------
+-- Objectives
+
+local function isEarlyReturn(): boolean
+	return state.outcome ~= "InProgress" and state.outcome ~= "Completed"
+end
+
+-- Stars the crew is on course for: science points only go up, so this never drops before the end.
+local function projectedStars(): number
+	if state.outcome == "InProgress" then
+		local points = state.sciencePoints
+		if points >= MissionData.SCIENCE.THREE_STARS then
+			return 3
+		elseif points >= MissionData.SCIENCE.TWO_STARS then
+			return 2
+		end
+		return 1
+	end
+	return Simulation.stars(state, MissionData)
+end
+
+local function objectiveValue(objective: Objective): number
+	if objective.id == "complete_days" then
+		-- The day that sent the crew home early does not count as completed.
+		return if isEarlyReturn() then math.max(0, #state.history - 1) else #state.history
+	elseif objective.id == "stars_at_least" then
+		return projectedStars()
+	end
+	return objectiveProgress[objective.id] or 0
+end
+
+local function objectiveDone(objective: Objective): boolean
+	return objectiveValue(objective) >= objective.target
+end
+
+local function allObjectivesDone(except: ObjectiveId?): boolean
+	local def = missionDef
+	if def == nil then
+		return false
+	end
+	for _, objective in def.objectives do
+		if objective.id ~= except and not objectiveDone(objective) then
+			return false
+		end
+	end
+	return true
+end
+
+local function hasObjective(id: ObjectiveId): boolean
+	local def = missionDef
+	if def == nil then
+		return false
+	end
+	for _, objective in def.objectives do
+		if objective.id == id then
+			return true
+		end
+	end
+	return false
+end
+
+local function isTutorial(): boolean
+	local def = missionDef
+	return def ~= nil and def.kind == "Tutorial"
+end
+
+local function missionActive(): boolean
+	return missionDef ~= nil and (phase == "Planning" or phase == "Shift")
+end
+
+-- Tutorials: the shift can only start once every objective listed before start_shift is done
+-- (so "set the power" really comes first).
+local function readyForShift(): boolean
+	local def = missionDef
+	if def == nil or def.kind ~= "Tutorial" or not hasObjective("start_shift") then
+		return true
+	end
+	for _, objective in def.objectives do
+		if objective.id == "start_shift" then
+			return true
+		end
+		if not objectiveDone(objective) then
+			return false
+		end
+	end
+	return true
+end
+
+local function buildMissionInfo(): Types.MissionInfo?
+	local def = missionDef
+	if def == nil or phase == "Briefing" then
+		return nil
+	end
+	local objectives: { Types.ObjectiveState } = {}
+	for _, objective in def.objectives do
+		local value = objectiveValue(objective)
+		table.insert(objectives, {
+			id = objective.id,
+			textKey = Missions.objectiveKey(objective.id),
+			progress = math.min(value, objective.target),
+			target = objective.target,
+			done = value >= objective.target,
+		})
+	end
+	return {
+		id = def.id,
+		kind = def.kind,
+		titleKey = Missions.titleKey(def.id),
+		objectives = objectives,
+	}
+end
+
+local function completedMissions(): { [string]: boolean }
+	local api = progress
+	if api then
+		return api.completedUnion()
+	end
+	return {}
+end
+
+local function buildMissionCards(): { Types.MissionCard }
+	local completed = completedMissions()
+	local cards: { Types.MissionCard } = {}
+	for _, mission in Missions.LIST do
+		table.insert(cards, {
+			id = mission.id,
+			kind = mission.kind,
+			titleKey = Missions.titleKey(mission.id),
+			icon = mission.icon,
+			unlocked = unlockAll or Missions.isUnlocked(mission, completed),
+			completed = completed[mission.id] == true,
+		})
+	end
+	return cards
+end
+
+----------------------------------------------------------------------------------------------------
 -- Snapshot
 
 local function buildSnapshot(): Snapshot
@@ -209,6 +389,9 @@ local function buildSnapshot(): Snapshot
 		shift = shiftCopy,
 		spaceWeather = weatherCopy,
 		liveWeather = SpaceWeatherService.getLive(),
+		mission = buildMissionInfo(),
+		missionResult = if missionResult then deepCopy(missionResult) else nil,
+		missions = buildMissionCards(),
 	}
 end
 
@@ -216,6 +399,18 @@ local function broadcast()
 	if remotes then
 		remotes.snapshot:FireAllClients(buildSnapshot())
 	end
+end
+
+-- One snapshot at the end of this frame, however many objective counters changed.
+local function scheduleBroadcast()
+	if broadcastQueued then
+		return
+	end
+	broadcastQueued = true
+	task.defer(function()
+		broadcastQueued = false
+		broadcast()
+	end)
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -361,9 +556,10 @@ local function takeSeed(): number
 	return newSeed()
 end
 
-local function resetMission(seed: number)
+local function resetMission(seed: number, def: Mission?)
 	currentSeed = seed
-	state = Simulation.newMission(MissionData, seed)
+	local config: Simulation.MissionConfig? = if def then { totalDays = def.days, schedule = def.schedule } else nil
+	state = Simulation.newMission(MissionData, seed, config)
 	random = Random.new(seed)
 	stormFlaresUsed = 0
 	table.clear(flaresReplayed)
@@ -393,14 +589,62 @@ local function enterPlanning()
 	setPhase("Planning")
 end
 
-local function enterReport()
-	setPhase("Report")
+-- Scores the mission when it ends: success = the crew came home on time with every objective met.
+local function evaluateMission(): Types.MissionResult
+	local def = missionDef
+	local missing: { string } = {}
+	if def then
+		for _, objective in def.objectives do
+			if not objectiveDone(objective) then
+				table.insert(missing, Missions.objectiveKey(objective.id))
+			end
+		end
+	end
+	return { success = state.outcome == "Completed" and #missing == 0, missingKeys = missing }
 end
 
--- The first storm of a mission always brings particles; later ones may be real false alarms.
--- SpaceWeatherService prefers a strong flare from today's live DONKI query, else the archive.
+local function enterReport()
+	local result = evaluateMission()
+	missionResult = result
+	setPhase("Report")
+	local def = missionDef
+	local api = progress
+	if result.success and def and api then
+		api.markCompleted(Players:GetPlayers(), def.id)
+	end
+end
+
+-- Adds to an objective counter while a mission is running. Counters are shared by the whole crew.
+local checkAutoComplete: () -> ()
+local function addProgress(id: ObjectiveId, amount: number?)
+	if not missionActive() then
+		return
+	end
+	objectiveProgress[id] = (objectiveProgress[id] or 0) + (amount or 1)
+	if hasObjective(id) then
+		scheduleBroadcast()
+		checkAutoComplete()
+	end
+end
+
+-- Which flare today's storm needs. A mission's stormParticles decides (a chapter can ask for a real
+-- false alarm); otherwise the first storm of a mission always brings particles and later ones may be
+-- real false alarms. SpaceWeatherService prefers a strong flare from the live DONKI query, else the
+-- archive, and the flare keeps its real particles value and its honest live / archive label.
+local function flareWant(): FlareWant
+	local def = missionDef
+	local particles = def and def.stormParticles
+	if def and particles then
+		local wanted = particles[Missions.stormIndex(def, state.day)]
+		if wanted ~= nil then
+			return if wanted then "particles" else "none"
+		end
+	end
+	return if stormFlaresUsed == 0 then "particles" else "any"
+end
+
 local function pickFlare(): (ArchivedFlare, "live" | "archive")
-	local flare, source = SpaceWeatherService.pickFlare(stormFlaresUsed == 0, random, flaresReplayed)
+	local flare, source = SpaceWeatherService.pickFlare(flareWant(), random, flaresReplayed)
 	stormFlaresUsed += 1
 	flaresReplayed[flare.id] = true
 	return flare, source
@@ -417,7 +661,7 @@ local function abortShift()
 	table.clear(iceUsed)
 end
 
-local function finishShift()
+local function finishShift(forceComplete: boolean?)
 	if phase ~= "Shift" or shift == nil or shiftData == nil then
 		return
 	end
@@ -433,6 +677,9 @@ local function finishShift()
 	end
 	local refills = crew.takeRefillCount()
 	crew.setShiftActive(false)
+	if isTutorial() then
+		refills = math.min(refills, TUTORIAL_MAX_REFILLS) -- training never empties a meter
+	end
 
 	local result: ShiftResult = {
 		playerCount = countPlayers(),
@@ -444,6 +691,20 @@ local function finishShift()
 		falseAlarm = if data.falseAlarm then true else nil,
 	}
 	Simulation.endDay(state, MissionData, result)
+
+	finishing = true
+	addProgress("finish_day")
+	finishing = false
+	if isTutorial() and isEarlyReturn() then
+		state.outcome = "Completed" -- tutorials never fail (one day cannot empty a meter: tests/missions)
+	end
+	local def = missionDef
+	if
+		state.outcome == "InProgress"
+		and (forceComplete or (def ~= nil and def.autoComplete and allObjectivesDone()))
+	then
+		state.outcome = "Completed"
+	end
 
 	shift = nil
 	shiftData = nil
@@ -466,6 +727,8 @@ local function spotFlare(currentShift: ShiftState, data: ShiftData, t: number)
 	local flare, source = pickFlare()
 	data.flare = flare
 	data.stage = "warning"
+	table.clear(data.stormExposed)
+	table.clear(data.sheltered)
 	local lead = if currentShift.antennaLinked
 		then MissionData.STORM.WARNING_SECONDS_WITH_LINK
 		else MissionData.STORM.WARNING_SECONDS_NO_LINK
@@ -490,6 +753,24 @@ local function spotFlare(currentShift: ShiftState, data: ShiftData, t: number)
 	broadcast()
 end
 
+-- Training only: a storm the crew did not survive (or that never came) comes back so they can
+-- practise sheltering again. The dose already taken stays: radiation dose never goes down.
+local function rearmTutorialStorm(currentShift: ShiftState, data: ShiftData, t: number): boolean
+	local def = missionDef
+	if def == nil or def.kind ~= "Tutorial" or not hasObjective("survive_storm") then
+		return false
+	end
+	data.stage = "quiet"
+	data.flare = nil
+	data.falseAlarm = false
+	data.flareAt = t + (def.flareAtSeconds or MissionData.STORM.FLARE_AT_SECONDS)
+	currentShift.stormWarningAt = nil
+	currentShift.stormArrivesAt = nil
+	currentShift.stormEndsAt = nil
+	spaceWeather = nil
+	return true
+end
+
 local function shiftTick()
 	if phase ~= "Shift" or shift == nil or shiftData == nil then
 		return
@@ -499,8 +780,17 @@ local function shiftTick()
 	local t = now()
 
 	if state.todayEvent == "SolarStorm" then
-		if data.stage == "quiet" and t - data.startedAt >= MissionData.STORM.FLARE_AT_SECONDS then
+		if data.stage == "quiet" and t >= data.flareAt then
 			spotFlare(currentShift, data, t)
+		end
+		-- reach_shelter: in the shelter while a warning or a storm is on.
+		if data.stage == "warning" or data.stage == "storm" then
+			for _, player in Players:GetPlayers() do
+				if not data.sheltered[player] and crew.isPresent(player) and crew.isSheltered(player) then
+					data.sheltered[player] = true
+					addProgress("reach_shelter")
+				end
+			end
 		end
 		local flare = data.flare
 		local arrivesAt = currentShift.stormArrivesAt
@@ -516,6 +806,7 @@ local function shiftTick()
 					data.falseAlarm = true
 					currentShift.stormEndsAt = t
 					say("carl.false_alarm", flareParams(flare))
+					rearmTutorialStorm(currentShift, data, t)
 				end
 				refreshWorld()
 				broadcast()
@@ -524,11 +815,27 @@ local function shiftTick()
 				for _, player in Players:GetPlayers() do
 					if crew.isPresent(player) and not crew.isSheltered(player) then
 						data.exposed[player] = true
+						data.stormExposed[player] = true
 					end
 				end
 				if t >= endsAt then
 					data.stage = "over"
 					say("carl.storm_over")
+					local survived = true
+					for player in data.stormExposed do
+						if player.Parent ~= nil then
+							survived = false
+						end
+					end
+					if survived then
+						addProgress("survive_storm")
+					end
+					-- Training: if anything is still open (not sheltered, or reach_shelter missed because
+					-- nobody was there when it started), the drill runs again instead of leaving the
+					-- crew in a shift with nothing left to do.
+					if not survived or (isTutorial() and not allObjectivesDone("finish_day")) then
+						rearmTutorialStorm(currentShift, data, t)
+					end
 					refreshWorld()
 					broadcast()
 				end
@@ -537,7 +844,12 @@ local function shiftTick()
 	end
 
 	if t >= currentShift.endsAt then
-		finishShift()
+		if isTutorial() and not allObjectivesDone("finish_day") then
+			currentShift.endsAt = t + TUTORIAL_EXTRA_SECONDS
+			broadcast()
+		else
+			finishShift()
+		end
 	end
 end
 
@@ -546,8 +858,11 @@ local function startShift()
 	shiftToken += 1
 	local token = shiftToken
 	table.clear(iceUsed)
+	local def = missionDef
+	local shiftSeconds = (def and def.shiftSeconds) or MissionData.MISSION.SHIFT_SECONDS
+	local flareAtSeconds = (def and def.flareAtSeconds) or MissionData.STORM.FLARE_AT_SECONDS
 	shift = {
-		endsAt = startedAt + MissionData.MISSION.SHIFT_SECONDS,
+		endsAt = startedAt + shiftSeconds,
 		antennaLinked = false,
 		stormWarningAt = nil,
 		stormArrivesAt = nil,
@@ -558,9 +873,12 @@ local function startShift()
 	}
 	shiftData = {
 		startedAt = startedAt,
+		flareAt = startedAt + flareAtSeconds,
 		arraysCleaned = 0,
 		leakRepaired = false,
 		exposed = {},
+		stormExposed = {},
+		sheltered = {},
 		flare = nil,
 		stage = "quiet",
 		falseAlarm = false,
@@ -569,6 +887,7 @@ local function startShift()
 	setPhase("Shift")
 	crew.setShiftActive(true)
 	say("carl.shift_start")
+	addProgress("start_shift")
 	refreshWorld()
 	broadcast()
 
@@ -587,6 +906,140 @@ local function startShift()
 end
 
 ----------------------------------------------------------------------------------------------------
+-- Mission select and auto-complete
+
+-- An auto-complete mission (the tutorials) ends as soon as every objective is done: mid-shift the
+-- day closes normally first; in Planning the mission ends right away.
+local function completeMissionNow()
+	if missionDef == nil then
+		return
+	end
+	if phase == "Shift" then
+		finishShift(true)
+	elseif phase == "Planning" then
+		if state.outcome == "InProgress" then
+			state.outcome = "Completed"
+		end
+		enterReport()
+		refreshWorld()
+		broadcast()
+	end
+end
+
+checkAutoComplete = function()
+	local def = missionDef
+	if def == nil or not def.autoComplete or finishing or autoCompleteQueued or not allObjectivesDone() then
+		return
+	end
+	autoCompleteQueued = true
+	local serial = phaseSerial
+	-- Deferred so the prompt or tick that finished the last objective completes first.
+	task.defer(function()
+		autoCompleteQueued = false
+		if phaseSerial == serial and missionDef == def and allObjectivesDone() then
+			completeMissionNow()
+		end
+	end)
+end
+
+local function isUnlocked(mission: Mission): boolean
+	return unlockAll or Missions.isUnlocked(mission, completedMissions())
+end
+
+-- missionId nil = the next mission: the first unlocked one nobody here has completed, else the last
+-- unlocked one (free play once the story is done). A locked or unknown id gives nil.
+local function resolveMission(missionId: any): Mission?
+	if missionId ~= nil then
+		if type(missionId) ~= "string" then
+			return nil
+		end
+		local mission = Missions.get(missionId)
+		if mission and isUnlocked(mission) then
+			return mission
+		end
+		return nil
+	end
+	local completed = completedMissions()
+	local lastUnlocked: Mission? = nil
+	for _, mission in Missions.LIST do
+		if isUnlocked(mission) then
+			if not completed[mission.id] then
+				return mission
+			end
+			lastUnlocked = mission
+		end
+	end
+	return lastUnlocked
+end
+
+-- Prepares `def` without starting day 1 (shared by StartMission and DebugSkipToDay).
+local function prepareMission(def: Mission, seed: number)
+	missionDef = def
+	missionResult = nil
+	table.clear(objectiveProgress)
+	table.clear(wentOutside)
+	autoCompleteQueued = false
+	resetMission(seed, def)
+	if pendingFirstEvent then
+		state.schedule[1] = pendingFirstEvent
+		pendingFirstEvent = nil
+	end
+end
+
+local function startMission(def: Mission)
+	if phase == "Shift" then
+		abortShift()
+	end
+	prepareMission(def, takeSeed())
+	beginNextDay()
+	enterPlanning()
+	-- Zone changes only count transitions, and Briefing does not move anybody. A player who starts
+	-- the mission already standing outside has gone out: count it, so coming back in counts too.
+	for _, player in Players:GetPlayers() do
+		if crew.isPresent(player) and not crew.isInside(player) then
+			wentOutside[player] = true
+			addProgress("go_outside")
+		end
+	end
+	if def.order == 1 then
+		say("carl.welcome")
+		sayLater(planningHintKey())
+	else
+		say(planningHintKey())
+	end
+	refreshWorld()
+	broadcast()
+end
+
+-- Back to the mission select screen with a clean base.
+local function returnToBriefing()
+	if phase == "Shift" then
+		abortShift()
+	end
+	missionDef = nil
+	missionResult = nil
+	table.clear(objectiveProgress)
+	table.clear(wentOutside)
+	resetMission(newSeed())
+	setPhase("Briefing")
+	refreshWorld()
+	broadcast()
+end
+
+-- go_outside / return_inside from CrewService zone changes (habitat or shelter count as inside).
+local function onZoneChanged(player: Player, inside: boolean, _sheltered: boolean, wasInside: boolean, _wasSheltered: boolean)
+	if inside == wasInside or not missionActive() then
+		return
+	end
+	if not inside then
+		wentOutside[player] = true
+		addProgress("go_outside")
+	elseif wentOutside[player] then
+		addProgress("return_inside")
+	end
+end
+
+----------------------------------------------------------------------------------------------------
 -- Shift task prompts
 
 local function onArrayCleaned(index: number)
@@ -597,6 +1050,7 @@ local function onArrayCleaned(index: number)
 	shiftData.arraysCleaned += 1
 	shift.dustyArrays = countDusty()
 	say("carl.panel_clean")
+	addProgress("clean_panel")
 	refreshWorld()
 	broadcast()
 end
@@ -608,6 +1062,7 @@ local function onIceDrilled(player: Player, index: number)
 	iceUsed[index] = true
 	crew.setCarrying(player, true)
 	sayTo(player, "carl.ice_picked")
+	addProgress("drill_ice")
 	refreshWorld()
 end
 
@@ -618,6 +1073,8 @@ local function onIceDelivered(player: Player)
 	crew.setCarrying(player, false)
 	shift.iceCoresDelivered += 1
 	say("carl.ice_delivered")
+	addProgress("deliver_ice")
+	addProgress("deliver_ice_total")
 	broadcast()
 end
 
@@ -628,6 +1085,7 @@ local function onLeakRepaired()
 	shiftData.leakRepaired = true
 	shift.leakActive = false
 	say("carl.leak_fixed")
+	addProgress("repair_leak")
 	refreshWorld()
 	broadcast()
 end
@@ -638,6 +1096,7 @@ local function onAntennaAligned()
 	end
 	shift.antennaLinked = true
 	say("carl.antenna_linked")
+	addProgress("align_antenna")
 	say("carl.earth_delay", {
 		moon = MissionData.REAL.MOON_EARTH_LIGHT_TIME_S,
 		mars = MissionData.REAL.MARS_LIGHT_TIME_MAX_MIN,
@@ -708,8 +1167,11 @@ local function debugSkipToDay(target: number)
 	if phase == "Shift" then
 		abortShift()
 	end
-	if phase == "Briefing" or state.outcome ~= "InProgress" or target < state.day then
-		resetMission(currentSeed)
+	if phase == "Briefing" or missionDef == nil or state.outcome ~= "InProgress" or target < state.day then
+		-- From mission select: the next mission. Otherwise: replay the current one.
+		local def = (if phase ~= "Briefing" then missionDef else nil) or resolveMission(nil) or Missions.LIST[1]
+		local seed = if phase == "Briefing" then takeSeed() else currentSeed
+		prepareMission(def, seed)
 		beginNextDay()
 	end
 	while state.day < target and state.outcome == "InProgress" do
@@ -732,7 +1194,7 @@ end
 
 local function debugForceEvent(event: EventId)
 	if phase == "Briefing" then
-		state.schedule[1] = event
+		pendingFirstEvent = event -- applied to day 1 of the next mission started
 	elseif phase == "Planning" and dayStartBackup then
 		local backup = dayStartBackup :: MissionState
 		state = deepCopy(backup)
@@ -749,12 +1211,9 @@ local function debugForceEvent(event: EventId)
 	broadcast()
 end
 
+-- The next mission started uses this seed (event order in free play, flare picks).
 local function debugSeed(seed: number)
 	pendingSeed = seed
-	if phase == "Briefing" then
-		resetMission(takeSeed())
-		refreshWorld()
-	end
 	broadcast()
 end
 
@@ -802,25 +1261,32 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 			sayTo(player, "error.cells_range")
 			return
 		end
+		local before = state.allocation[system :: SystemId]
 		local ok, errorKey = Simulation.setAllocation(state, MissionData, system :: SystemId, cells)
 		if ok then
 			syncSystemVisuals()
+			if cells ~= before then
+				addProgress("set_power")
+			end
 			broadcast()
 		elseif errorKey then
 			sayTo(player, errorKey)
 		end
 	elseif kind == "StartMission" then
-		if phase ~= "Briefing" then
+		-- From mission select, or "Try again" straight from the report.
+		if phase ~= "Briefing" and phase ~= "Report" then
 			return
 		end
-		beginNextDay()
-		enterPlanning()
-		say("carl.welcome")
-		sayLater(planningHintKey())
-		refreshWorld()
-		broadcast()
+		local def = resolveMission(action.missionId)
+		if def then
+			startMission(def)
+		end
 	elseif kind == "StartShift" then
 		if phase ~= "Planning" then
+			return
+		end
+		if not readyForShift() then
+			sayTo(player, "carl.plan_hint")
 			return
 		end
 		startShift()
@@ -828,10 +1294,7 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 		if phase ~= "Report" then
 			return
 		end
-		resetMission(takeSeed())
-		setPhase("Briefing")
-		refreshWorld()
-		broadcast()
+		returnToBriefing()
 	elseif kind == "SetLanguage" then
 		local language = action.language
 		if player and (language == "en" or language == "es") then
@@ -854,6 +1317,16 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 	elseif kind == "DebugEndShift" then
 		if isDebugAllowed(player, trusted) and phase == "Shift" then
 			finishShift()
+		end
+	elseif kind == "DebugUnlockAll" then
+		if isDebugAllowed(player, trusted) then
+			unlockAll = true
+			broadcast()
+		end
+	elseif kind == "DebugGrantCollectible" then
+		local api = progress
+		if isDebugAllowed(player, trusted) and player and api and Missions.isCollectible(action.id) then
+			api.grantCollectible(player, action.id :: string)
 		end
 	end
 end
@@ -896,22 +1369,32 @@ function MissionService.createRemotes(): Remotes
 		playerStats = remote(names.PLAYER_STATS),
 		message = remote(names.MESSAGE),
 		action = remote(names.ACTION),
+		progress = remote(names.PROGRESS),
+		collected = remote(names.COLLECTED),
 	}
 	remotes = created
 	return created
 end
 
--- worldRefs: WorldBuilder.World; crewService: the CrewService module (already started).
-function MissionService.start(worldRefs: any, crewService: Crew)
+-- worldRefs: WorldBuilder.World; crewService: the CrewService module (already started);
+-- progressService: the ProgressService module (already started), or nil to play without saving.
+function MissionService.start(worldRefs: any, crewService: Crew, progressService: ProgressApi?)
 	assert(not started, "MissionService already started")
 	started = true
 	world = worldRefs
 	crew = crewService
+	progress = progressService
 	local remoteEvents = MissionService.createRemotes()
 
-	resetMission(takeSeed())
+	resetMission(newSeed())
 	connectPrompts()
 	refreshWorld()
+
+	crew.onZoneChanged(onZoneChanged)
+	-- Saved progress decides which missions are unlocked: refresh the mission select cards.
+	if progressService then
+		progressService.onChanged(scheduleBroadcast)
+	end
 
 	-- The live DONKI query finishes in the background; push its result to everyone.
 	SpaceWeatherService.onChanged(function(_: LiveWeather)
@@ -934,8 +1417,11 @@ function MissionService.start(worldRefs: any, crewService: Crew)
 	end
 	Players.PlayerRemoving:Connect(function(player: Player)
 		actionWindows[player] = nil
+		wentOutside[player] = nil
 		if shiftData then
 			shiftData.exposed[player] = nil
+			shiftData.stormExposed[player] = nil
+			shiftData.sheltered[player] = nil
 		end
 	end)
 

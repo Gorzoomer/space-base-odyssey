@@ -2,6 +2,8 @@
 -- Space Base Odyssey - demo keys for recording the video. Only in Studio or for the place owner:
 --   F8: force today's event to a solar storm (the server accepts it in the lobby or while planning).
 --   F9: end the current shift now.
+--   F6: unlock every mission (DebugUnlockAll).
+--   F7: grant the next hidden collectible this player does not own yet (DebugGrantCollectible).
 -- No UI. The server validates both debug actions again (Studio or place owner only).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
@@ -34,6 +36,17 @@ function DemoKeys.start()
 			Store.send({ type = "DebugForceEvent", event = "SolarStorm" })
 		elseif input.KeyCode == Enum.KeyCode.F9 then
 			Store.send({ type = "DebugEndShift" })
+		elseif input.KeyCode == Enum.KeyCode.F6 then
+			local action: any = { type = "DebugUnlockAll" }
+			Store.send(action)
+		elseif input.KeyCode == Enum.KeyCode.F7 then
+			for _, id in Store.COLLECTIBLES do
+				if not Store.hasCollectible(id) then
+					local action: any = { type = "DebugGrantCollectible", id = id }
+					Store.send(action)
+					break
+				end
+			end
 		end
 	end)
 end

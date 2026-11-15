@@ -2,8 +2,10 @@
 -- Space Base Odyssey - localization tests. Run with: lune run tests/localization
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 -- Fails if a key is missing in English or Spanish, a string has too many words (after removing
--- {placeholders}: 8 for gameplay text, 10 for "fact." and "src." lines on the Sources screen),
--- placeholders differ between languages, a source file uses an unknown key, or the API misbehaves.
+-- {placeholders}: 8 for gameplay text, 10 for "fact." and "src." lines on the Sources screen, 20
+-- for "card.", "mission." and "story." cards), placeholders differ between languages, a string
+-- contains emoji or symbols outside Latin text, a source file uses an unknown key, or the API
+-- misbehaves.
 
 local fs = require("@lune/fs")
 local process = require("@lune/process")
@@ -11,13 +13,19 @@ local process = require("@lune/process")
 local Localization = require("../src/shared/Localization")
 
 local MAX_WORDS = 8
-local MAX_WORDS_LONG = 10 -- Sources screen: "fact." and "src." keys
-local LONG_PREFIXES = { "fact", "src" }
+-- Longer limits by key prefix: Sources screen lines, then mission and collectible cards.
+local PREFIX_MAX_WORDS: { [string]: number } = {
+	fact = 10,
+	src = 10,
+	card = 20,
+	mission = 20,
+	story = 20,
+}
 
 local function maxWords(key: string): number
 	local prefix = string.match(key, "^([%a_]+)%.")
-	if prefix and table.find(LONG_PREFIXES, prefix) then
-		return MAX_WORDS_LONG
+	if prefix and PREFIX_MAX_WORDS[prefix] then
+		return PREFIX_MAX_WORDS[prefix]
 	end
 	return MAX_WORDS
 end
@@ -147,6 +155,88 @@ local EXPECTED: { [string]: { string } } = {
 	["src.nasa_science"] = {},
 	["src.epa"] = {},
 	["src.list"] = {},
+	-- Stage 4: missions, objectives, mission select, collection and secrets.
+	["mission.t1_steps.title"] = {},
+	["mission.t1_steps.intro"] = {},
+	["mission.t1_steps.outro"] = {},
+	["mission.t2_power.title"] = {},
+	["mission.t2_power.intro"] = {},
+	["mission.t2_power.outro"] = {},
+	["mission.t3_tasks.title"] = {},
+	["mission.t3_tasks.intro"] = {},
+	["mission.t3_tasks.outro"] = {},
+	["mission.t4_storm.title"] = {},
+	["mission.t4_storm.intro"] = {},
+	["mission.t4_storm.outro"] = {},
+	["mission.c1_arrival.title"] = {},
+	["mission.c1_arrival.intro"] = {},
+	["mission.c1_arrival.outro"] = {},
+	["mission.c2_storm.title"] = {},
+	["mission.c2_storm.intro"] = {},
+	["mission.c2_storm.outro"] = {},
+	["mission.c3_failure.title"] = {},
+	["mission.c3_failure.intro"] = {},
+	["mission.c3_failure.outro"] = {},
+	["mission.free_play.title"] = {},
+	["mission.free_play.intro"] = {},
+	["mission.free_play.outro"] = {},
+	["obj.go_outside"] = {},
+	["obj.return_inside"] = {},
+	["obj.set_power"] = {},
+	["obj.start_shift"] = {},
+	["obj.clean_panel"] = {},
+	["obj.drill_ice"] = {},
+	["obj.deliver_ice"] = {},
+	["obj.align_antenna"] = {},
+	["obj.repair_leak"] = {},
+	["obj.reach_shelter"] = {},
+	["obj.survive_storm"] = {},
+	["obj.finish_day"] = {},
+	["obj.complete_days"] = { "n" },
+	["obj.deliver_ice_total"] = { "n" },
+	["obj.stars_at_least"] = { "n" },
+	["ui.missions_title"] = {},
+	["ui.training"] = {},
+	["ui.story"] = {},
+	["ui.free_play"] = {},
+	["ui.locked"] = {},
+	["ui.completed"] = {},
+	["ui.start"] = {},
+	["ui.continue"] = {},
+	["ui.try_again"] = {},
+	["ui.objectives"] = {},
+	["ui.mission_success"] = {},
+	["ui.mission_failed"] = {},
+	["ui.missing"] = {},
+	["ui.collection_button"] = {},
+	["ui.collection_title"] = {},
+	["ui.secrets_found"] = { "n", "total" },
+	["ui.observatory_slot"] = {},
+	["ui.observatory_locked"] = {},
+	["ui.observatory_open"] = {},
+	["ui.reward_label"] = {},
+	["ui.new_find"] = {},
+	["collect.mini_earth.name"] = {},
+	["collect.laika.name"] = {},
+	["collect.cheese.name"] = {},
+	["collect.mars_potato.name"] = {},
+	["card.mini_earth.myth"] = {},
+	["card.mini_earth.science"] = {},
+	["card.mini_earth.reward"] = {},
+	["card.laika.myth"] = {},
+	["card.laika.science"] = {},
+	["card.laika.reward"] = {},
+	["card.cheese.myth"] = {},
+	["card.cheese.science"] = {},
+	["card.cheese.reward"] = {},
+	["card.mars_potato.myth"] = {},
+	["card.mars_potato.science"] = {},
+	["card.mars_potato.reward"] = {},
+	["prompt.collect"] = {},
+	["carl.secret_found"] = {},
+	["carl.all_secrets"] = {},
+	["observatory.teaser"] = {},
+	["story.secrets_hint"] = {},
 }
 
 local failures = 0
@@ -236,9 +326,41 @@ for key in EXPECTED do
 	end
 end
 
+-- 2b. No emoji or pictographs: only Latin letters, digits and plain punctuation (the UI uses icons).
+-- Allowed: ASCII plus Latin-1 and Latin Extended-A (accents, n with tilde, inverted marks).
+for _, lang in Localization.LANGUAGES do
+	for key, text in Localization.STRINGS[lang] do
+		local ok, bad = true, 0
+		for _, codepoint in utf8.codes(text) do
+			if codepoint > 0x017F then
+				ok, bad = false, codepoint
+				break
+			end
+		end
+		check(ok, string.format("%s %s has a non-Latin symbol U+%04X (no emoji): %s", lang, key, bad, text))
+	end
+end
+
 -- 3. Every full key quoted in the game source exists (scan src/ for quoted keys). Keys built at
 -- run time from a quoted prefix ending in "." (for example "ui.system." .. name) are skipped.
-local KEY_PREFIXES = { "cause", "error", "event", "carl", "ui", "prompt", "fact", "src", "tip", "marker" }
+local KEY_PREFIXES = {
+	"cause",
+	"error",
+	"event",
+	"carl",
+	"ui",
+	"prompt",
+	"fact",
+	"src",
+	"tip",
+	"marker",
+	"mission",
+	"obj",
+	"collect",
+	"card",
+	"story",
+	"observatory",
+}
 
 local function luauFiles(dir: string, out: { string })
 	if not fs.isDir(dir) then

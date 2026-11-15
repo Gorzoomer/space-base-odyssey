@@ -162,6 +162,41 @@ do
 	check(firstZero ~= nil and #state.history == (firstZero :: number) + 1, `E: grace day expected (air hit zero on day {firstZero}, mission ended on day {#state.history})`)
 end
 
+-- F. Mission config: default behaviour unchanged; totalDays and schedule override it.
+do
+	local default = Simulation.newMission(MissionData, 7)
+	local same = Simulation.newMission(MissionData, 7, nil)
+	check(default.totalDays == MissionData.MISSION.TOTAL_DAYS, `F: default totalDays {default.totalDays}`)
+	check(#default.schedule == #MissionData.EVENTS.FIXED + #MissionData.EVENTS.SHUFFLED, "F: default schedule length")
+	local identical = #default.schedule == #same.schedule
+	for i, event in default.schedule do
+		identical = identical and same.schedule[i] == event
+	end
+	check(identical, "F: nil config gives the same schedule as no config")
+	local empty = Simulation.newMission(MissionData, 7, {})
+	check(empty.totalDays == default.totalDays and #empty.schedule == #default.schedule, "F: empty config changes nothing")
+
+	local wanted: { Simulation.EventId } = { "EquipmentFailure", "SolarStorm", "Dust" }
+	local custom = Simulation.newMission(MissionData, 7, { totalDays = 3, schedule = wanted })
+	check(custom.totalDays == 3, `F: custom totalDays {custom.totalDays}`)
+	check(#custom.schedule == 3 and custom.schedule[1] == "EquipmentFailure" and custom.schedule[3] == "Dust", "F: custom schedule kept in order")
+	check(custom.schedule ~= wanted, "F: custom schedule is copied, not shared")
+
+	local onlyDays = Simulation.newMission(MissionData, 7, { totalDays = 2 })
+	check(onlyDays.totalDays == 2 and onlyDays.schedule[1] == default.schedule[1], "F: totalDays alone keeps the default schedule")
+
+	local state = Simulation.newMission(MissionData, 1, { totalDays = 3, schedule = wanted })
+	local events = {}
+	while state.outcome == "InProgress" do
+		Simulation.beginDay(state, MissionData)
+		table.insert(events, state.todayEvent)
+		reactive.plan(state)
+		Simulation.endDay(state, MissionData, reactive.shift(state))
+	end
+	check(state.outcome == "Completed" and #state.history == 3, `F: 3-day mission ends Completed after 3 days ({state.outcome}, {#state.history})`)
+	check(events[1] == "EquipmentFailure" and events[2] == "SolarStorm" and events[3] == "Dust", "F: days follow the custom schedule")
+end
+
 print(`balance: {passes} passed, {failures} failed; best static allocation earned {bestStatic} stars`)
 if failures > 0 then
 	error("balance tests failed")

@@ -15,7 +15,7 @@ local Client = script.Parent
 local Store = require(Client:WaitForChild("Store"))
 local Ui = require(Client:WaitForChild("Ui"))
 local Messages = require(Client:WaitForChild("Messages"))
-local Briefing = require(Client:WaitForChild("Briefing"))
+local MissionSelect = require(Client:WaitForChild("MissionSelect"))
 local PowerBoard = require(Client:WaitForChild("PowerBoard"))
 local Hud = require(Client:WaitForChild("Hud"))
 local Report = require(Client:WaitForChild("Report"))
@@ -26,10 +26,16 @@ local Markers = require(Client:WaitForChild("Markers"))
 local CarlDrone = require(Client:WaitForChild("CarlDrone"))
 local Onboarding = require(Client:WaitForChild("Onboarding"))
 local DemoKeys = require(Client:WaitForChild("DemoKeys"))
+local Objectives = require(Client:WaitForChild("Objectives"))
+local Collection = require(Client:WaitForChild("Collection"))
+local Rewards = require(Client:WaitForChild("Rewards"))
 
 print(`[SpaceBaseOdyssey] client started, build {Version.BUILD}`)
 
 local HUD_TICK_SECONDS = 0.1
+-- Stage 4 remotes (names from Types.Remotes; literal fallbacks match the contract).
+local PROGRESS_REMOTE: string = (Types.Remotes :: any).PROGRESS or "Progress"
+local COLLECTED_REMOTE: string = (Types.Remotes :: any).COLLECTED or "Collected"
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -40,11 +46,17 @@ local _gui, root = Ui.createRoot(playerGui)
 
 local messages = Messages.new(root)
 local sources = Sources.new(root)
-local briefing = Briefing.new(root, sources.addButton)
+local collection = Collection.new(root, { showMessage = messages.show })
+local missionSelect = MissionSelect.new(root, {
+	showMessage = messages.show,
+	addSourcesButton = sources.addButton,
+	openCollection = collection.open,
+})
 local powerBoard = PowerBoard.new(root, messages.show, sources.addButton)
 local hud = Hud.new(root)
 local report = Report.new(root, sources.addButton)
 local sprint = Sprint.new(root)
+local objectives = Objectives.new(root)
 
 -- Language toggle (top right): shows the current language; a tap switches EN <-> ES.
 local languageButton = Ui.button(root, {
@@ -52,9 +64,11 @@ local languageButton = Ui.button(root, {
 	size = UDim2.fromScale(0.17, 0.08),
 	position = UDim2.fromScale(0.985, 0.02),
 	anchor = Vector2.new(1, 0),
-	color = Ui.COLORS.panelLight,
-	stroke = 3,
-	maxText = 26,
+	color = Ui.COLORS.secondary,
+	strokeColor = Ui.ROLE.accent,
+	icon = Ui.ICONS.language,
+	tint = Ui.ROLE.accent,
+	maxText = 24,
 	zindex = 60,
 }, function()
 	local nextLanguage: Store.Language = if Store.getLanguage() == "en" then "es" else "en"
@@ -63,31 +77,63 @@ local languageButton = Ui.button(root, {
 end)
 
 local function renderLanguageButton()
-	languageButton.Text = `{Ui.ICONS.language} {Store.t("ui.language")}`
+	Ui.setButton(languageButton, Store.t("ui.language"))
 end
 
 local shownPhase: string? = nil
+local boardShown: boolean? = nil
+
+-- Objectives done by walking around the base (training "First steps"). A mission that has only
+-- these keeps the power board closed while planning, so the player can see where to walk.
+local WALK_OBJECTIVES: { [string]: boolean } = { go_outside = true, return_inside = true }
+
+local function walkOnlyMission(): boolean
+	local mission = Store.mission()
+	if mission == nil or #mission.objectives == 0 then
+		return false
+	end
+	for _, objective in mission.objectives do
+		if not WALK_OBJECTIVES[objective.id] then
+			return false
+		end
+	end
+	return true
+end
+
+local function updateBoard(phase: string)
+	local wanted = phase == "Planning" and not walkOnlyMission()
+	if wanted ~= boardShown then
+		boardShown = wanted
+		powerBoard.setVisible(wanted)
+	end
+end
 
 local function showPhase(phase: string)
-	briefing.setVisible(phase == "Briefing")
-	powerBoard.setVisible(phase == "Planning")
+	missionSelect.setVisible(phase == "Briefing")
+	updateBoard(phase)
 	hud.setVisible(phase == "Shift")
 	report.setVisible(phase == "Report")
 	sprint.setVisible(phase == "Shift")
+	objectives.setPhase(phase)
 	messages.setPhase(phase)
-	-- A new phase needs the player's attention (e.g. the shift clock starts): close the panel.
+	-- A new phase needs the player's attention (e.g. the shift clock starts): close the panels.
 	sources.close()
+	if phase ~= "Briefing" then
+		collection.close()
+	end
 	shownPhase = phase
 end
 
 local function renderAll()
-	briefing.render()
+	missionSelect.render()
 	powerBoard.render()
 	hud.render()
 	report.render()
 	sprint.render()
 	messages.render()
 	sources.render()
+	objectives.render()
+	collection.render()
 	renderLanguageButton()
 end
 
@@ -96,18 +142,27 @@ Store.onChanged(function(kind: Store.ChangeKind)
 		hud.render()
 		return
 	end
+	if kind == "progress" then
+		missionSelect.render()
+		collection.render()
+		report.render()
+		return
+	end
 	local phase = Store.phase()
 	if phase ~= shownPhase then
 		showPhase(phase)
+	else
+		updateBoard(phase) -- the mission can change without a phase change ("Try again")
 	end
 	if kind == "language" then
 		renderAll()
 		Prompts.refresh()
 	else
-		briefing.render()
+		missionSelect.render()
 		powerBoard.render()
 		hud.render()
 		report.render()
+		objectives.render()
 		sources.render() -- the live space-weather summary can arrive after the first snapshot
 	end
 	hud.tick()
@@ -116,9 +171,28 @@ end)
 showPhase("Briefing")
 renderAll()
 Prompts.start()
--- Guidance: task markers, the C.A.R.L. drone and the first-days tips follow the Store by themselves.
+
+-- Preload every icon once so HUD icons never appear blank on first use.
+task.spawn(function()
+	local ContentProvider = game:GetService("ContentProvider")
+	local Icons = require(Shared:WaitForChild("Icons"))
+	local images: { Instance } = {}
+	for _, id in Icons do
+		local image = Instance.new("ImageLabel")
+		image.Image = id
+		table.insert(images, image)
+	end
+	pcall(function()
+		ContentProvider:PreloadAsync(images)
+	end)
+	for _, image in images do
+		image:Destroy()
+	end
+end)
+-- Guidance: task markers, the C.A.R.L. drone and the tutorial tips follow the Store by themselves.
 Markers.start()
 CarlDrone.start()
+Rewards.start()
 Onboarding.start({
 	show = messages.show,
 	showTip = messages.showTip,
@@ -136,7 +210,8 @@ RunService.Heartbeat:Connect(function(deltaTime: number)
 	end
 end)
 
--- Network: the server owns the mission and sends Snapshots, per-player stats and C.A.R.L. messages.
+-- Network: the server owns the mission and sends Snapshots, per-player stats, progress and
+-- C.A.R.L. messages.
 local remotes = ReplicatedStorage:WaitForChild(Types.Remotes.FOLDER)
 local snapshotRemote = remotes:WaitForChild(Types.Remotes.SNAPSHOT) :: RemoteEvent
 local statsRemote = remotes:WaitForChild(Types.Remotes.PLAYER_STATS) :: RemoteEvent
@@ -161,6 +236,28 @@ messageRemote.OnClientEvent:Connect(function(ref: any)
 	if type(ref) == "table" and type(ref.key) == "string" then
 		messages.show(ref)
 	end
+end)
+
+-- Progress and collectibles: wait in the background so an older server never blocks the client.
+task.spawn(function()
+	local progressRemote = remotes:WaitForChild(PROGRESS_REMOTE) :: RemoteEvent
+	progressRemote.OnClientEvent:Connect(function(progress: any)
+		if type(progress) == "table" then
+			Store.setProgress(progress)
+		end
+	end)
+end)
+task.spawn(function()
+	local collectedRemote = remotes:WaitForChild(COLLECTED_REMOTE) :: RemoteEvent
+	collectedRemote.OnClientEvent:Connect(function(payload: any)
+		if type(payload) == "table" and type(payload.id) == "string" then
+			collection.showCollected({
+				id = payload.id,
+				isNew = payload.isNew == true,
+				allFound = payload.allFound == true,
+			})
+		end
+	end)
 end)
 
 Store.send({ type = "SetLanguage", language = Store.getLanguage() })

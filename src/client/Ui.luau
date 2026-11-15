@@ -1,6 +1,15 @@
 --!strict
--- Space Base Odyssey - shared UI building blocks: theme, icons, scaled root, labels, buttons and bars.
+-- Space Base Odyssey - shared UI building blocks in the "Lunar Sunrise" identity: Theme colours and fonts,
+-- game icons (Icons.luau images tinted with Theme), scaled root, panels, labels, buttons and bars.
+-- No emoji anywhere: every pictogram is an ImageLabel from src/shared/Icons.luau.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TextService = game:GetService("TextService")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Theme = require(Shared:WaitForChild("Theme"))
+local Icons = require(Shared:WaitForChild("Icons"))
 
 local Ui = {}
 
@@ -9,71 +18,135 @@ local REFERENCE_HEIGHT = 720
 local MIN_SCALE = 0.4
 local MAX_SCALE = 2.5
 
-Ui.FONT = Enum.Font.FredokaOne
+local ROLE = Theme.ROLE
+local PALETTE = Theme.PALETTE
 
+Ui.Theme = Theme
+Ui.Icons = Icons
+Ui.ROLE = ROLE
+Ui.FONT = Theme.FONT.display -- titles and buttons
+Ui.BODY_FONT = Theme.FONT.body -- body text
+Ui.CORNER = Theme.CORNER.Scale
+Ui.STROKE = Theme.STROKE_THICKNESS
+
+-- Named colours used by the screens, all taken from the Theme (never raw RGB in screen code).
 Ui.COLORS = table.freeze({
-	backdrop = Color3.fromRGB(6, 8, 22),
-	panel = Color3.fromRGB(22, 28, 56),
-	panelLight = Color3.fromRGB(42, 52, 96),
-	text = Color3.fromRGB(255, 255, 255),
-	textDark = Color3.fromRGB(16, 18, 30),
-	textSoft = Color3.fromRGB(196, 206, 240),
-	accent = Color3.fromRGB(255, 200, 40),
-	go = Color3.fromRGB(38, 186, 96),
-	minus = Color3.fromRGB(222, 72, 60),
-	plus = Color3.fromRGB(46, 140, 230),
-	disabled = Color3.fromRGB(86, 90, 108),
-	barBack = Color3.fromRGB(12, 14, 28),
-	cell = Color3.fromRGB(255, 214, 10),
-	cellEmpty = Color3.fromRGB(52, 58, 84),
-	warning = Color3.fromRGB(255, 150, 0),
-	storm = Color3.fromRGB(205, 36, 46),
-	bubble = Color3.fromRGB(238, 246, 255),
-	ice = Color3.fromRGB(150, 220, 255),
-	outline = Color3.fromRGB(0, 0, 0),
-	zoneGreen = Color3.fromRGB(46, 204, 113),
-	zoneYellow = Color3.fromRGB(245, 196, 30),
-	zoneRed = Color3.fromRGB(232, 60, 60),
+	backdrop = ROLE.background,
+	panel = ROLE.panel,
+	panelLight = ROLE.panelRaised,
+	stroke = ROLE.stroke,
+	text = ROLE.text,
+	textDark = ROLE.primaryButtonText,
+	textSoft = ROLE.textDim,
+	accent = ROLE.accent,
+	go = ROLE.primaryButton,
+	secondary = ROLE.secondaryButton,
+	disabled = ROLE.stroke,
+	barBack = ROLE.background,
+	cell = PALETTE.gold,
+	cellEmpty = ROLE.stroke,
+	warning = ROLE.warning,
+	storm = ROLE.danger,
+	reward = ROLE.reward,
+	star = ROLE.star,
+	ice = PALETTE.cyan,
+	outline = ROLE.background,
+	zoneGreen = ROLE.zoneGreen,
+	zoneYellow = ROLE.zoneYellow,
+	zoneRed = ROLE.zoneRed,
 })
 
--- Emoji glyphs used as icons next to text (never colour alone).
+-- Icons by game meaning (values are rbxassetid images from Icons.luau).
 Ui.ICONS = table.freeze({
-	air = "💨",
-	food = "🍎",
-	dose = "☢️",
-	suit = "💨",
-	LifeSupport = "💨",
-	Greenhouse = "🌱",
-	Science = "🔬",
-	cell = "⚡",
-	ice = "🧊",
-	timer = "⏱️",
-	warning = "⚠️",
-	storm = "☢️",
-	shelter = "🛡️",
-	star = "⭐",
-	rocket = "🚀",
-	restart = "🔄",
-	language = "🌐",
-	run = "🏃",
-	walk = "🚶",
-	robot = "🤖",
-	moon = "🌙",
+	air = Icons.air,
+	food = Icons.food,
+	dose = Icons.dose,
+	suit = Icons.suit,
+	LifeSupport = Icons.lifesupport,
+	Greenhouse = Icons.greenhouse,
+	Science = Icons.science,
+	cell = Icons.power,
+	ice = Icons.ice,
+	drop = Icons.drop,
+	timer = Icons.clock,
+	warning = Icons.alert,
+	storm = Icons.storm,
+	shelter = Icons.shield,
+	star = Icons.star,
+	starEmpty = Icons.starEmpty,
+	rocket = Icons.rocket,
+	restart = Icons.restart,
+	language = Icons.language,
+	run = Icons.run,
+	robot = Icons.robot,
+	moon = Icons.calm,
+	antenna = Icons.antenna,
+	satellite = Icons.satellite,
+	close = Icons.close,
+	data = Icons.data,
+	pointer = Icons.pointer,
+	hourglass = Icons.hourglass,
+	lock = Icons.lock,
+	check = Icons.check,
+	trophy = Icons.trophy,
+	gift = Icons.gift,
+	telescope = Icons.telescope,
+	book = Icons.book,
+	planet = Icons.planet,
+	target = Icons.target,
+	home = Icons.home,
+	play = Icons.play,
+	map = Icons.map,
+	flag = Icons.flag,
+	panel = Icons.panel,
+	repair = Icons.repair,
 })
 
 Ui.EVENT_ICONS = table.freeze({
-	None = "🌙",
-	Dust = "🌫️",
-	SolarStorm = "☀️",
-	EquipmentFailure = "🔧",
+	None = Icons.calm,
+	Dust = Icons.dust,
+	SolarStorm = Icons.storm,
+	EquipmentFailure = Icons.failure,
+})
+
+Ui.EVENT_COLORS = table.freeze({
+	None = ROLE.accent,
+	Dust = ROLE.warning,
+	SolarStorm = ROLE.warning,
+	EquipmentFailure = ROLE.warning,
 })
 
 -- Shape icons for meter zones, so the state is readable without colour.
 Ui.ZONE_ICONS = table.freeze({
-	green = "👍",
-	yellow = "⚠️",
-	red = "🚨",
+	green = Icons.check,
+	yellow = Icons.alert,
+	red = Icons.close,
 })
+
+-- Colour per system (and its icon tint).
+Ui.SYSTEM_COLORS = table.freeze({
+	LifeSupport = ROLE.LifeSupport,
+	Greenhouse = ROLE.Greenhouse,
+	Science = ROLE.Science,
+})
+
+-- Accent colour per mission kind: training = cyan (guidance), story = orange (sunrise), free = lime (go).
+Ui.KIND_COLORS = table.freeze({
+	Tutorial = PALETTE.cyan,
+	Story = PALETTE.orange,
+	Free = PALETTE.lime,
+})
+
+-- Image for an Icons.luau key (e.g. from a Snapshot); unknown names fall back to the star.
+function Ui.iconImage(name: string?): string
+	if type(name) == "string" then
+		local image = (Icons :: any)[name]
+		if type(image) == "string" then
+			return image
+		end
+	end
+	return Icons.star
+end
 
 function Ui.zoneColor(zone: string): Color3
 	if zone == "red" then
@@ -82,6 +155,18 @@ function Ui.zoneColor(zone: string): Color3
 		return Ui.COLORS.zoneYellow
 	end
 	return Ui.COLORS.zoneGreen
+end
+
+-- Readable text colour on a filled background: night on bright colours, cream on dark ones.
+function Ui.contrastText(background: Color3): Color3
+	local luminance = 0.2126 * background.R + 0.7152 * background.G + 0.0722 * background.B
+	return if luminance > 0.45 then ROLE.primaryButtonText else ROLE.text
+end
+
+-- Current UIScale of the root (offsets inside the root are in reference units).
+local currentScale = 1
+function Ui.scale(): number
+	return currentScale
 end
 
 export type Props = {
@@ -106,20 +191,23 @@ export type Props = {
 	alignY: Enum.TextYAlignment?,
 	font: Enum.Font?,
 	outline: boolean?, -- dark text outline for text drawn over the 3D world
+	icon: string?, -- image (rbxassetid) for Ui.icon / Ui.button
+	tint: Color3?, -- ImageColor3 for icons
 }
 
-function Ui.corner(object: GuiObject, radius: number)
+function Ui.corner(object: GuiObject, radius: number?)
 	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(radius, 0)
+	corner.CornerRadius = UDim.new(radius or Ui.CORNER, 0)
 	corner.Parent = object
 end
 
-function Ui.stroke(object: GuiObject, thickness: number, color: Color3?)
+function Ui.stroke(object: GuiObject, thickness: number?, color: Color3?): UIStroke
 	local stroke = Instance.new("UIStroke")
 	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	stroke.Thickness = thickness
-	stroke.Color = color or Ui.COLORS.outline
+	stroke.Thickness = thickness or Ui.STROKE
+	stroke.Color = color or ROLE.stroke
 	stroke.Parent = object
+	return stroke
 end
 
 function Ui.aspect(object: GuiObject, ratio: number)
@@ -137,6 +225,17 @@ function Ui.padding(object: GuiObject, fraction: number)
 	padding.Parent = object
 end
 
+-- Soft vertical gradient on a panel (subtle depth; transparency only, colours stay Theme colours).
+function Ui.sheen(object: GuiObject)
+	local gradient = Instance.new("UIGradient")
+	gradient.Rotation = 90
+	gradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(1, 0.18),
+	})
+	gradient.Parent = object
+end
+
 local function applyBase(object: GuiObject, props: Props)
 	if props.name then
 		object.Name = props.name
@@ -144,7 +243,7 @@ local function applyBase(object: GuiObject, props: Props)
 	object.Size = props.size or UDim2.fromScale(1, 1)
 	object.Position = props.position or UDim2.fromScale(0, 0)
 	object.AnchorPoint = props.anchor or Vector2.zero
-	object.BackgroundColor3 = props.color or Ui.COLORS.panel
+	object.BackgroundColor3 = props.color or ROLE.panel
 	object.BackgroundTransparency = props.transparency or (if props.color then 0 else 1)
 	object.BorderSizePixel = 0
 	object.ZIndex = props.zindex or 1
@@ -165,13 +264,13 @@ local function applyText(object: TextLabel | TextButton, props: Props)
 	local target: any = object
 	target.Font = props.font or Ui.FONT
 	target.Text = props.text or ""
-	target.TextColor3 = props.textColor or Ui.COLORS.text
+	target.TextColor3 = props.textColor or ROLE.text
 	target.TextScaled = true
 	target.TextWrapped = true
 	target.RichText = false
 	target.TextXAlignment = props.alignX or Enum.TextXAlignment.Center
 	target.TextYAlignment = props.alignY or Enum.TextYAlignment.Center
-	target.TextStrokeColor3 = Ui.COLORS.outline
+	target.TextStrokeColor3 = ROLE.background
 	target.TextStrokeTransparency = if props.outline then 0.35 else 1
 	local constraint = Instance.new("UITextSizeConstraint")
 	constraint.MaxTextSize = props.maxText or 40
@@ -186,6 +285,17 @@ function Ui.frame(parent: Instance, props: Props): Frame
 	return frame
 end
 
+-- A rounded Theme panel: night (or raised) fill, Theme stroke and corner.
+function Ui.panel(parent: Instance, props: Props): Frame
+	local withDefaults: Props = table.clone(props)
+	withDefaults.color = props.color or ROLE.panel
+	withDefaults.corner = props.corner or Ui.CORNER
+	withDefaults.stroke = props.stroke or Ui.STROKE
+	withDefaults.strokeColor = props.strokeColor or ROLE.stroke
+	return Ui.frame(parent, withDefaults)
+end
+
+-- Text label; titles use the display font, `font = Ui.BODY_FONT` for body text.
 function Ui.label(parent: Instance, props: Props): TextLabel
 	local label = Instance.new("TextLabel")
 	applyBase(label, props)
@@ -194,70 +304,223 @@ function Ui.label(parent: Instance, props: Props): TextLabel
 	return label
 end
 
+-- Body-text label (readable font, left aligned by default).
+function Ui.body(parent: Instance, props: Props): TextLabel
+	local withDefaults: Props = table.clone(props)
+	withDefaults.font = props.font or Ui.BODY_FONT
+	withDefaults.alignX = props.alignX or Enum.TextXAlignment.Left
+	withDefaults.textColor = props.textColor or ROLE.text
+	return Ui.label(parent, withDefaults)
+end
+
+-- Game icon: an image from Icons.luau, fitted inside its box and tinted with a Theme colour.
+function Ui.icon(parent: Instance, image: string, props: Props): ImageLabel
+	local icon = Instance.new("ImageLabel")
+	applyBase(icon, props)
+	icon.Image = image
+	icon.ImageColor3 = props.tint or ROLE.text
+	icon.ScaleType = Enum.ScaleType.Fit
+	icon.Parent = parent
+	return icon
+end
+
+function Ui.setIcon(icon: ImageLabel, image: string, tint: Color3?)
+	icon.Image = image
+	if tint then
+		icon.ImageColor3 = tint
+	end
+end
+
+-- Buttons: a TextButton with no text of its own; an "Icon" ImageLabel and a "Label" TextLabel inside
+-- are laid out as one centred group (icon then text), sized from the button's real size.
+type ButtonParts = {
+	label: TextLabel,
+	icon: ImageLabel,
+	maxText: number,
+	minText: number,
+}
+local buttonParts: { [TextButton]: ButtonParts } = setmetatable({}, { __mode = "k" }) :: any
+
+local ICON_HEIGHT = 0.56
+local ICON_GAP = 0.16
+local BUTTON_MARGIN = 0.22
+local TEXT_HEIGHT = 0.46
+
+local function layoutButton(button: TextButton)
+	local parts = buttonParts[button]
+	if not parts then
+		return
+	end
+	local scale = math.max(currentScale, 0.01)
+	local width = button.AbsoluteSize.X / scale
+	local height = button.AbsoluteSize.Y / scale
+	if width <= 2 or height <= 2 then
+		return
+	end
+	local label = parts.label
+	local icon = parts.icon
+	local hasIcon = icon.Image ~= ""
+	local hasText = label.Text ~= ""
+	icon.Visible = hasIcon
+	local iconSize = if hasIcon then height * ICON_HEIGHT else 0
+	if hasIcon and not hasText then
+		iconSize = height * 0.66
+	end
+	local gap = if hasIcon and hasText then height * ICON_GAP else 0
+	local margin = math.min(height * BUTTON_MARGIN, width * 0.08)
+	local available = math.max(4, width - margin * 2 - iconSize - gap)
+	local textSize = math.clamp(math.floor(height * TEXT_HEIGHT), parts.minText, parts.maxText)
+	local textWidth = 0
+	if hasText then
+		local ok, bounds = pcall(function(): Vector2
+			return TextService:GetTextSize(label.Text, textSize, label.Font, Vector2.new(10000, 10000))
+		end)
+		textWidth = if ok then bounds.X else available
+		if textWidth > available then
+			textSize = math.max(parts.minText, math.floor(textSize * available / textWidth))
+			local ok2, bounds2 = pcall(function(): Vector2
+				return TextService:GetTextSize(label.Text, textSize, label.Font, Vector2.new(10000, 10000))
+			end)
+			textWidth = if ok2 then bounds2.X else available
+		end
+	end
+	local shownWidth = math.min(textWidth + 2, available)
+	local groupWidth = iconSize + gap + shownWidth
+	local startX = (width - groupWidth) / 2
+	icon.Size = UDim2.fromOffset(iconSize, iconSize)
+	icon.Position = UDim2.fromOffset(startX, height / 2)
+	label.TextScaled = false
+	label.TextSize = textSize
+	label.Size = UDim2.fromOffset(shownWidth, height * 0.92)
+	label.Position = UDim2.fromOffset(startX + iconSize + gap, height / 2)
+end
+
 -- A big friendly button. `onClick` runs on mouse click and on touch tap.
+-- Default look: primary (lime with night text). Pass `color` for other roles.
 function Ui.button(parent: Instance, props: Props, onClick: () -> ()): TextButton
 	local button = Instance.new("TextButton")
 	local withDefaults: Props = table.clone(props)
-	withDefaults.color = props.color or Ui.COLORS.go
-	withDefaults.corner = props.corner or 0.25
-	withDefaults.stroke = props.stroke or 3
-	withDefaults.maxText = props.maxText or 44
-	withDefaults.outline = if props.outline == nil then true else props.outline
+	withDefaults.color = props.color or ROLE.primaryButton
+	withDefaults.corner = props.corner or Ui.CORNER
+	withDefaults.stroke = props.stroke or Ui.STROKE
+	withDefaults.strokeColor = props.strokeColor or ROLE.stroke
 	applyBase(button, withDefaults)
-	applyText(button, withDefaults)
+	button.Text = ""
 	button.AutoButtonColor = true
+	button.Selectable = true
+
+	local textColor = props.textColor or Ui.contrastText(withDefaults.color :: Color3)
+	local label = Instance.new("TextLabel")
+	label.Name = "Label"
+	label.BackgroundTransparency = 1
+	label.AnchorPoint = Vector2.new(0, 0.5)
+	label.Font = props.font or Ui.FONT
+	label.Text = props.text or ""
+	label.TextColor3 = textColor
+	label.TextWrapped = true
+	label.TextXAlignment = Enum.TextXAlignment.Center
+	label.TextYAlignment = Enum.TextYAlignment.Center
+	label.TextStrokeColor3 = ROLE.background
+	label.TextStrokeTransparency = if props.outline then 0.4 else 1
+	label.ZIndex = withDefaults.zindex or 1
+	label.Parent = button
+
+	local icon = Instance.new("ImageLabel")
+	icon.Name = "Icon"
+	icon.BackgroundTransparency = 1
+	icon.AnchorPoint = Vector2.new(0, 0.5)
+	icon.ScaleType = Enum.ScaleType.Fit
+	icon.Image = props.icon or ""
+	icon.ImageColor3 = props.tint or textColor
+	icon.ZIndex = withDefaults.zindex or 1
+	icon.Parent = button
+
+	buttonParts[button] = {
+		label = label,
+		icon = icon,
+		maxText = props.maxText or 40,
+		minText = props.minText or 10,
+	}
+	button:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		layoutButton(button)
+	end)
 	button.Activated:Connect(onClick)
 	button.Parent = parent
+	layoutButton(button)
 	return button
+end
+
+-- Change a button's text and (optionally) its icon image.
+function Ui.setButton(button: TextButton, text: string, image: string?)
+	local parts = buttonParts[button]
+	if not parts then
+		return
+	end
+	parts.label.Text = text
+	if image ~= nil then
+		parts.icon.Image = image
+	end
+	layoutButton(button)
 end
 
 -- Visual enabled/disabled look; the click handler decides what a "disabled" click does.
 function Ui.setButtonLook(button: TextButton, enabled: boolean, color: Color3)
 	button.BackgroundColor3 = if enabled then color else Ui.COLORS.disabled
-	button.TextTransparency = if enabled then 0 else 0.35
 	button.AutoButtonColor = enabled
+	local parts = buttonParts[button]
+	if parts then
+		local textColor = if enabled then Ui.contrastText(color) else ROLE.textDim
+		parts.label.TextColor3 = textColor
+		parts.label.TextTransparency = if enabled then 0 else 0.3
+		parts.icon.ImageColor3 = textColor
+		parts.icon.ImageTransparency = if enabled then 0 else 0.3
+	end
 end
 
--- Square emoji icon.
-function Ui.icon(parent: Instance, glyph: string, props: Props): TextLabel
-	local withDefaults: Props = table.clone(props)
-	withDefaults.text = glyph
-	withDefaults.maxText = props.maxText or 64
-	return Ui.label(parent, withDefaults)
+-- Recolour a button for a new role (fill, text and icon follow).
+function Ui.setButtonColor(button: TextButton, color: Color3)
+	Ui.setButtonLook(button, true, color)
 end
 
 export type IconText = {
 	frame: Frame,
-	icon: TextLabel,
+	icon: ImageLabel,
 	label: TextLabel,
-	set: (glyph: string, text: string) -> (),
+	set: (image: string, text: string, tint: Color3?) -> (),
 }
 
--- A pill with an emoji icon on the left and text on the right (e.g. today's event banner).
+-- A pill with an icon on the left and text on the right (e.g. today's event banner).
 function Ui.iconText(parent: Instance, props: Props): IconText
 	local withDefaults: Props = table.clone(props)
 	withDefaults.corner = props.corner or 0.3
+	withDefaults.strokeColor = props.strokeColor or ROLE.stroke
 	local frame = Ui.frame(parent, withDefaults)
-	local icon = Ui.icon(frame, "", {
+	local textColor = props.textColor or ROLE.text
+	local icon = Ui.icon(frame, props.icon or "", {
 		name = "Icon",
-		size = UDim2.fromScale(0.2, 0.86),
+		size = UDim2.fromScale(0.16, 0.7),
 		position = UDim2.fromScale(0.03, 0.5),
 		anchor = Vector2.new(0, 0.5),
+		tint = props.tint or textColor,
 		zindex = (props.zindex or 1) + 1,
 	})
 	local label = Ui.label(frame, {
 		name = "Text",
-		size = UDim2.fromScale(0.74, 0.86),
-		position = UDim2.fromScale(0.24, 0.5),
+		size = UDim2.fromScale(0.77, 0.8),
+		position = UDim2.fromScale(0.21, 0.5),
 		anchor = Vector2.new(0, 0.5),
 		alignX = Enum.TextXAlignment.Left,
-		textColor = props.textColor,
+		textColor = textColor,
 		maxText = props.maxText or 32,
 		outline = props.outline,
+		font = props.font,
 		zindex = (props.zindex or 1) + 1,
 	})
-	local function set(glyph: string, text: string)
-		icon.Text = glyph
+	local function set(image: string, text: string, tint: Color3?)
+		icon.Image = image
+		if tint then
+			icon.ImageColor3 = tint
+		end
 		label.Text = text
 	end
 	return { frame = frame, icon = icon, label = label, set = set }
@@ -267,32 +530,63 @@ export type Bar = {
 	frame: Frame,
 	fill: Frame,
 	label: TextLabel,
-	set: (fraction: number, color: Color3, text: string) -> (),
+	zone: ImageLabel,
+	set: (fraction: number, color: Color3, text: string, zoneImage: string?) -> (),
 }
 
--- A rounded progress bar with centred text on top of the fill.
+-- A rounded progress bar with the value text and a zone shape icon on top of the fill.
 function Ui.bar(parent: Instance, props: Props): Bar
 	local withDefaults: Props = table.clone(props)
 	withDefaults.color = props.color or Ui.COLORS.barBack
-	withDefaults.corner = props.corner or 0.4
+	withDefaults.corner = props.corner or 0.5
 	withDefaults.stroke = props.stroke or 2
 	local frame = Ui.frame(parent, withDefaults)
-	local fill = Ui.frame(frame, { name = "Fill", size = UDim2.fromScale(1, 1), color = Ui.COLORS.zoneGreen, corner = 0.4 })
+	local fill = Ui.frame(frame, { name = "Fill", size = UDim2.fromScale(1, 1), color = Ui.COLORS.zoneGreen, corner = 0.5 })
 	local label = Ui.label(frame, {
 		name = "Value",
-		size = UDim2.fromScale(0.94, 0.86),
-		position = UDim2.fromScale(0.5, 0.5),
-		anchor = Vector2.new(0.5, 0.5),
+		size = UDim2.fromScale(0.62, 0.86),
+		position = UDim2.fromScale(0.06, 0.5),
+		anchor = Vector2.new(0, 0.5),
+		alignX = Enum.TextXAlignment.Left,
 		maxText = props.maxText or 30,
 		outline = true,
 		zindex = 2,
 	})
-	local function set(fraction: number, color: Color3, text: string)
+	-- Zone shape in a small night badge at the right end, readable over any fill colour.
+	local zone = Ui.icon(frame, "", {
+		name = "Zone",
+		size = UDim2.fromScale(0.9, 0.9),
+		position = UDim2.fromScale(0.985, 0.5),
+		anchor = Vector2.new(1, 0.5),
+		color = ROLE.background,
+		corner = 0.5,
+		aspect = 1,
+		tint = ROLE.text,
+		zindex = 2,
+	})
+	local function set(fraction: number, color: Color3, text: string, zoneImage: string?)
 		fill.Size = UDim2.fromScale(math.clamp(fraction, 0, 1), 1)
 		fill.BackgroundColor3 = color
+		fill.Visible = fraction > 0.005
 		label.Text = text
+		zone.Image = zoneImage or ""
+		zone.Visible = zoneImage ~= nil
+		zone.ImageColor3 = color
 	end
-	return { frame = frame, fill = fill, label = label, set = set }
+	return { frame = frame, fill = fill, label = label, zone = zone, set = set }
+end
+
+-- A dark full-screen backdrop that blocks taps to the screen underneath (for modal cards).
+function Ui.modal(parent: Instance, name: string, zindex: number): Frame
+	local frame = Ui.frame(parent, {
+		name = name,
+		color = ROLE.background,
+		transparency = 0.25,
+		zindex = zindex,
+		visible = false,
+	})
+	frame.Active = true
+	return frame
 end
 
 -- A ScreenGui plus a root Frame whose UIScale follows the viewport height. Everything inside the root
@@ -323,6 +617,7 @@ function Ui.createRoot(playerGui: Instance): (ScreenGui, Frame)
 			return
 		end
 		local scale = math.clamp(viewport.Y / REFERENCE_HEIGHT, MIN_SCALE, MAX_SCALE)
+		currentScale = scale
 		uiScale.Scale = scale
 		root.Size = UDim2.fromOffset(viewport.X / scale, viewport.Y / scale)
 	end

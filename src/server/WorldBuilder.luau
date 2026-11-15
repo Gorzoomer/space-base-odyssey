@@ -3,13 +3,21 @@
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local StarterPlayer = game:GetService("StarterPlayer")
 local Workspace = game:GetService("Workspace")
 
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Icons = require(Shared:WaitForChild("Icons"))
+local Theme = require(Shared:WaitForChild("Theme"))
+
 export type ArrayRef = { model: Model, panel: BasePart, prompt: ProximityPrompt }
 export type StormStage = "none" | "warning" | "storm"
 export type SystemAllocation = { LifeSupport: number, Greenhouse: number, Science: number }
+export type CollectibleRef = { id: string, model: Model, prompt: ProximityPrompt }
+export type RoverPaint = "default" | "cheese"
 
 export type World = {
 	spawn: SpawnLocation,
@@ -30,6 +38,11 @@ export type World = {
 	setShiftPromptsEnabled: (enabled: boolean) -> (),
 	-- Shows today's power plan on the base: greenhouse grow lights, air maker, science rover.
 	setSystemVisuals: (allocation: SystemAllocation) -> (),
+	-- Secrets (Stage 4): four hidden collectibles, the sealed observatory door and two shared rewards.
+	collectibles: { CollectibleRef },
+	observatoryDoor: BasePart,
+	setRoverPaint: (paint: RoverPaint) -> (),
+	setTeamFlag: (visible: boolean) -> (),
 }
 
 type Style = {
@@ -59,6 +72,24 @@ local GROUND_HALF = 600
 local GROUND_TILE = 150
 local EARTH_DISTANCE = 900
 local EARTH_DIAMETER = 130
+-- Mars is a small red dot in the black sky: the teaser for the next mission.
+local MARS_DISTANCE = 950
+local MARS_DIAMETER = 16
+local MARS_ELEVATION = math.rad(16)
+local MARS_FROM_SUN = math.rad(-100) -- Earth sits at +110 degrees from the Sun's direction
+-- Secret places (see buildSecrets). Each is enclosed by walls at least 4 studs thick.
+local LOOKOUT_DISTANCE = 20 -- the rock spire behind the antenna
+local LOOKOUT_YAW = math.rad(-30) -- turns its niche away from the crater rim as well as the base
+local LAVA_TUBE_MIN = Vector3.new(-320, 0, -85) -- hill west of the ridge
+local LAVA_TUBE_MAX = Vector3.new(-270, 24, -35)
+local OBSERVATORY_HILL = Vector3.new(230, 0, 60)
+local OBSERVATORY_HILL_Y = 14
+local COLLECTIBLE_PROMPT_DISTANCE = 8
+local COLLECTIBLE_FLOAT = 2.6 -- item centre above the floor
+local COLLECTIBLE_BOB = 0.25
+local COLLECTIBLE_SPIN_RAD = 0.9
+local COLLECTIBLE_AWAKE_RANGE = 90 -- only animate items someone is near
+local COLLECTIBLE_AWAKE_CHECK = 0.5
 local YIELD_EVERY = 40
 
 -- Sun search window: low enough that crater rims shade the floor, high enough to light the ground.
@@ -71,29 +102,40 @@ local PROMPT_DISTANCE = 10
 
 -- Palette.
 local WHITE_HULL = Color3.fromRGB(226, 228, 232)
-local HULL_TRIM = Color3.fromRGB(240, 128, 40)
+-- Lunar Sunrise accents (Theme): cyan = systems and guidance, orange = warnings and the shelter,
+-- magenta = greenhouse and secrets, lime = go / ok. The Moon itself stays grey.
+local PALETTE = Theme.PALETTE
+local ACCENT_SYSTEM = PALETTE.cyan
+local ACCENT_WARNING = PALETTE.orange
+local ACCENT_SECRET = PALETTE.magenta
+local ACCENT_OK = PALETTE.lime
+local HULL_TRIM = ACCENT_SYSTEM
 local GLASS_COLOUR = Color3.fromRGB(255, 214, 160)
 local METAL = Color3.fromRGB(150, 155, 162)
 local DARK_METAL = Color3.fromRGB(70, 74, 82)
 local REGOLITH_LIGHT = Color3.fromRGB(150, 147, 141)
 local PANEL_CLEAN = Color3.fromRGB(30, 56, 128)
 local PANEL_DUSTY = Color3.fromRGB(146, 134, 116)
-local LINK_RED = Color3.fromRGB(255, 70, 60)
-local LINK_GREEN = Color3.fromRGB(70, 255, 120)
-local STORM_AMBER = Color3.fromRGB(255, 170, 40)
-local STORM_RED = Color3.fromRGB(255, 40, 40)
+local LINK_RED = PALETTE.red
+local LINK_GREEN = ACCENT_OK
+local STORM_AMBER = ACCENT_WARNING
+local STORM_RED = PALETTE.red
 local LAMP_OFF = Color3.fromRGB(60, 60, 64)
 local ICE_GLOW = Color3.fromRGB(170, 232, 255)
-local MARKER_AMBER = Color3.fromRGB(255, 180, 60)
+local MARKER_GUIDE = ACCENT_SYSTEM
+local MARKER_SHELTER = ACCENT_WARNING
 -- Real plant LEDs mix red and blue, so they look magenta-pink.
-local GROW_PINK = Color3.fromRGB(255, 80, 205)
-local GROW_DIM = Color3.fromRGB(175, 55, 145)
+local GROW_PINK = ACCENT_SECRET
+local GROW_DIM = ACCENT_SECRET:Lerp(Color3.new(0, 0, 0), 0.35)
 local PLANT_GREEN = Color3.fromRGB(78, 188, 88)
 local PLANT_GREY = Color3.fromRGB(124, 140, 116)
-local AIR_OK = Color3.fromRGB(70, 255, 190)
-local AIR_WINDOW_ON = Color3.fromRGB(70, 170, 255)
-local AIR_WINDOW_HIGH = Color3.fromRGB(130, 215, 255)
-local AIR_WINDOW_OFF = Color3.fromRGB(40, 56, 84)
+local AIR_OK = ACCENT_OK
+local AIR_WINDOW_ON = ACCENT_SYSTEM:Lerp(Color3.new(0, 0, 0), 0.25)
+local AIR_WINDOW_HIGH = ACCENT_SYSTEM
+local AIR_WINDOW_OFF = PALETTE.nightLight
+local CHEESE_PAINT = PALETTE.gold
+local CHEESE_SPOT = PALETTE.gold:Lerp(Color3.fromRGB(150, 100, 20), 0.45)
+local MARS_RED = Color3.fromRGB(214, 86, 48)
 local INTERIOR_LIGHT = Color3.fromRGB(255, 238, 214)
 
 -- Visual tuning for the system animations (not gameplay numbers). Index = brightness step + 1.
@@ -121,6 +163,7 @@ local MARKER_NAMES = table.freeze({
 
 -- Module state shared between applyEnvironment and build.
 local earthPosition: Vector3? = nil
+local marsPosition: Vector3? = nil
 local partCounter = 0
 
 ------------------------------------------------------------------------------------------------
@@ -315,6 +358,13 @@ local function defaultEarthPosition(): Vector3
 	return dir * EARTH_DISTANCE + Vector3.new(0, EARTH_DISTANCE * math.tan(math.rad(7)), 0)
 end
 
+local function defaultMarsPosition(): Vector3
+	local sunH = flatUnit(sunDirection(), Vector3.new(0, 0, -1))
+	local sunAngle = math.atan2(sunH.X, sunH.Z)
+	local dir = dirFromAngle(sunAngle + MARS_FROM_SUN) * math.cos(MARS_ELEVATION) + Vector3.new(0, math.sin(MARS_ELEVATION), 0)
+	return dir * MARS_DISTANCE
+end
+
 ------------------------------------------------------------------------------------------------
 -- Environment
 ------------------------------------------------------------------------------------------------
@@ -397,6 +447,14 @@ local function buildSkyBodies()
 		})
 	end
 
+	-- Mars: a small reddish disc, the next destination. The observatory telescope points at it.
+	ball(sky, "Mars", MARS_DIAMETER, marsPosition or defaultMarsPosition(), {
+		color = MARS_RED,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+		shadow = false,
+	})
+
 	-- A sprinkle of stars: there is no air to hide them.
 	local rng = Random.new(1969)
 	for i = 1, 70 do
@@ -456,12 +514,12 @@ function WorldBuilder.applyEnvironment(data: any)
 	local latitude, clock = chooseSun()
 	Lighting.GeographicLatitude = latitude
 	Lighting.ClockTime = clock
-	Lighting.Brightness = 3.5
-	Lighting.ExposureCompensation = 0.3
+	Lighting.Brightness = 4.5
+	Lighting.ExposureCompensation = 0.45
 	-- Ambient only lights places the sky cannot see (habitat, shelter), so it brightens the rooms
 	-- without washing out the sunlit ground or the shadowed crater floor (OutdoorAmbient).
 	Lighting.Ambient = Color3.fromRGB(38, 38, 46)
-	Lighting.OutdoorAmbient = Color3.fromRGB(78, 78, 88)
+	Lighting.OutdoorAmbient = Color3.fromRGB(118, 118, 132)
 	Lighting.EnvironmentDiffuseScale = 0.3
 	Lighting.EnvironmentSpecularScale = 0.2
 	Lighting.GlobalShadows = true
@@ -511,6 +569,7 @@ function WorldBuilder.applyEnvironment(data: any)
 	end
 
 	earthPosition = defaultEarthPosition()
+	marsPosition = defaultMarsPosition()
 	buildSkyBodies()
 end
 
@@ -547,7 +606,7 @@ local function fillGround(parent: Instance, rng: Random, x0: number, x1: number,
 	end
 end
 
-local function buildGround(base: Instance, rng: Random)
+local function buildGround(base: Instance, rng: Random): Folder
 	local ground = folder(base, "Ground")
 	local hx0 = CRATER_CENTRE.X - CRATER_RADIUS
 	local hx1 = CRATER_CENTRE.X + CRATER_RADIUS
@@ -558,11 +617,42 @@ local function buildGround(base: Instance, rng: Random)
 	fillGround(ground, rng, -GROUND_HALF, GROUND_HALF, hz1, GROUND_HALF)
 	fillGround(ground, rng, -GROUND_HALF, hx0, hz0, hz1)
 	fillGround(ground, rng, hx1, GROUND_HALF, hz0, hz1)
+	return ground
 end
 
--- Builds the crater pit with its rim, ramp and ice nodes; returns the model, the ice node refs and
--- the ramp's angle around the crater.
-local function buildCrater(base: Instance, rng: Random): (Model, { { part: BasePart, prompt: ProximityPrompt } }, number)
+-- A rim segment with a hidden niche: a narrow tunnel from the crater floor into a small dark room,
+-- in the segment's own frame (-Z points out of the crater, +Z faces the floor). Every wall is at
+-- least 4 studs thick so the camera cannot see in, and a rock fold hides the opening.
+local CHEESE_NICHE_OFFSET = math.rad(220) -- from the ramp, between two ice nodes and far from both
+local function buildNicheSegment(crater: Instance, cf: CFrame, size: Vector3, style: Style): CFrame
+	local hx, hy, hz = size.X / 2, size.Y / 2, size.Z / 2
+	local floorY = -hy + 4 -- local height of the crater floor (the rim starts 4 below it)
+	local roomTop = floorY + 8
+	local function piece(name: string, a: Vector3, b: Vector3)
+		local minV = a:Min(b)
+		local maxV = a:Max(b)
+		part(crater, name, maxV - minV, cf * CFrame.new((minV + maxV) / 2), style)
+	end
+	piece("Rim", Vector3.new(-hx, -hy, -hz), Vector3.new(hx, floorY, hz)) -- under the niche
+	piece("Rim", Vector3.new(-hx, roomTop, -hz), Vector3.new(hx, hy, hz)) -- above it
+	piece("Rim", Vector3.new(-hx, floorY, -hz), Vector3.new(hx, roomTop, -5)) -- behind the room
+	piece("Rim", Vector3.new(-hx, floorY, -5), Vector3.new(-4.5, roomTop, hz))
+	piece("Rim", Vector3.new(4.5, floorY, -5), Vector3.new(hx, roomTop, hz))
+	piece("Rim", Vector3.new(-4.5, floorY, 5), Vector3.new(-2, roomTop, hz)) -- tunnel sides
+	piece("Rim", Vector3.new(2, floorY, 5), Vector3.new(4.5, roomTop, hz))
+
+	-- The rock fold: a slab leaning in front of the opening with a 4-stud gap behind it.
+	local foldStyle: Style = { color = style.color, material = Enum.Material.Rock }
+	part(crater, "RockFold", Vector3.new(11, 12, 3), cf * CFrame.new(0, floorY + 6, hz + 5.5) * CFrame.Angles(math.rad(-6), 0, 0), foldStyle)
+	part(crater, "RockFold", Vector3.new(6, 7, 3.5), cf * CFrame.new(3.5, floorY + 3.5, hz + 7.5) * CFrame.Angles(0, math.rad(18), 0), foldStyle)
+
+	-- Where the cheese floats: in the room, out of line of sight from the tunnel.
+	return cf * CFrame.new(2.5, floorY + 2.6, -1.5)
+end
+
+-- Builds the crater pit with its rim, ramp and ice nodes; returns the model, the ice node refs,
+-- the ramp's angle around the crater and where the hidden cheese floats.
+local function buildCrater(base: Instance, rng: Random): (Model, { { part: BasePart, prompt: ProximityPrompt } }, number, CFrame)
 	local crater = model(base, "Crater")
 	local segments = 36
 	local step = math.rad(360 / segments)
@@ -574,13 +664,22 @@ local function buildCrater(base: Instance, rng: Random): (Model, { { part: BaseP
 	local slopeDepth = 16
 	local slopeWidth = 2 * (outerR + slopeDepth) * math.tan(step / 2) + 0.5
 
+	-- The ramp goes down on the side facing away from the Sun so no light gets in through it.
+	local sunH = flatUnit(sunDirection(), Vector3.new(0, 0, -1))
+	local away = -sunH
+	local rampAngle = math.floor(math.atan2(away.X, away.Z) / step + 0.5) * step
+	local nicheSegment = math.floor((rampAngle + CHEESE_NICHE_OFFSET) / step + 0.5) % segments
+	local cheeseSpot = CFrame.new(CRATER_CENTRE)
+
 	for k = 0, segments - 1 do
 		local n = dirFromAngle(k * step)
 		local pos = CRATER_CENTRE + n * (CRATER_RADIUS + depth / 2) + Vector3.new(0, rimBottom + rimHeight / 2, 0)
-		part(crater, "Rim", Vector3.new(width, rimHeight, depth), CFrame.lookAt(pos, pos + n), {
-			color = regolith(rng, 122, 6),
-			material = Enum.Material.Slate,
-		})
+		local rimStyle: Style = { color = regolith(rng, 122, 6), material = Enum.Material.Slate }
+		if k == nicheSegment then
+			cheeseSpot = buildNicheSegment(crater, CFrame.lookAt(pos, pos + n), Vector3.new(width, rimHeight, depth), rimStyle)
+		else
+			part(crater, "Rim", Vector3.new(width, rimHeight, depth), CFrame.lookAt(pos, pos + n), rimStyle)
+		end
 		local slopePos = CRATER_CENTRE + n * (outerR + slopeDepth / 2) + Vector3.new(0, CRATER_RIM_Y / 2, 0)
 		wedge(crater, "RimSlope", Vector3.new(slopeWidth, CRATER_RIM_Y, slopeDepth), CFrame.lookAt(slopePos, slopePos + n), {
 			color = regolith(rng, 132, 5),
@@ -595,10 +694,6 @@ local function buildCrater(base: Instance, rng: Random): (Model, { { part: BaseP
 		material = Enum.Material.Slate,
 	})
 
-	-- The ramp goes down on the side facing away from the Sun so no light gets in through it.
-	local sunH = flatUnit(sunDirection(), Vector3.new(0, 0, -1))
-	local away = -sunH
-	local rampAngle = math.floor(math.atan2(away.X, away.Z) / step + 0.5) * step
 	local rampDir = dirFromAngle(rampAngle)
 	local rampInner = 10
 	local rampLength = CRATER_RADIUS - rampInner
@@ -669,7 +764,7 @@ local function buildCrater(base: Instance, rng: Random): (Model, { { part: BaseP
 		table.insert(iceNodes, { part = main :: BasePart, prompt = prompt })
 	end
 
-	return crater, iceNodes, rampAngle
+	return crater, iceNodes, rampAngle, cheeseSpot
 end
 
 local function buildRidge(base: Instance, rng: Random): Model
@@ -745,6 +840,10 @@ local KEEPOUTS: { Keepout } = {
 	{ x = -55, z = -20, r = 25 },
 	{ x = 40, z = 15, r = 22 },
 	{ x = -30, z = 45, r = 18 },
+	-- Secret places: random boulders must not block or give away an entrance.
+	{ x = -73, z = 85, r = 24 }, -- lookout rock behind the antenna
+	{ x = -298, z = -60, r = 48 }, -- lava tube hill
+	{ x = OBSERVATORY_HILL.X, z = OBSERVATORY_HILL.Z, r = 62 },
 }
 
 local function isClear(x: number, z: number, margin: number): boolean
@@ -812,13 +911,14 @@ local function buildDecor(base: Instance, rng: Random)
 		Vector3.new(-22, 0, 40), Vector3.new(-42, 0, 58), -- antenna
 		Vector3.new(24, 0, 28), Vector3.new(44, 0, 18), Vector3.new(62, 0, 4), -- shelter
 	}
+	local firstShelterMarker = #markers - 2 -- the last three posts lead to the shelter
 	for i, spot in markers do
 		vcylinder(decor, "MarkerPole" .. i, 4, 0.4, spot + Vector3.new(0, 2, 0), {
 			color = DARK_METAL,
 			material = Enum.Material.Metal,
 		})
 		box(decor, "MarkerLight" .. i, spot + Vector3.new(-0.5, 4, -0.5), spot + Vector3.new(0.5, 4.8, 0.5), {
-			color = MARKER_AMBER,
+			color = if i >= firstShelterMarker then MARKER_SHELTER else MARKER_GUIDE,
 			material = Enum.Material.Neon,
 			shadow = false,
 		})
@@ -906,35 +1006,35 @@ local function buildHabitat(base: Instance): HabitatRefs
 		transparency = 0.6,
 		shadow = false,
 	})
-	local hatchFrame: Style = { color = Color3.fromRGB(245, 200, 40), material = Enum.Material.SmoothPlastic }
+	local hatchFrame: Style = { color = ACCENT_SECRET, material = Enum.Material.SmoothPlastic } -- magenta = greenhouse
 	box(hab, "HatchFrame", v(-28, 0.5, -4.8), v(-27.4, 10.8, -4), hatchFrame)
 	box(hab, "HatchFrame", v(-28, 0.5, 4), v(-27.4, 10.8, 4.8), hatchFrame)
 	box(hab, "HatchFrame", v(-28, 10, -4), v(-27.4, 10.8, 4), hatchFrame)
 	windowWall(hab, "WallEast", v(28, 0, -18), v(30, 18, 18), 3, hull)
-	windowWall(hab, "WallFrontWest", v(-30, 0, 18), v(-4, 18, 20), 2, hull)
-	windowWall(hab, "WallFrontEast", v(4, 0, 18), v(30, 18, 20), 2, hull)
-	box(hab, "Lintel", v(-4, 10, 18), v(4, 18, 20), hull)
+	-- Doorway 10 wide x 12 tall so the default camera follows a player through without entering a wall.
+	local doorHalf, doorTop = 5, 12
+	windowWall(hab, "WallFrontWest", v(-30, 0, 18), v(-doorHalf, 18, 20), 2, hull)
+	windowWall(hab, "WallFrontEast", v(doorHalf, 0, 18), v(30, 18, 20), 2, hull)
+	box(hab, "Lintel", v(-doorHalf, doorTop, 18), v(doorHalf, 18, 20), hull)
 	box(hab, "Roof", v(-31, 18, -21), v(31, 19.5, 21), { color = Color3.fromRGB(205, 208, 214), material = Enum.Material.SmoothPlastic })
 
 	-- Orange trim band and roof gear.
 	local trim: Style = { color = HULL_TRIM, material = Enum.Material.SmoothPlastic }
 	box(hab, "Trim", v(-30.2, 15, -20.2), v(30.2, 16, -20), trim)
-	box(hab, "Trim", v(-30.2, 15, 20), v(-4, 16, 20.2), trim)
-	box(hab, "Trim", v(4, 15, 20), v(30.2, 16, 20.2), trim)
-	box(hab, "Trim", v(-4, 15, 20), v(4, 16, 20.2), trim)
+	box(hab, "Trim", v(-30.2, 15, 20), v(30.2, 16, 20.2), trim)
 	box(hab, "Trim", v(-30.2, 15, -20), v(-30, 16, 20), trim)
 	box(hab, "Trim", v(30, 15, -20), v(30.2, 16, 20), trim)
 	box(hab, "Radiator", v(-22, 19.5, -14), v(-6, 20.1, 14), { color = Color3.fromRGB(235, 236, 240), material = Enum.Material.Metal })
 	vcylinder(hab, "RoofMast", 6, 0.5, v(16, 22.5, -10), { color = METAL, material = Enum.Material.Metal })
-	local beacon = ball(hab, "RoofBeacon", 1.2, v(16, 25.8, -10), { color = STORM_RED, material = Enum.Material.Neon })
-	pointLight(beacon, STORM_RED, 10, 1, false)
+	local beacon = ball(hab, "RoofBeacon", 1.2, v(16, 25.8, -10), { color = ACCENT_SYSTEM, material = Enum.Material.Neon })
+	pointLight(beacon, ACCENT_SYSTEM, 10, 1, false)
 
 	-- Doorway frame and lamp.
-	local frame: Style = { color = Color3.fromRGB(245, 200, 40), material = Enum.Material.SmoothPlastic }
-	box(hab, "DoorFrame", v(-4.8, 0, 20), v(-4, 10.8, 20.6), frame)
-	box(hab, "DoorFrame", v(4, 0, 20), v(4.8, 10.8, 20.6), frame)
-	box(hab, "DoorFrame", v(-4, 10, 20), v(4, 10.8, 20.6), frame)
-	local doorLamp = box(hab, "DoorLamp", v(-1.5, 11.2, 20), v(1.5, 11.7, 20.8), {
+	local frame: Style = { color = ACCENT_SYSTEM, material = Enum.Material.SmoothPlastic } -- cyan = guidance
+	box(hab, "DoorFrame", v(-doorHalf - 0.8, 0, 20), v(-doorHalf, doorTop + 0.8, 20.6), frame)
+	box(hab, "DoorFrame", v(doorHalf, 0, 20), v(doorHalf + 0.8, doorTop + 0.8, 20.6), frame)
+	box(hab, "DoorFrame", v(-doorHalf, doorTop, 20), v(doorHalf, doorTop + 0.8, 20.6), frame)
+	local doorLamp = box(hab, "DoorLamp", v(-1.5, doorTop + 1.2, 20), v(1.5, doorTop + 1.7, 20.8), {
 		color = Color3.fromRGB(255, 232, 190),
 		material = Enum.Material.Neon,
 	})
@@ -983,7 +1083,7 @@ local function buildHabitat(base: Instance): HabitatRefs
 		"ConsoleScreen",
 		Vector3.new(7, 3, 0.3),
 		CFrame.new(v(-18, 5.6, -13.2)) * CFrame.Angles(math.rad(-20), 0, 0),
-		{ color = Color3.fromRGB(80, 220, 255), material = Enum.Material.Neon, shadow = false }
+		{ color = ACCENT_SYSTEM, material = Enum.Material.Neon, shadow = false }
 	)
 	local consolePrompt = makePrompt(console, "prompt.console", "Power board", 0)
 
@@ -1060,7 +1160,7 @@ local function buildHabitat(base: Instance): HabitatRefs
 	spawnPad.Enabled = true
 	spawnPad.AllowTeamChangeOnTouch = false
 	finish(spawnPad, hab, "BaseSpawn", Vector3.new(8, 0.4, 8), CFrame.new(v(0, 0.7, 8)), {
-		color = Color3.fromRGB(120, 170, 220),
+		color = ACCENT_SYSTEM:Lerp(PALETTE.night, 0.35),
 		material = Enum.Material.SmoothPlastic,
 	})
 
@@ -1096,7 +1196,7 @@ local function buildHabitat(base: Instance): HabitatRefs
 	sparks.Acceleration = Vector3.new(0, -20, 0)
 	sparks.Enabled = false
 	sparks.Parent = attachment
-	local leakLight = pointLight(leakPart, Color3.fromRGB(255, 150, 60), 14, 2, false)
+	local leakLight = pointLight(leakPart, ACCENT_WARNING, 14, 2, false)
 	leakLight.Enabled = false
 	local leakPrompt = makePrompt(leakPart, "prompt.repair", "Fix leak", 2)
 
@@ -1252,6 +1352,8 @@ end
 
 type RoverRefs = {
 	root: Part,
+	paintParts: { Part },
+	cheeseSpots: { Part },
 	centre: Vector3,
 	headlights: { Part },
 	spot: SpotLight,
@@ -1306,7 +1408,16 @@ local function buildRover(base: Instance, rampAngle: number): RoverRefs
 	}))
 	add(part(rover, "Trim", Vector3.new(3.5, 0.3, 0.3), cf * CFrame.new(0, 0.2, -2.75), style(HULL_TRIM, Enum.Material.SmoothPlastic)))
 	add(part(rover, "Mast", Vector3.new(0.3, 2.2, 0.3), cf * CFrame.new(0, 1.7, -1.9), style(METAL, Enum.Material.Metal)))
-	add(part(rover, "CameraHead", Vector3.new(1.3, 0.6, 0.7), cf * CFrame.new(0, 3, -1.9), style(WHITE_HULL, Enum.Material.SmoothPlastic)))
+	local cameraHead = part(rover, "CameraHead", Vector3.new(1.3, 0.6, 0.7), cf * CFrame.new(0, 3, -1.9), style(WHITE_HULL, Enum.Material.SmoothPlastic))
+	add(cameraHead)
+	-- Cheese "holes" for the secret paint job: invisible until someone has found the cheese.
+	local cheeseSpots: { Part } = {}
+	local spotStyle: Style = { color = CHEESE_SPOT, material = Enum.Material.SmoothPlastic, transparency = 1, collide = false, shadow = false }
+	for _, offset in { Vector3.new(-1.72, 0, -1.2), Vector3.new(1.72, 0.1, 0.7), Vector3.new(-1.72, -0.1, 1.5), Vector3.new(1.72, -0.05, -1.6) } do
+		local hole = ball(rover, "CheeseSpot", 0.7, (cf * CFrame.new(offset)).Position, spotStyle)
+		add(hole)
+		table.insert(cheeseSpots, hole)
+	end
 	local beacon = ball(rover, "Beacon", 0.4, (cf * CFrame.new(0, 3.5, -1.9)).Position, style(LAMP_OFF, Enum.Material.SmoothPlastic))
 	add(beacon)
 	local headlights: { Part } = {}
@@ -1326,7 +1437,16 @@ local function buildRover(base: Instance, rampAngle: number): RoverRefs
 	spot.Parent = root
 	weldTo(root, attached)
 
-	return { root = root, centre = centre, headlights = headlights, spot = spot, beacon = beacon, startAngle = startAngle }
+	return {
+		root = root,
+		paintParts = { root, cameraHead },
+		cheeseSpots = cheeseSpots,
+		centre = centre,
+		headlights = headlights,
+		spot = spot,
+		beacon = beacon,
+		startAngle = startAngle,
+	}
 end
 
 ------------------------------------------------------------------------------------------------
@@ -1349,22 +1469,28 @@ local function buildShelter(base: Instance): ShelterRefs
 	box(shelter, "WallBack", v(-11, 0, -9), v(11, 10, -7), wall)
 	box(shelter, "WallWest", v(-11, 0, -7), v(-9, 10, 7), wall)
 	box(shelter, "WallEast", v(9, 0, -7), v(11, 10, 7), wall)
+	-- The doorway and tunnel are the full room height (10) so the camera does not dip into the roof.
 	box(shelter, "WallFrontWest", v(-11, 0, 7), v(-3.5, 10, 9), wall)
 	box(shelter, "WallFrontEast", v(3.5, 0, 7), v(11, 10, 9), wall)
-	box(shelter, "WallFrontLintel", v(-3.5, 9, 7), v(3.5, 10, 9), wall)
 
 	-- Tunnel out through the mound.
 	local tunnelEnd = 29
+	local tunnelTop = 10
 	box(shelter, "TunnelFloor", v(-5.5, 0, 9), v(5.5, 0.4, tunnelEnd), { color = Color3.fromRGB(110, 108, 104), material = Enum.Material.Concrete })
-	box(shelter, "TunnelWest", v(-5.5, 0, 9), v(-3.5, 9, tunnelEnd), wall)
-	box(shelter, "TunnelEast", v(3.5, 0, 9), v(5.5, 9, tunnelEnd), wall)
-	box(shelter, "TunnelRoof", v(-5.5, 9, 9), v(5.5, 11, tunnelEnd), wall)
-	box(shelter, "MouthWest", v(-6.5, 0, tunnelEnd), v(-3.5, 12, tunnelEnd + 1), wall)
-	box(shelter, "MouthEast", v(3.5, 0, tunnelEnd), v(6.5, 12, tunnelEnd + 1), wall)
-	box(shelter, "MouthTop", v(-3.5, 9, tunnelEnd), v(3.5, 12, tunnelEnd + 1), wall)
+	box(shelter, "TunnelWest", v(-5.5, 0, 9), v(-3.5, tunnelTop, tunnelEnd), wall)
+	box(shelter, "TunnelEast", v(3.5, 0, 9), v(5.5, tunnelTop, tunnelEnd), wall)
+	box(shelter, "TunnelRoof", v(-5.5, tunnelTop, 9), v(5.5, tunnelTop + 2, tunnelEnd), wall)
+	box(shelter, "MouthWest", v(-6.5, 0, tunnelEnd), v(-3.5, tunnelTop + 3, tunnelEnd + 1), wall)
+	box(shelter, "MouthEast", v(3.5, 0, tunnelEnd), v(6.5, tunnelTop + 3, tunnelEnd + 1), wall)
+	box(shelter, "MouthTop", v(-3.5, tunnelTop, tunnelEnd), v(3.5, tunnelTop + 3, tunnelEnd + 1), wall)
+	-- Orange frame: orange always means "shelter" in this base.
+	local shelterFrame: Style = { color = ACCENT_WARNING, material = Enum.Material.SmoothPlastic }
+	box(shelter, "MouthFrame", v(-4.3, 0.4, tunnelEnd + 1), v(-3.5, tunnelTop + 0.8, tunnelEnd + 1.4), shelterFrame)
+	box(shelter, "MouthFrame", v(3.5, 0.4, tunnelEnd + 1), v(4.3, tunnelTop + 0.8, tunnelEnd + 1.4), shelterFrame)
+	box(shelter, "MouthFrame", v(-3.5, tunnelTop, tunnelEnd + 1), v(3.5, tunnelTop + 0.8, tunnelEnd + 1.4), shelterFrame)
 
 	-- Storm lamp above the shelter door.
-	local lamp = box(shelter, "StormLamp", v(-1.5, 12, tunnelEnd), v(1.5, 13, tunnelEnd + 1.2), {
+	local lamp = box(shelter, "StormLamp", v(-1.5, tunnelTop + 3, tunnelEnd), v(1.5, tunnelTop + 4, tunnelEnd + 1.2), {
 		color = LAMP_OFF,
 		material = Enum.Material.SmoothPlastic,
 		shadow = false,
@@ -1551,6 +1677,559 @@ local function buildAntenna(base: Instance): AntennaRefs
 end
 
 ------------------------------------------------------------------------------------------------
+-- Secrets: four hidden collectibles, the sealed observatory and the team flag
+------------------------------------------------------------------------------------------------
+
+-- Every secret place is closed by walls at least 4 studs thick, so the default camera cannot slide
+-- into it and nobody sees the item from the base, the paths or the crater floor. A tiny magenta
+-- pebble marks each entrance: magenta always means "secret" in this base.
+local function hintPebble(parent: Instance, position: Vector3)
+	ball(parent, "SecretHint", 0.5, position, {
+		color = ACCENT_SECRET,
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+end
+
+-- Cuts a rectangular hole (in X and Z) out of the ground tiles, keeping each tile's colour.
+local function carveGround(ground: Instance, x0: number, x1: number, z0: number, z1: number)
+	for _, child in ground:GetChildren() do
+		if child:IsA("BasePart") then
+			local half = child.Size / 2
+			local c = child.CFrame.Position
+			local tx0, tx1, tz0, tz1 = c.X - half.X, c.X + half.X, c.Z - half.Z, c.Z + half.Z
+			local ix0, ix1 = math.max(tx0, x0), math.min(tx1, x1)
+			local iz0, iz1 = math.max(tz0, z0), math.min(tz1, z1)
+			if ix0 < ix1 and iz0 < iz1 then
+				local y0, y1 = c.Y - half.Y, c.Y + half.Y
+				local style: Style = { color = child.Color, material = child.Material }
+				local name = child.Name
+				local function strip(ax: number, bx: number, az: number, bz: number)
+					if bx - ax > 0.01 and bz - az > 0.01 then
+						box(ground, name, Vector3.new(ax, y0, az), Vector3.new(bx, y1, bz), style)
+					end
+				end
+				strip(tx0, tx1, tz0, iz0)
+				strip(tx0, tx1, iz1, tz1)
+				strip(tx0, ix0, iz0, iz1)
+				strip(ix1, tx1, iz0, iz1)
+				child:Destroy()
+			end
+		end
+	end
+end
+
+-- mars_potato: a maintenance crawl space under the habitat. A vent hatch on the shelter side (east)
+-- opens onto a shaft; the room runs west under the habitat floor, out of sight of the hatch.
+local function buildCrawlSpace(base: Instance, ground: Instance): CFrame
+	local crawl = model(base, "CrawlSpace")
+	local o = HABITAT_CENTRE
+	local function v(x: number, y: number, z: number): Vector3
+		return o + Vector3.new(x, y, z)
+	end
+	carveGround(ground, o.X + 8, o.X + 42, o.Z - 24, o.Z - 8)
+
+	-- Room: x 12..38, z -20..-12, floor at -12, ceiling at -4 (4 thick, then the habitat floor).
+	local fill: Style = { color = Color3.fromRGB(128, 124, 116), material = Enum.Material.Concrete }
+	box(crawl, "Fill", v(8, -16, -24), v(42, 0, -20), fill)
+	box(crawl, "Fill", v(8, -16, -12), v(42, 0, -8), fill)
+	box(crawl, "Fill", v(8, -16, -20), v(12, 0, -12), fill)
+	box(crawl, "Fill", v(38, -16, -20), v(42, 0, -12), fill)
+	box(crawl, "CrawlFloor", v(12, -16, -20), v(38, -12, -12), fill)
+	box(crawl, "CrawlCeiling", v(12, -4, -20), v(30, 0, -12), fill)
+
+	-- Vent housing against the habitat's east wall. Its roof stays below the window band.
+	local hull: Style = { color = WHITE_HULL, material = Enum.Material.SmoothPlastic }
+	box(crawl, "VentHousing", v(30, 0, -12), v(42, 11, -8), hull)
+	box(crawl, "VentHousing", v(30, 0, -24), v(42, 11, -20), hull)
+	box(crawl, "VentHousing", v(30, 7, -20), v(38, 11, -12), hull)
+	box(crawl, "VentHousing", v(38, 0, -20), v(42, 11, -19), hull)
+	box(crawl, "VentHousing", v(38, 0, -13), v(42, 11, -12), hull)
+	box(crawl, "VentHousing", v(38, 7, -19), v(42, 11, -13), hull)
+	-- The hatch flap hangs open above the 6 x 7 opening.
+	part(
+		crawl,
+		"VentHatch",
+		Vector3.new(0.3, 5, 6),
+		CFrame.new(v(42.2, 7, -16)) * CFrame.Angles(0, 0, math.rad(70)) * CFrame.new(0, -2.5, 0),
+		{ color = DARK_METAL, material = Enum.Material.DiamondPlate, collide = false }
+	)
+	hintPebble(crawl, v(43.4, 0.25, -18.4))
+
+	-- Inside: a crate to climb back out (two 6-stud hops), a pipe and a dim cyan service lamp.
+	box(crawl, "Crate", v(33, -12, -20), v(38, -6, -15), { color = DARK_METAL, material = Enum.Material.Metal })
+	box(crawl, "CrateStripe", v(32.9, -7, -20), v(38, -6.6, -14.9), {
+		color = ACCENT_SYSTEM,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+	})
+	cylinder(crawl, "CrawlPipe", 18, 0.9, CFrame.new(v(21, -5, -13)), {
+		color = METAL,
+		material = Enum.Material.Metal,
+		collide = false,
+	})
+	local lamp = box(crawl, "ServiceLamp", v(37.6, -3.5, -17), v(38, -2.7, -15), {
+		color = ACCENT_SYSTEM,
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	pointLight(lamp, ACCENT_SYSTEM, 10, 0.5, true)
+
+	return CFrame.new(v(16, -12 + COLLECTIBLE_FLOAT, -16))
+end
+
+-- mini_earth: a rock spire behind the antenna. A chain of ledges on its far side leads up to a
+-- niche at height 24; the niche faces away from the base, the paths and the crater.
+local function buildLookoutRock(base: Instance): CFrame
+	local rockModel = model(base, "LookoutRock")
+	local rng = Random.new(1961)
+	local away = flatUnit(ANTENNA_BASE - HABITAT_CENTRE, Vector3.new(0, 0, 1))
+	local centre = ANTENNA_BASE + away * LOOKOUT_DISTANCE
+	local facing = dirFromAngle(math.atan2(away.X, away.Z) + LOOKOUT_YAW)
+	local cf = CFrame.lookAt(centre, centre + facing) -- local -Z (the niche side) faces away from the base
+	local function piece(name: string, a: Vector3, b: Vector3, material: Enum.Material)
+		local minV = a:Min(b)
+		local maxV = a:Max(b)
+		part(rockModel, name, maxV - minV, cf * CFrame.new((minV + maxV) / 2), {
+			color = regolith(rng, 118, 6),
+			material = material,
+		})
+	end
+	local slate = Enum.Material.Slate
+	local rock = Enum.Material.Rock
+	-- Spire 24 wide, 36 tall, 14 deep. Niche: 6 wide, 7 tall, 6 deep; walls 4 to 14 thick, roof 5.
+	piece("Spire", Vector3.new(-12, 0, -7), Vector3.new(12, 24, 7), slate)
+	piece("Spire", Vector3.new(-12, 31, -7), Vector3.new(12, 36, 7), slate)
+	piece("Spire", Vector3.new(-12, 24, -7), Vector3.new(-8, 31, 7), slate)
+	piece("Spire", Vector3.new(-2, 24, -7), Vector3.new(12, 31, 7), slate)
+	piece("Spire", Vector3.new(-8, 24, -1), Vector3.new(-2, 31, 7), slate)
+	-- Ledges 6 studs apart, an easy hop each in Moon gravity. None hangs over another.
+	piece("Ledge", Vector3.new(8, 0, -11), Vector3.new(12, 6, -7), rock)
+	piece("Ledge", Vector3.new(8, 9, -15), Vector3.new(12, 12, -11), rock)
+	piece("Ledge", Vector3.new(3, 15, -15), Vector3.new(7, 18, -11), rock)
+	piece("Ledge", Vector3.new(-12, 21, -11), Vector3.new(2, 24, -7), rock)
+	-- Loose boulders so it reads as a rock, not a box.
+	local loose: Style = { color = regolith(rng, 108, 8), material = rock }
+	part(rockModel, "Boulder", Vector3.new(7, 5, 6), cf * CFrame.new(-13, 2, 3) * CFrame.Angles(0.2, 0.5, -0.1), loose)
+	part(rockModel, "Boulder", Vector3.new(6, 4, 7), cf * CFrame.new(5, 37.5, 2) * CFrame.Angles(0.1, 0.8, 0.15), loose)
+	part(rockModel, "Boulder", Vector3.new(5, 4, 5), cf * CFrame.new(13, 1.5, 4) * CFrame.Angles(-0.15, 1.1, 0.1), loose)
+	hintPebble(rockModel, (cf * CFrame.new(10, 0.25, -12.5)).Position)
+
+	return cf * CFrame.new(-5, 24 + COLLECTIBLE_FLOAT, -4)
+end
+
+-- laika: a small lava tube (LRO has imaged pits that open into lunar lava tubes). A narrow crack in
+-- the hill's west cliff, hidden behind boulders, opens into a dark chamber. The dog sits in a
+-- corner that cannot be seen through the crack.
+local function buildLavaTube(base: Instance): CFrame
+	local hill = model(base, "LavaTubeHill")
+	local rng = Random.new(2009)
+	local lo, hi = LAVA_TUBE_MIN, LAVA_TUBE_MAX
+	local function rockStyle(): Style
+		return { color = regolith(rng, 114, 5), material = Enum.Material.Slate }
+	end
+	local function piece(a: Vector3, b: Vector3)
+		box(hill, "Rock", a, b, rockStyle())
+	end
+	-- Crack: 4 wide, 9 tall, 12 deep. Chamber: 20 x 20, 11 tall. Walls 9 to 21 thick, roof 13.
+	local crackZ0, crackZ1, crackTop = -62, -58, 9
+	local crackX1 = lo.X + 12
+	local roomX1 = crackX1 + 20
+	local roomZ0, roomZ1, roomTop = -76, -56, 11
+	piece(Vector3.new(lo.X, roomTop, lo.Z), Vector3.new(hi.X, hi.Y, hi.Z))
+	piece(Vector3.new(lo.X, crackTop, crackZ0), Vector3.new(crackX1, roomTop, crackZ1))
+	piece(Vector3.new(roomX1, 0, lo.Z), Vector3.new(hi.X, roomTop, hi.Z))
+	piece(Vector3.new(lo.X, 0, lo.Z), Vector3.new(roomX1, roomTop, roomZ0))
+	piece(Vector3.new(lo.X, 0, roomZ1), Vector3.new(roomX1, roomTop, hi.Z))
+	piece(Vector3.new(lo.X, 0, roomZ0), Vector3.new(crackX1, roomTop, crackZ0))
+	piece(Vector3.new(lo.X, 0, crackZ1), Vector3.new(crackX1, roomTop, roomZ1))
+
+	-- Slopes on three sides; the west side stays a cliff.
+	local h = hi.Y
+	local cx, cz = (lo.X + hi.X) / 2, (lo.Z + hi.Z) / 2
+	local function slope(centre: Vector3, look: Vector3, size: Vector3)
+		wedge(hill, "Slope", size, CFrame.lookAt(centre, centre + look), rockStyle())
+	end
+	slope(Vector3.new(cx, h / 2, hi.Z + 10), Vector3.zAxis, Vector3.new(hi.X - lo.X, h, 20))
+	slope(Vector3.new(cx, h / 2, lo.Z - 10), -Vector3.zAxis, Vector3.new(hi.X - lo.X, h, 20))
+	slope(Vector3.new(hi.X + 10, h / 2, cz), Vector3.xAxis, Vector3.new(hi.Z - lo.Z, h, 20))
+
+	-- Boulders in front of the crack, with a 4.5-stud gap behind them to slip through.
+	local loose: Style = { color = regolith(rng, 104, 8), material = Enum.Material.Rock }
+	local crackMid = (crackZ0 + crackZ1) / 2
+	part(hill, "Boulder", Vector3.new(5, 8, 11), CFrame.new(lo.X - 7, 4, crackMid), loose)
+	part(hill, "Boulder", Vector3.new(4, 3, 5), CFrame.new(lo.X - 7.5, 9.2, crackMid + 1.5) * CFrame.Angles(0.1, 0.5, 0.2), loose)
+	part(hill, "Boulder", Vector3.new(6, 5, 6), CFrame.new(lo.X - 9, 2.2, crackMid - 11) * CFrame.Angles(0.2, 0.9, -0.1), loose)
+	hintPebble(hill, Vector3.new(lo.X - 1.2, 0.25, crackZ0 - 2.6))
+
+	return CFrame.new(roomX1 - 4, COLLECTIBLE_FLOAT, roomZ0 + 5)
+end
+
+type ObservatoryRefs = { model: Model, door: Part }
+
+-- The observatory: a small sealed dome on a far hill. Its door only opens (on the client) for a
+-- player who found all four secrets. Inside, a telescope points at Mars and a sign shows the teaser.
+local function buildObservatory(base: Instance): ObservatoryRefs
+	local obs = model(base, "Observatory")
+	-- Always streamed in, so a client can open the door as soon as it joins.
+	obs.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+	local rng = Random.new(1976)
+	local c = OBSERVATORY_HILL
+	local hillTop = OBSERVATORY_HILL_Y
+	local half = 22
+	local function hillStyle(): Style
+		return { color = regolith(rng, 140, 5), material = Enum.Material.Slate }
+	end
+	box(obs, "Hill", Vector3.new(c.X - half, 0, c.Z - half), Vector3.new(c.X + half, hillTop, c.Z + half), hillStyle())
+	for _, dir in { Vector3.xAxis, -Vector3.xAxis, Vector3.zAxis, -Vector3.zAxis } do
+		local slopeCentre = Vector3.new(c.X, hillTop / 2, c.Z) + dir * (half + 13)
+		wedge(obs, "HillSlope", Vector3.new(half * 2, hillTop, 26), CFrame.lookAt(slopeCentre, slopeCentre + dir), hillStyle())
+	end
+
+	local top = Vector3.new(c.X, hillTop, c.Z)
+	local towardBase = flatUnit(HABITAT_CENTRE - top, Vector3.new(-1, 0, 0))
+	local cf = CFrame.lookAt(top, top + towardBase) -- local -Z faces the base: the door side
+	local function piece(name: string, a: Vector3, b: Vector3, style: Style): Part
+		local minV = a:Min(b)
+		local maxV = a:Max(b)
+		return part(obs, name, maxV - minV, cf * CFrame.new((minV + maxV) / 2), style)
+	end
+	local hull: Style = { color = WHITE_HULL, material = Enum.Material.SmoothPlastic }
+	-- Sealed room: inside 16 x 12 x 16, walls 4 thick, roof 8 thick. The only way in is the door.
+	piece("Wall", Vector3.new(-12, 0, 8), Vector3.new(12, 12, 12), hull)
+	piece("Wall", Vector3.new(-12, 0, -8), Vector3.new(-8, 12, 8), hull)
+	piece("Wall", Vector3.new(8, 0, -8), Vector3.new(12, 12, 8), hull)
+	piece("Wall", Vector3.new(-12, 0, -12), Vector3.new(-4, 12, -8), hull)
+	piece("Wall", Vector3.new(4, 0, -12), Vector3.new(12, 12, -8), hull)
+	piece("Wall", Vector3.new(-4, 10, -12), Vector3.new(4, 12, -8), hull)
+	piece("Roof", Vector3.new(-12, 12, -12), Vector3.new(12, 20, 12), hull)
+	piece("Floor", Vector3.new(-8, 0, -8), Vector3.new(8, 0.4, 8), {
+		color = Color3.fromRGB(170, 174, 180),
+		material = Enum.Material.DiamondPlate,
+	})
+	-- Dome: its lowest point just touches the ceiling, so nothing pokes into the room.
+	local domeCentre = (cf * CFrame.new(0, 22, 0)).Position
+	ball(obs, "Dome", 20, domeCentre, { color = Color3.fromRGB(238, 240, 244), material = Enum.Material.SmoothPlastic })
+
+	-- The door: opaque and solid for everyone on the server.
+	local door = piece("Door", Vector3.new(-4, 0, -10.5), Vector3.new(4, 10, -9.5), {
+		color = PALETTE.night,
+		material = Enum.Material.SmoothPlastic,
+	})
+	local secretTrim: Style = { color = ACCENT_SECRET, material = Enum.Material.SmoothPlastic, collide = false }
+	piece("DoorFrame", Vector3.new(-4.8, 0, -12.4), Vector3.new(-4, 10.8, -12), secretTrim)
+	piece("DoorFrame", Vector3.new(4, 0, -12.4), Vector3.new(4.8, 10.8, -12), secretTrim)
+	piece("DoorFrame", Vector3.new(-4, 10, -12.4), Vector3.new(4, 10.8, -12), secretTrim)
+	-- A plaque with the telescope icon beside the door.
+	local plaque = piece("DoorPlaque", Vector3.new(5.5, 4.5, -12.3), Vector3.new(8.5, 7.5, -12), {
+		color = PALETTE.night,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+	})
+	local plaqueGui = Instance.new("SurfaceGui")
+	plaqueGui.Name = "PlaqueGui"
+	plaqueGui.Face = Enum.NormalId.Front
+	plaqueGui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	plaqueGui.PixelsPerStud = 40
+	plaqueGui.LightInfluence = 0
+	plaqueGui.MaxDistance = 120
+	plaqueGui.Parent = plaque
+	local icon = Instance.new("ImageLabel")
+	icon.Name = "Icon"
+	icon.BackgroundTransparency = 1
+	icon.AnchorPoint = Vector2.new(0.5, 0.5)
+	icon.Position = UDim2.fromScale(0.5, 0.5)
+	icon.Size = UDim2.fromScale(0.8, 0.8)
+	icon.Image = Icons.telescope
+	icon.ImageColor3 = ACCENT_SECRET
+	icon.Parent = plaqueGui
+
+	-- Telescope on a mount, aimed at Mars in the sky.
+	local mars = marsPosition or defaultMarsPosition()
+	local sky = Workspace:FindFirstChild("SkyBodies")
+	local marsPart = if sky then sky:FindFirstChild("Mars") else nil
+	if marsPart and marsPart:IsA("BasePart") then
+		mars = marsPart.Position
+	end
+	local mount = cf * CFrame.new(0, 0, -1)
+	local pivot = (mount * CFrame.new(0, 5.8, 0)).Position
+	local white: Style = { color = WHITE_HULL, material = Enum.Material.SmoothPlastic, collide = false }
+	local dark: Style = { color = DARK_METAL, material = Enum.Material.Metal, collide = false }
+	vcylinder(obs, "TelescopeMount", 5.4, 0.8, (mount * CFrame.new(0, 3.1, 0)).Position, dark)
+	cylinder(obs, "TelescopeFoot", 0.4, 3.2, mount * CFrame.new(0, 0.6, 0) * CFrame.Angles(0, 0, math.rad(90)), dark)
+	local aim = (mars - pivot).Unit
+	local axis = CFrame.Angles(0, math.rad(90), 0) -- cylinder axis along the look direction
+	local function along(distance: number): CFrame
+		local at = pivot + aim * distance
+		return CFrame.lookAt(at, at + aim) * axis
+	end
+	cylinder(obs, "TelescopeTube", 8, 1.5, along(1.5), white)
+	cylinder(obs, "TelescopeBand", 0.5, 1.8, along(5), {
+		color = ACCENT_SECRET,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+	})
+	cylinder(obs, "TelescopeEyepiece", 1, 0.6, along(-3), dark)
+	-- A dark slit painted on the dome where the telescope looks out.
+	local toMars = (mars - domeCentre).Unit
+	if toMars.Y > 0.05 and toMars.Y < 0.95 then
+		local surface = domeCentre + toMars * 9.75
+		local meridian = (Vector3.yAxis - toMars * toMars.Y).Unit
+		part(obs, "DomeSlit", Vector3.new(1.8, 0.6, 6), CFrame.lookAt(surface, surface + meridian, toMars), {
+			color = PALETTE.night,
+			material = Enum.Material.SmoothPlastic,
+			collide = false,
+			shadow = false,
+		})
+	end
+
+	-- Teaser sign on the back wall. The client localizes the label through its TextKey attribute.
+	local sign = piece("TeaserSign", Vector3.new(-6, 5.5, 7.6), Vector3.new(6, 10.5, 8), {
+		color = PALETTE.night,
+		material = Enum.Material.SmoothPlastic,
+	})
+	ball(obs, "MarsPicture", 3, (cf * CFrame.new(3.6, 8, 7.4)).Position, {
+		color = MARS_RED,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+		shadow = false,
+	})
+	local signGui = Instance.new("SurfaceGui")
+	signGui.Name = "TeaserGui"
+	signGui.Face = Enum.NormalId.Front
+	signGui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	signGui.PixelsPerStud = 40
+	signGui.LightInfluence = 0
+	signGui.MaxDistance = 80
+	signGui.Parent = sign
+	local label = Instance.new("TextLabel")
+	label.Name = "Teaser"
+	label.BackgroundTransparency = 1
+	label.Position = UDim2.fromScale(0.36, 0.08)
+	label.Size = UDim2.fromScale(0.6, 0.84)
+	label.Font = Theme.FONT.display
+	label.TextScaled = true
+	label.TextWrapped = true
+	label.TextColor3 = Theme.ROLE.text
+	label.Text = "Next mission: Mars"
+	label:SetAttribute("TextKey", "observatory.teaser")
+	label.Parent = signGui
+
+	-- Light: a warm ceiling lamp (shadowed, so nothing leaks outside) and magenta floor strips.
+	local lamp = piece("Lamp", Vector3.new(-1.5, 11.6, -1.5), Vector3.new(1.5, 12, 1.5), {
+		color = Color3.fromRGB(255, 240, 215),
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	pointLight(lamp, INTERIOR_LIGHT, 18, 0.8, true)
+	local strip: Style = { color = ACCENT_SECRET, material = Enum.Material.Neon, collide = false, shadow = false }
+	piece("GlowStrip", Vector3.new(-8, 0.4, -8), Vector3.new(-7.7, 0.7, 8), strip)
+	piece("GlowStrip", Vector3.new(7.7, 0.4, -8), Vector3.new(8, 0.7, 8), strip)
+
+	return { model = obs, door = door }
+end
+
+-- The team flag on the habitat roof (reward for the Mars potato). Built hidden, out of the world.
+local function buildTeamFlag(base: Instance): Model
+	local flag = model(base, "TeamFlag")
+	local foot = HABITAT_CENTRE + Vector3.new(24, 19.5, 12)
+	vcylinder(flag, "FlagPole", 12, 0.5, foot + Vector3.new(0, 6, 0), { color = METAL, material = Enum.Material.Metal })
+	ball(flag, "FlagTop", 0.9, foot + Vector3.new(0, 12.3, 0), {
+		color = ACCENT_OK,
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	-- Three Lunar Sunrise stripes and a little cream Moon. No agency logos or insignia.
+	for i, colour in { ACCENT_SYSTEM, ACCENT_WARNING, ACCENT_SECRET } do
+		local stripeTop = 11.6 - (i - 1) * 1.4
+		box(flag, "FlagStripe", foot + Vector3.new(-6.3, stripeTop - 1.4, -0.1), foot + Vector3.new(-0.25, stripeTop, 0.1), {
+			color = colour,
+			material = Enum.Material.SmoothPlastic,
+			collide = false,
+		})
+	end
+	ball(flag, "FlagMoon", 1, foot + Vector3.new(-1.6, 10.9, 0), {
+		color = PALETTE.cream,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+		shadow = false,
+	})
+	flag.Parent = nil
+	return flag
+end
+
+-- Collectible models: small Parts-only figures welded to an invisible root that bobs and spins.
+type ShapeKind = "ball" | "box" | "wedge" | "cylinder"
+type Shape = {
+	kind: ShapeKind,
+	size: Vector3,
+	at: CFrame,
+	color: Color3,
+	material: Enum.Material?,
+	transparency: number?,
+	reflectance: number?,
+}
+
+local COLLECTIBLE_IDS = table.freeze({ "mini_earth", "laika", "cheese", "mars_potato" })
+
+local function shape(kind: ShapeKind, size: Vector3, at: CFrame, color: Color3): Shape
+	return { kind = kind, size = size, at = at, color = color }
+end
+
+local function uniform(d: number): Vector3
+	return Vector3.new(d, d, d)
+end
+
+local function shapesFor(id: string): { Shape }
+	local black = Color3.fromRGB(28, 28, 34)
+	if id == "mini_earth" then
+		local land = Color3.fromRGB(96, 160, 84)
+		return {
+			shape("ball", uniform(2.3), CFrame.new(), Color3.fromRGB(38, 92, 196)),
+			shape("ball", uniform(1), CFrame.new(0.55, 0.35, 0.55), land),
+			shape("ball", uniform(0.9), CFrame.new(-0.62, -0.15, 0.5), land),
+			shape("ball", uniform(0.8), CFrame.new(0.15, -0.55, -0.7), Color3.fromRGB(170, 150, 100)),
+			shape("ball", uniform(0.9), CFrame.new(0, 0.9, 0), Color3.fromRGB(245, 248, 255)),
+			-- A tiny Moon keeps it company as it spins.
+			shape("ball", uniform(0.55), CFrame.new(1.9, 0.4, 0), Color3.fromRGB(184, 182, 176)),
+		}
+	elseif id == "laika" then
+		local fur = Color3.fromRGB(200, 160, 118)
+		local ear = Color3.fromRGB(120, 82, 52)
+		local helmet = shape("ball", uniform(1.8), CFrame.new(0, 0.82, 1.2), Color3.fromRGB(225, 240, 255))
+		helmet.material = Enum.Material.Glass
+		helmet.transparency = 0.72
+		local shapes = {
+			shape("box", Vector3.new(1.2, 1.1, 2), CFrame.new(), WHITE_HULL),
+			shape("box", Vector3.new(1.26, 0.28, 2.06), CFrame.new(0, 0.15, 0), ACCENT_SYSTEM),
+			shape("box", Vector3.new(0.9, 0.7, 0.8), CFrame.new(0, 0.75, -0.4), ACCENT_SECRET),
+			shape("ball", uniform(1.05), CFrame.new(0, 0.8, 1.15), fur),
+			shape("box", Vector3.new(0.55, 0.42, 0.55), CFrame.new(0, 0.62, 1.7), Color3.fromRGB(225, 195, 160)),
+			shape("ball", uniform(0.24), CFrame.new(0, 0.76, 1.98), black),
+			shape("box", Vector3.new(0.24, 0.5, 0.22), CFrame.new(0.34, 1.32, 1.05) * CFrame.Angles(0, 0, -0.25), ear),
+			shape("box", Vector3.new(0.24, 0.5, 0.22), CFrame.new(-0.34, 1.32, 1.05) * CFrame.Angles(0, 0, 0.25), ear),
+			shape("box", Vector3.new(0.2, 0.2, 0.75), CFrame.new(0, 0.45, -1.25) * CFrame.Angles(math.rad(35), 0, 0), fur),
+			helmet,
+		}
+		for _, lx in { -0.38, 0.38 } do
+			for _, lz in { -0.62, 0.62 } do
+				table.insert(shapes, shape("box", Vector3.new(0.36, 0.6, 0.36), CFrame.new(lx, -0.8, lz), WHITE_HULL))
+			end
+		end
+		return shapes
+	elseif id == "cheese" then
+		local visor = shape("ball", uniform(0.7), CFrame.new(0.35, 1.08, 0.3), PALETTE.night)
+		visor.reflectance = 0.25
+		return {
+			-- Wedge on its side: a flat triangle of cheese, holes on top, a mini helmet riding it.
+			shape("wedge", Vector3.new(1, 1.7, 2.4), CFrame.Angles(0, 0, math.rad(90)), CHEESE_PAINT),
+			shape("ball", uniform(0.42), CFrame.new(0.55, 0.5, -0.5), CHEESE_SPOT),
+			shape("ball", uniform(0.42), CFrame.new(0.1, 0.5, 0.8), CHEESE_SPOT),
+			shape("ball", uniform(0.45), CFrame.new(-0.3, 0, 1.2), CHEESE_SPOT),
+			shape("ball", uniform(1), CFrame.new(0.35, 1.05, 0.6), WHITE_HULL),
+			visor,
+		}
+	else -- mars_potato
+		local potato = Color3.fromRGB(176, 112, 74)
+		return {
+			shape("ball", uniform(1.9), CFrame.new(), potato),
+			shape("ball", uniform(1.6), CFrame.new(0.75, 0.12, 0.05), potato),
+			shape("ball", uniform(1.4), CFrame.new(-0.8, -0.1, 0), potato),
+			shape("ball", uniform(0.34), CFrame.new(0.32, 0.32, 0.83), black),
+			shape("ball", uniform(0.34), CFrame.new(-0.32, 0.32, 0.83), black),
+			shape("box", Vector3.new(0.55, 0.12, 0.2), CFrame.new(0, -0.22, 0.92), Color3.fromRGB(70, 40, 30)),
+			shape("ball", uniform(0.45), CFrame.new(0.15, 1, 0), PLANT_GREEN),
+			shape("box", Vector3.new(0.5, 0.1, 0.25), CFrame.new(0.4, 1.18, 0) * CFrame.Angles(0, 0, 0.5), PLANT_GREEN),
+		}
+	end
+end
+
+type CollectibleItem = { ref: CollectibleRef, root: Part, home: CFrame, phase: number }
+
+local function buildCollectible(parent: Instance, id: string, spot: CFrame, phase: number): CollectibleItem
+	local m = model(parent, id)
+	m.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
+	m:SetAttribute("CollectibleId", id)
+	local home = CFrame.new(spot.Position)
+
+	local root = Instance.new("Part")
+	root.Name = "Root"
+	root.Anchored = true
+	root.CanCollide = false
+	root.CanQuery = false
+	root.CanTouch = false
+	root.CastShadow = false
+	root.Transparency = 1
+	root.Size = Vector3.one
+	root.CFrame = home
+	root.Parent = m
+	counted()
+	m.PrimaryPart = root
+
+	local pieces: { BasePart } = {}
+	for i, s in shapesFor(id) do
+		local p: BasePart
+		if s.kind == "wedge" then
+			p = Instance.new("WedgePart")
+		else
+			local block = Instance.new("Part")
+			if s.kind == "ball" then
+				block.Shape = Enum.PartType.Ball
+			elseif s.kind == "cylinder" then
+				block.Shape = Enum.PartType.Cylinder
+			end
+			p = block
+		end
+		finish(p, m, "Piece" .. i, s.size, home * s.at, {
+			color = s.color,
+			material = s.material,
+			transparency = s.transparency,
+			reflectance = s.reflectance,
+			collide = false,
+			shadow = false,
+		})
+		table.insert(pieces, p)
+	end
+	weldTo(root, pieces)
+
+	-- Soft magenta glow: a pad under the item and a shadowed light, so it never shines through rock.
+	local floorY = spot.Position.Y - COLLECTIBLE_FLOAT
+	local padCf = CFrame.new(spot.Position.X, floorY + 0.08, spot.Position.Z) * CFrame.Angles(0, 0, math.rad(90))
+	local pad = cylinder(m, "GlowPad", 0.16, 2.8, padCf, {
+		color = ACCENT_SECRET,
+		material = Enum.Material.Neon,
+		transparency = 0.4,
+		collide = false,
+		shadow = false,
+	})
+	local glowPoint = Instance.new("Attachment")
+	glowPoint.Name = "GlowPoint"
+	glowPoint.Position = Vector3.new(1.5, 0, 0) -- the pad's X axis points up
+	glowPoint.Parent = pad
+	pointLight(glowPoint, ACCENT_SECRET, 12, 1.2, true)
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "CollectPrompt"
+	prompt.ActionText = "Collect"
+	prompt.ObjectText = ""
+	prompt.HoldDuration = 0.5
+	prompt.MaxActivationDistance = COLLECTIBLE_PROMPT_DISTANCE
+	-- Every spot is more than 8 studs from any point outside its walls, so no line-of-sight check
+	-- is needed (and narrow tunnels cannot hide the prompt from the camera).
+	prompt.RequiresLineOfSight = false
+	prompt.Enabled = true
+	prompt:SetAttribute("TextKey", "prompt.collect")
+	prompt:SetAttribute("CollectibleId", id)
+	prompt.Parent = root
+
+	return { ref = { id = id, model = m, prompt = prompt }, root = root, home = home, phase = phase }
+end
+
+------------------------------------------------------------------------------------------------
 -- Public build
 ------------------------------------------------------------------------------------------------
 
@@ -1565,16 +2244,34 @@ function WorldBuilder.build(data: any): World
 	base.Parent = Workspace
 
 	local rng = Random.new(42)
-	buildGround(base, rng)
+	local ground = buildGround(base, rng)
 	local habitat = buildHabitat(base)
 	local shelter = buildShelter(base)
-	local _, iceNodes, rampAngle = buildCrater(base, rng)
+	local _, iceNodes, rampAngle, cheeseSpot = buildCrater(base, rng)
 	buildRidge(base, rng)
 	local arrays, arrayVisuals = buildArrays(base, data)
 	local antenna = buildAntenna(base)
 	buildDecor(base, rng)
 	local greenhouse = buildGreenhouse(base)
 	local rover = buildRover(base, rampAngle)
+
+	-- Secrets come last and use their own random streams, so the rest of the base keeps its layout.
+	local secretSpots: { [string]: CFrame } = {
+		mars_potato = buildCrawlSpace(base, ground),
+		mini_earth = buildLookoutRock(base),
+		laika = buildLavaTube(base),
+		cheese = cheeseSpot,
+	}
+	local observatory = buildObservatory(base)
+	local teamFlag = buildTeamFlag(base)
+	local collectiblesFolder = folder(base, "Collectibles")
+	local collectibleItems: { CollectibleItem } = {}
+	local collectibleRefs: { CollectibleRef } = {}
+	for i, id in COLLECTIBLE_IDS do
+		local item = buildCollectible(collectiblesFolder, id, secretSpots[id], i * 1.7)
+		table.insert(collectibleItems, item)
+		table.insert(collectibleRefs, item.ref)
+	end
 
 	-- Keep the habitat interior readable: many overlapping long-range lights burned it to white.
 	local habitatFolder = base:FindFirstChild("Habitat")
@@ -1659,7 +2356,7 @@ function WorldBuilder.build(data: any): World
 			emitter.Enabled = active
 		end
 		habitat.leakLight.Enabled = active
-		habitat.leakPart.Color = if active then Color3.fromRGB(200, 80, 50) else METAL
+		habitat.leakPart.Color = if active then PALETTE.red else METAL
 		refreshPrompts()
 	end
 
@@ -1807,7 +2504,48 @@ function WorldBuilder.build(data: any): World
 		rover.beacon.Color = if driving then HULL_TRIM else LAMP_OFF
 	end
 
-	-- One cheap Heartbeat drives every system animation; it stops when the base is rebuilt.
+	-- Shared rewards in the world (the server decides who owns them; see ProgressService).
+	local function setRoverPaint(paint: RoverPaint)
+		local cheese = paint == "cheese"
+		for _, p in rover.paintParts do
+			p.Color = if cheese then CHEESE_PAINT else WHITE_HULL
+		end
+		for _, hole in rover.cheeseSpots do
+			hole.Transparency = if cheese then 0 else 1
+		end
+	end
+
+	local function setTeamFlag(visible: boolean)
+		teamFlag.Parent = if visible then base else nil
+	end
+
+	-- Collectibles only bob and spin while someone is near, so idle servers replicate nothing.
+	local awake: { boolean } = table.create(#collectibleItems, false)
+	local awakeTimer = COLLECTIBLE_AWAKE_CHECK
+	local secretClock = 0
+	local function refreshAwake()
+		local positions: { Vector3 } = {}
+		for _, player in Players:GetPlayers() do
+			local character = player.Character
+			local rootPart = if character then character:FindFirstChild("HumanoidRootPart") else nil
+			if rootPart and rootPart:IsA("BasePart") then
+				table.insert(positions, rootPart.Position)
+			end
+		end
+		for i, item in collectibleItems do
+			local near = false
+			for _, position in positions do
+				if (position - item.home.Position).Magnitude <= COLLECTIBLE_AWAKE_RANGE then
+					near = true
+					break
+				end
+			end
+			awake[i] = near
+		end
+	end
+
+	-- One cheap Heartbeat drives every animation (systems and collectibles); it stops when the base
+	-- is rebuilt.
 	local fanAngle = 0
 	local roverAngle = rover.startAngle
 	local pulseClock = 0
@@ -1837,6 +2575,19 @@ function WorldBuilder.build(data: any): World
 			roverAngle = (roverAngle + ROVER_SPEED[scienceStep + 1] / ROVER_LOOP_RADIUS * dt) % (2 * math.pi)
 			rover.root.CFrame = roverPose(rover.centre, roverAngle)
 		end
+		awakeTimer += dt
+		if awakeTimer >= COLLECTIBLE_AWAKE_CHECK then
+			awakeTimer = 0
+			refreshAwake()
+		end
+		secretClock += dt
+		for i, item in collectibleItems do
+			if awake[i] then
+				local t = secretClock + item.phase
+				local bob = math.sin(t * 2) * COLLECTIBLE_BOB
+				item.root.CFrame = item.home * CFrame.new(0, bob, 0) * CFrame.Angles(0, t * COLLECTIBLE_SPIN_RAD, 0)
+			end
+		end
 	end)
 
 	refreshPrompts()
@@ -1859,6 +2610,10 @@ function WorldBuilder.build(data: any): World
 		setStormVisuals = setStormVisuals,
 		setShiftPromptsEnabled = setShiftPromptsEnabled,
 		setSystemVisuals = setSystemVisuals,
+		collectibles = collectibleRefs,
+		observatoryDoor = observatory.door :: BasePart,
+		setRoverPaint = setRoverPaint,
+		setTeamFlag = setTeamFlag,
 	}
 end
 
