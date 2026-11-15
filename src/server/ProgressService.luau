@@ -18,8 +18,8 @@
 -- Player attributes: SBO_SlotLoading = true while a slot is on its way (teleport or load),
 -- SBO_SlotChosen = true and SBO_Slot = n once it is loaded. Remotes.SLOTS sends Types.SlotsMeta.
 -- When DataStores are not available (Studio, an unpublished place, or no API access) every slot lives
--- in memory for this server session. Studio uses memory unless workspace attribute
--- SBO_StudioDataStores = true, so debug credits never reach real saves.
+-- in memory for this server session. Studio: see Stage 10 below (a published place tries a separate
+-- Studio DataStore, so debug credits never reach live saves).
 -- A save only ever adds: it merges with what is already stored, so nothing is lost if two servers save
 -- the same slot. Exceptions: New Game (fresh) and DebugResetBase replace instead of merging.
 --
@@ -51,6 +51,22 @@
 -- to what the structures already built need under the habitat tree (BaseBuild.habitatForBuilds), so
 -- nothing built before stops being valid. Skills already learned stay even if the longer level table
 -- shows a lower level now.
+-- Stage 10 (playtest: "I pressed Leave and it did not save"):
+--   * Studio backend. workspace attribute SBO_StudioDataStores:
+--       false -> memory (lost when Play stops), as before;
+--       true  -> the live DataStore "SBO_Progress_v1" (the old opt-in, unchanged);
+--       unset -> a published place (game.PlaceId ~= 0) tries real DataStores in a separate store
+--                "SBO_Progress_v1_Studio" (so debug credits never reach live saves). A probe read
+--                decides; if it fails (API access off) memory is used exactly as before.
+--     One log line says which backend this server uses.
+--   * After each successful save of a player's slot, Remotes.SAVED tells that player
+--     (Types.SaveNotice: real save or memory only, autosave or "Save now"). The client shows a small
+--     pill (src/client/SaveIndicator.luau).
+--   * Action SaveNow (Settings panel): validated here (a loaded slot), at most one request per
+--     second; the write happens at the earliest moment the DataStore allows (one write per key
+--     every MANUAL_SAVE_SPACING seconds) and its notice says manual = true.
+--   * Leaving (PlayerRemoving) counts as a save in flight from the first moment, so BindToClose
+--     (a reserved solo server closes when its only player leaves) always waits for it.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local DataStoreService = game:GetService("DataStoreService")
@@ -98,8 +114,9 @@ export type Remotes = {
 	progress: RemoteEvent,
 	collected: RemoteEvent,
 	message: RemoteEvent,
-	action: RemoteEvent?, -- Stage 9: ChooseSlot / RequestSlots arrive here (MissionService ignores them)
+	action: RemoteEvent?, -- Stage 9: ChooseSlot / RequestSlots (Stage 10: SaveNow) arrive here (MissionService ignores them)
 	slots: RemoteEvent?, -- Stage 9: Types.SlotsMeta to one client
+	saved: RemoteEvent?, -- Stage 10: Types.SaveNotice to one client (created here when missing)
 }
 
 -- Stage 6 build-and-grow data of one player. equipped nil = never chosen (an old save, or a new
@@ -162,6 +179,8 @@ type Record = {
 	lastSlotsRequestAt: number,
 	lastPickup: { [string]: number }, -- os.clock() of the last pickup per collectible (debounce)
 	lastRedeemAt: number, -- os.clock() of the last redeem attempt (rate limit)
+	manualPending: boolean, -- Stage 10: a SaveNow is waiting; the next save's notice says manual
+	lastSaveNowAt: number, -- os.clock() of the last SaveNow request (rate limit)
 	connections: { RBXScriptConnection },
 }
 
@@ -180,7 +199,13 @@ local LEGACY_SLOT = 1 -- the old save becomes this slot
 local SLOT_COUNT = 3
 local DATA_VERSION = 5 -- 2 = Stage 6 "base", 3 = Stage 7, 4 = Stage 8 gear, 5 = Stage 9 slots, quest, habitat tree
 local HABITAT_TREE_VERSION = 5 -- saves older than this get the habitat migration
-local STUDIO_DATASTORE_ATTRIBUTE = "SBO_StudioDataStores" -- workspace attribute: real saves in Studio
+local STUDIO_DATASTORE_ATTRIBUTE = "SBO_StudioDataStores" -- workspace attribute: false = memory, true = live store
+local STUDIO_STORE_NAME = "SBO_Progress_v1_Studio" -- Stage 10: Studio saves of a published place (attribute unset)
+local PROBE_KEY = "probe" -- Stage 10: read once in Studio to see whether DataStores answer
+local PROBE_TIMEOUT_SECONDS = 8 -- no answer by then: memory for this session
+local MANUAL_SAVE_SPACING = 6 -- Stage 10: DataStores allow one write per key about every 6 seconds
+local SAVE_NOW_REQUEST_INTERVAL = 1 -- SaveNow rate limit per player (requests, not writes)
+local CLOSE_BUDGET_STUDIO_SECONDS = 5 -- Studio waits only a short time when Play stops
 local MAX_STORED_NUMBER = 1e9 -- credits and XP are clamped to this when read from storage
 local MAX_STORED_TIME = 1e11 -- os.time() values (savedAt)
 local SAVE_INTERVAL_SECONDS = 10 -- DataStores allow one write per key about every 6 seconds
@@ -259,10 +284,48 @@ local function dataStoreBackend(dataStore: DataStore): Backend
 end
 
 local backend: Backend = memoryBackend
+-- Stage 10: false while the Studio probe read is running (readKey waits for it, at most
+-- PROBE_TIMEOUT_SECONDS). Once decided the backend never switches to a DataStore again.
+local backendDecided = true
+
+local function waitForBackend()
+	if backendDecided then
+		return
+	end
+	local deadline = os.clock() + PROBE_TIMEOUT_SECONDS
+	while not backendDecided and os.clock() < deadline do
+		task.wait(0.1)
+	end
+	if not backendDecided then
+		backendDecided = true -- a late probe answer is ignored: this session keeps memory
+		print("[SpaceBaseOdyssey] Studio: DataStores did not answer in time; saves are in memory (lost when Play stops)")
+	end
+end
+
+-- Studio, published place: one read decides between the DataStore and memory.
+local function probeStudioBackend(dataStore: DataStore, storeName: string)
+	backendDecided = false
+	task.spawn(function()
+		local ok, err = pcall(function()
+			return dataStore:GetAsync(PROBE_KEY)
+		end)
+		if backendDecided then
+			return -- timed out: memory was chosen already
+		end
+		if ok then
+			backend = dataStoreBackend(dataStore)
+			print(`[SpaceBaseOdyssey] Studio: saves use the DataStore "{storeName}" (they stay after Play stops)`)
+		else
+			print(`[SpaceBaseOdyssey] Studio: DataStores unavailable ({err}); saves are in memory (lost when Play stops)`)
+		end
+		backendDecided = true
+	end)
+end
 
 -- Reads one key, with retries. Returns false when it could not be read. Studio without API access or
 -- an unpublished place: DataStores are off for this session and memory is used from now on.
 local function readKey(key: string, who: string): (boolean, any)
+	waitForBackend()
 	for attempt = 1, LOAD_ATTEMPTS do
 		local source = backend
 		local ok, data = pcall(source.get, key)
@@ -270,8 +333,8 @@ local function readKey(key: string, who: string): (boolean, any)
 			return true, data
 		end
 		warn(`[SpaceBaseOdyssey] progress load attempt {attempt} failed for {who}: {data}`)
-		local message = tostring(data)
-		if source.persistent and (string.find(message, "Studio", 1, true) or string.find(message, "publish", 1, true)) then
+		local message = string.lower(tostring(data))
+		if source.persistent and (string.find(message, "studio", 1, true) or string.find(message, "publish", 1, true)) then
 			backend = memoryBackend
 			warn("[SpaceBaseOdyssey] DataStores unavailable, progress kept in memory for this session")
 			return true, memoryBackend.get(key)
@@ -749,6 +812,17 @@ local function sayTo(player: Player, key: string)
 	end
 end
 
+-- Stage 10: tells one player their slot was saved (or that a "Save now" could not be).
+local function sendSaved(player: Player, record: Record, ok: boolean, real: boolean, manual: boolean)
+	local events = remotes
+	local event = events and events.saved
+	if event == nil or player.Parent == nil or records[player] ~= record then
+		return -- a player who already left gets nothing
+	end
+	local notice: Types.SaveNotice = { ok = ok, real = real, manual = manual }
+	event:FireClient(player, notice)
+end
+
 local function worldCall(name: string, ...: any)
 	local fn = world and world[name]
 	if type(fn) ~= "function" then
@@ -861,7 +935,8 @@ end
 ----------------------------------------------------------------------------------------------------
 -- Saving
 
--- Saves the chosen slot. `closing` = the server is closing: no waiting for write budget.
+-- Saves the chosen slot. `closing` = the server is closing (or the player left and the caller already
+-- waited): no waiting for write budget here.
 local function save(player: Player, record: Record, closing: boolean?)
 	local slot = record.slot
 	if slot == nil or record.state ~= "loaded" or not record.canSave then
@@ -871,6 +946,9 @@ local function save(player: Player, record: Record, closing: boolean?)
 		return -- still dirty: the autosave check schedules it again
 	end
 	record.dirty = false
+	-- A SaveNow that arrives while this write runs waits for the next write (it may hold newer data).
+	local manual = record.manualPending
+	record.manualPending = false
 	savesInFlight += 1
 	local completed = table.clone(record.completed)
 	local collectibles = table.clone(record.collectibles)
@@ -879,6 +957,9 @@ local function save(player: Player, record: Record, closing: boolean?)
 	local reset = record.baseReset
 	local replaceAll = record.replaceAll
 	local source = backend
+	-- Stage 10: also stamped when the write starts, so a SaveNow during a running write waits
+	-- MANUAL_SAVE_SPACING from this write instead of writing the same key again at once.
+	record.lastSaveAt = os.clock()
 	local ok, err = pcall(source.update, slotKey(player, slot), function(old: any): any
 		local stored = if replaceAll or type(old) ~= "table" then nil else old
 		local merged = {
@@ -900,6 +981,9 @@ local function save(player: Player, record: Record, closing: boolean?)
 	if not ok then
 		record.dirty = true
 		warn(`[SpaceBaseOdyssey] could not save slot {slot} for {player.Name}: {err}`)
+		if manual then
+			sendSaved(player, record, false, source.persistent, true)
+		end
 		return
 	end
 	if reset then
@@ -910,6 +994,7 @@ local function save(player: Player, record: Record, closing: boolean?)
 	end
 	record.meta.slots[slot] = summaryOf(record.base, record.mode or "solo")
 	record.metaDirty = true
+	sendSaved(player, record, true, source.persistent, manual)
 end
 
 local function saveMeta(player: Player, record: Record)
@@ -948,14 +1033,15 @@ local function requestMetaSave(player: Player, record: Record, interval: number?
 	end)
 end
 
--- Saves soon, at most once every SAVE_INTERVAL_SECONDS per player.
-local function requestSave(player: Player, record: Record)
+-- Saves soon, at most once every SAVE_INTERVAL_SECONDS per player (`spacing` overrides it: SaveNow
+-- uses MANUAL_SAVE_SPACING, the DataStore's own limit).
+local function requestSave(player: Player, record: Record, spacing: number?)
 	record.dirty = true
 	if record.saveScheduled or not record.canSave or record.state ~= "loaded" then
 		return
 	end
 	record.saveScheduled = true
-	local delay = math.max(0, record.lastSaveAt + SAVE_INTERVAL_SECONDS - os.clock())
+	local delay = math.max(0, record.lastSaveAt + (spacing or SAVE_INTERVAL_SECONDS) - os.clock())
 	task.delay(delay, function()
 		record.saveScheduled = false
 		if records[player] == record and record.dirty then
@@ -965,6 +1051,27 @@ local function requestSave(player: Player, record: Record)
 			end
 		end
 	end)
+end
+
+-- Stage 10: the SaveNow action. Only for a loaded slot; extra requests within
+-- SAVE_NOW_REQUEST_INTERVAL are ignored. The write happens as soon as the DataStore allows (an
+-- autosave already on its way, at most SAVE_INTERVAL_SECONDS away, carries it instead); the notice of
+-- that write says manual = true. A slot that could not be read is never written: the player is told.
+local function requestSaveNow(player: Player, record: Record)
+	local t = os.clock()
+	if t - record.lastSaveNowAt < SAVE_NOW_REQUEST_INTERVAL then
+		return
+	end
+	record.lastSaveNowAt = t
+	if record.slot == nil or record.state ~= "loaded" then
+		return -- start menu, a solo trip or a slot still loading: nothing to save yet
+	end
+	if not record.canSave then
+		sendSaved(player, record, false, backend.persistent, true)
+		return
+	end
+	record.manualPending = true
+	requestSave(player, record, MANUAL_SAVE_SPACING)
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -1215,6 +1322,8 @@ local function addPlayer(player: Player)
 		lastSlotsRequestAt = -math.huge,
 		lastPickup = {},
 		lastRedeemAt = -math.huge,
+		manualPending = false,
+		lastSaveNowAt = -math.huge,
 		connections = {},
 	}
 	records[player] = record
@@ -1278,11 +1387,27 @@ local function removePlayer(player: Player)
 	end
 	refreshWorldRewards()
 	notifyChanged()
-	if record.dirty then
-		save(player, record)
-	end
-	if record.metaDirty and waitForBudget(BUDGET_WAIT_SECONDS) then
-		saveMeta(player, record)
+	-- Stage 10: counted as a save in flight from the start (save() may first wait for write budget),
+	-- so BindToClose never lets the server close before the leaving player's slot is written. This is
+	-- what keeps a reserved solo server's save: it closes as soon as its only player leaves.
+	savesInFlight += 1
+	-- No autosave retries this record any more: wait a little for write budget, then write anyway
+	-- (a DataStore queues a request without budget instead of dropping it).
+	-- Budget is only waited for when save() / saveMeta() will really write (a player leaving from the
+	-- start menu or during a solo teleport has no loaded slot, and must not hold a closing server).
+	local ok, err = pcall(function()
+		if record.dirty and record.slot ~= nil and record.state == "loaded" and record.canSave then
+			waitForBudget(BUDGET_WAIT_SECONDS)
+			save(player, record, true)
+		end
+		if record.metaDirty and record.metaReady and record.metaCanSave then
+			waitForBudget(BUDGET_WAIT_SECONDS)
+			saveMeta(player, record)
+		end
+	end)
+	savesInFlight -= 1
+	if not ok then
+		warn(`[SpaceBaseOdyssey] saving on leave failed for {player.Name}: {err}`)
 	end
 end
 
@@ -1360,18 +1485,55 @@ function ProgressService.start(worldRefs: any, remoteEvents: Remotes)
 	world = worldRefs
 	remotes = remoteEvents
 
-	local useDataStores = not RunService:IsStudio() or workspace:GetAttribute(STUDIO_DATASTORE_ATTRIBUTE) == true
-	if useDataStores then
-		local ok, result = pcall(function(): DataStore
-			return DataStoreService:GetDataStore(STORE_NAME)
-		end)
-		if ok and result then
-			backend = dataStoreBackend(result)
+	-- Stage 10: which backend this server uses (see the header). One log line says which.
+	local studio = RunService:IsStudio()
+	local studioSetting = workspace:GetAttribute(STUDIO_DATASTORE_ATTRIBUTE)
+	local storeName: string? = STORE_NAME
+	if studio then
+		if studioSetting == false then
+			storeName = nil
+			print(`[SpaceBaseOdyssey] Studio: {STUDIO_DATASTORE_ATTRIBUTE} = false, saves are in memory (lost when Play stops)`)
+		elseif studioSetting == true then
+			storeName = STORE_NAME
+		elseif game.PlaceId == 0 then
+			storeName = nil
+			print("[SpaceBaseOdyssey] Studio: place not published, saves are in memory (lost when Play stops)")
 		else
-			warn(`[SpaceBaseOdyssey] DataStores unavailable, progress kept in memory: {result}`)
+			storeName = STUDIO_STORE_NAME
 		end
-	else
-		print("[SpaceBaseOdyssey] Studio: save slots are kept in memory for this session")
+	end
+	if storeName then
+		local name = storeName
+		local ok, result = pcall(function(): DataStore
+			return DataStoreService:GetDataStore(name)
+		end)
+		if not ok or result == nil then
+			warn(`[SpaceBaseOdyssey] DataStores unavailable, saves are in memory for this session: {result}`)
+		elseif studio then
+			probeStudioBackend(result, name) -- decides before the first slot is read
+		else
+			backend = dataStoreBackend(result)
+			print(`[SpaceBaseOdyssey] saves use the DataStore "{name}"`)
+		end
+	end
+
+	-- Stage 10: Remotes.SAVED (Types.SaveNotice). Main.server may pass it; otherwise it is made here,
+	-- in the same folder as the other remotes.
+	if remoteEvents.saved == nil then
+		local folder = ReplicatedStorage:FindFirstChild(Types.Remotes.FOLDER)
+		if folder then
+			local existing = folder:FindFirstChild(Types.Remotes.SAVED)
+			if existing and existing:IsA("RemoteEvent") then
+				remoteEvents.saved = existing :: RemoteEvent
+			else
+				local event = Instance.new("RemoteEvent")
+				event.Name = Types.Remotes.SAVED
+				event.Parent = folder
+				remoteEvents.saved = event
+			end
+		else
+			warn("[SpaceBaseOdyssey] no Remotes folder: players are not told when their game is saved")
+		end
 	end
 
 	connectCollectibles()
@@ -1396,6 +1558,11 @@ function ProgressService.start(worldRefs: any, remoteEvents: Remotes)
 				if record and record.metaReady and t - record.lastSlotsRequestAt >= SLOTS_REQUEST_INTERVAL then
 					record.lastSlotsRequestAt = t
 					sendSlots(player, record)
+				end
+			elseif action.type == "SaveNow" then
+				local record = records[player]
+				if record then
+					requestSaveNow(player, record)
 				end
 			end
 		end)
@@ -1442,7 +1609,10 @@ function ProgressService.start(worldRefs: any, remoteEvents: Remotes)
 				end
 			end)
 		end
-		local deadline = os.clock() + CLOSE_BUDGET_SECONDS
+		-- Studio: Stop must not hang (memory saves are instant; a DataStore write takes well under a
+		-- second). Live servers have about 30 seconds.
+		local budget = if RunService:IsStudio() then CLOSE_BUDGET_STUDIO_SECONDS else CLOSE_BUDGET_SECONDS
+		local deadline = os.clock() + budget
 		while savesInFlight > 0 and os.clock() < deadline do
 			task.wait(0.1)
 		end

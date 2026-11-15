@@ -256,6 +256,13 @@ export type SlotsMeta = {
 	offline: boolean?, -- true = saves could not be read: progress is kept only for this visit
 }
 
+-- Stage 10: sent to one player after each save of their slot (Remotes.SAVED).
+export type SaveNotice = {
+	ok: boolean, -- false only for a "Save now" that could not be written
+	real: boolean, -- true = a DataStore (it stays); false = memory (only this test session)
+	manual: boolean, -- true = the answer to a "Save now" (SaveNow action)
+}
+
 export type BuildProgress = {
 	level: number, -- the level being built (current level + 1)
 	stage: number, -- steps finished (0..stages)
@@ -288,6 +295,9 @@ export type Action =
 	-- ProgressService validates slot, mode and fresh.
 	| { type: "ChooseSlot", slot: number, mode: SlotMode, fresh: boolean }
 	| { type: "RequestSlots" } -- send Remotes.SLOTS again (at most once a second)
+	-- Stage 10, Settings panel "Save now": ProgressService saves the loaded slot as soon as the
+	-- DataStore allows and answers on Remotes.SAVED (manual = true). Ignored before a slot is loaded.
+	| { type: "SaveNow" }
 	-- Stage 6 (BaseService validates: level, credits, requirements, ownership, distance for prompts).
 	| { type: "Build", id: string } -- build or upgrade to the next level (also from the world prompt)
 	| { type: "LearnSkill", id: string }
@@ -323,6 +333,7 @@ local Remotes = table.freeze({
 	BASE_STATE = "BaseState", -- server -> one client: BaseState (Stage 6)
 	EXPLORE = "Explore", -- server -> one client: ExploreEvent (Stage 7)
 	SLOTS = "Slots", -- server -> one client: SlotsMeta (Stage 9 start menu)
+	SAVED = "Saved", -- server -> one client: SaveNotice (Stage 10, after each save of their slot)
 })
 
 return table.freeze({

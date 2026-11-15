@@ -61,6 +61,7 @@ Every number and its source is listed in [DATA_SOURCES.md](DATA_SOURCES.md).
 - [x] Stage 7: start in the lander, building in steps, tools, lab, garage with drivable rovers, landing pad and ship, exploration sites, meteorites
 - [x] Stage 8: pressurized modules, air boots and jetpack with a gas tank, new skills, auto-run
 - [x] Stage 9: start menu with three save slots, open world with main quests, habitat base levels 1-5, paced economy
+- [x] Stage 10: playtest polish: smaller text boxes, always-on vitals panel, quest notices, visible saving, walkable tubes
 - [ ] Playtests with people outside the team
 - [ ] Public release
 

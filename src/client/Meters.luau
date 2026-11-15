@@ -6,6 +6,8 @@
 --            "data waiting" row while science waits for the antenna.
 -- Values glide toward each new Snapshot value and the row flashes on a big change: lime when the
 -- change is good for the crew, red when it is bad (radiation going up is bad).
+-- Stage 10: Meters.fillRow builds one column row (icon, name, bar with value and zone icon), shared
+-- with the HUD's always-on vitals panel (Hud.luau) so both panels look the same.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -90,6 +92,38 @@ local function zoneOf(meter: MeterId, value: number): "green" | "yellow" | "red"
 	return Simulation.meterZone(value, zoneMeter, MissionData)
 end
 
+-- One column row inside `cell`: icon | short name | slim bar with the value and the zone icon.
+function Meters.fillRow(cell: Frame, image: string, tint: Color3, z: number): (ImageLabel, TextLabel, Ui.Bar)
+	local icon = Ui.icon(cell, image, {
+		name = "Icon",
+		size = UDim2.fromScale(0.13, 0.78),
+		position = UDim2.fromScale(0.01, 0.5),
+		anchor = Vector2.new(0, 0.5),
+		tint = tint,
+		zindex = z + 1,
+	})
+	local name = Ui.label(cell, {
+		name = "Name",
+		size = UDim2.fromScale(0.36, 0.8),
+		position = UDim2.fromScale(0.15, 0.5),
+		anchor = Vector2.new(0, 0.5),
+		alignX = Enum.TextXAlignment.Left,
+		textColor = ROLE.text,
+		maxText = 16,
+		minText = 7,
+		zindex = z + 1,
+	})
+	local bar = Ui.bar(cell, {
+		name = "Bar",
+		size = UDim2.fromScale(0.47, 0.62),
+		position = UDim2.fromScale(0.52, 0.5),
+		anchor = Vector2.new(0, 0.5),
+		maxText = 14,
+		zindex = z + 1,
+	})
+	return icon, name, bar
+end
+
 function Meters.new(parent: Instance, props: Ui.Props, layout: Layout?): MetersView
 	local mode: Layout = layout or "row"
 	local frame = if mode == "column"
@@ -171,32 +205,8 @@ function Meters.new(parent: Instance, props: Ui.Props, layout: Layout?): MetersV
 			})
 		else
 			-- Column row: icon | short label | slim bar with the value.
-			Ui.icon(cell, ICONS[meter], {
-				size = UDim2.fromScale(0.13, 0.78),
-				position = UDim2.fromScale(0.01, 0.5),
-				anchor = Vector2.new(0, 0.5),
-				tint = TINTS[meter],
-				zindex = z + 1,
-			})
-			name = Ui.label(cell, {
-				name = "Name",
-				size = UDim2.fromScale(0.36, 0.8),
-				position = UDim2.fromScale(0.15, 0.5),
-				anchor = Vector2.new(0, 0.5),
-				alignX = Enum.TextXAlignment.Left,
-				textColor = ROLE.text,
-				maxText = 16,
-				minText = 7,
-				zindex = z + 1,
-			})
-			bar = Ui.bar(cell, {
-				name = "Bar",
-				size = UDim2.fromScale(0.47, 0.62),
-				position = UDim2.fromScale(0.52, 0.5),
-				anchor = Vector2.new(0, 0.5),
-				maxText = 14,
-				zindex = z + 1,
-			})
+			local _icon: ImageLabel
+			_icon, name, bar = Meters.fillRow(cell, ICONS[meter], TINTS[meter], z)
 		end
 		widgets[meter] = {
 			cell = cell,

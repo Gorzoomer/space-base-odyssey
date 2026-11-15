@@ -722,6 +722,27 @@ local EXPECTED: { [string]: { string } } = {
 	["ui.menu_credits_help"] = {},
 	["ui.menu_credit_ai"] = {},
 	["ui.menu_quest_badge"] = {},
+	-- Stage 10: quest toasts.
+	["ui.toast.quest_new"] = {},
+	["ui.toast.side_new"] = {},
+	["ui.toast.quest_done"] = {},
+	["ui.toast.quest_already"] = {},
+	["ui.toast.step_done"] = {"step"},
+	["ui.toast.step_already"] = {"step"},
+	["ui.toast.current"] = {},
+	-- Stage 10: always-on vitals panel and the low air pill (Hud.luau).
+	["ui.low_air"] = {},
+	["ui.vitals.food"] = {},
+	["ui.vitals.boost"] = {},
+	["ui.vitals.ready"] = {},
+	["ui.vitals.seconds"] = { "seconds" },
+	["ui.vitals.silo"] = {},
+	-- Stage 10: save feedback.
+	["ui.save_done"] = {},
+	["ui.save_test_only"] = {},
+	["ui.save_failed"] = {},
+	["ui.save_now"] = {},
+	["ui.save_auto"] = {},
 }
 
 -- Fun facts: "funfact.01" .. "funfact.NN" with N = Localization.FUNFACT_COUNT, no placeholders.

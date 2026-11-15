@@ -533,6 +533,21 @@ end)
 Markers.start()
 CarlDrone.start()
 Rewards.start()
+-- Stage 10: quest toasts on the right side (new quest, step done, quest complete). pcall: a broken
+-- toast module never breaks the client.
+do
+	local ok, result = pcall(function()
+		local moduleScript = Client:WaitForChild("QuestToasts", 5)
+		if moduleScript == nil then
+			error("QuestToasts not found")
+		end
+		local module: any = require(moduleScript :: any)
+		module.start(root)
+	end)
+	if not ok then
+		warn(`[SpaceBaseOdyssey] QuestToasts unavailable: {result}`)
+	end
+end
 FunFacts.start({ showTip = messages.showTip, isIdle = messages.isIdle })
 Onboarding.start({
 	show = messages.show,
@@ -547,6 +562,20 @@ if gearModule then
 	local ok, result = pcall(gearModule.start, root, { showTip = messages.showTip })
 	if not ok then
 		warn(`[SpaceBaseOdyssey] Gear failed to start: {result}`)
+	end
+end
+-- Stage 10: "Game saved" pill after each save (src/client/SaveIndicator.luau; pcall: never breaks the client).
+do
+	local ok, result = pcall(function()
+		local moduleScript = Client:WaitForChild("SaveIndicator", 5)
+		if moduleScript == nil then
+			error("SaveIndicator not found")
+		end
+		local module: any = require(moduleScript :: any)
+		module.start(root)
+	end)
+	if not ok then
+		warn(`[SpaceBaseOdyssey] SaveIndicator unavailable: {result}`)
 	end
 end
 -- Stage 7 drivable vehicles: chase camera, speed readout and exit hint (src/client/VehicleClient.luau).

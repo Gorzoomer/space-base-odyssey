@@ -608,13 +608,19 @@ end
 -- Stage 7 (team feedback, modern lunar base concept): the habitat is a round hub. Sixteen flat wall
 -- segments carry a window band, a blue solar-cell wrap and a cyan trim line; a white faceted dome sits
 -- on top. Doors: north (toward the crater), south (toward the lander) and a west doorway into the
--- walk-through tube to the greenhouse dome (a glass hatch closes it until the greenhouse stands).
+-- walk-through tube to the greenhouse dome (a glass hatch closes it until the greenhouse stands);
+-- Stage 10: a south-west doorway into the walk-through tube to the lab (hatch until the lab stands).
 -- The room inside keeps the mission layout: power console, water processor, air maker, water tank.
 -- Stage 9: the habitat is the base level (1 to 5). Levels 2 to 5 add their own parts outside the room
 -- (Six.buildHabitatTiers), and a mission console on the east side starts missions (no start menu).
 local HUB_DOOR_NORTH = 0
 local HUB_DOOR_SOUTH = 8
 local HUB_DOOR_WEST = 12
+-- Stage 10: a doorway into the walk-through tube to the lab (south-west, where the lab's docking
+-- doorway points; a glass hatch closes it until the lab stands). Width and height fit the tube.
+local HUB_DOOR_LAB = 10
+local HUB_LAB_DOOR_WIDTH = 10.4
+local HUB_LAB_DOOR_TOP = 9.8
 
 type HabitatRefs = {
 	model: Model,
@@ -636,6 +642,7 @@ type HabitatRefs = {
 	processorInlet: Part,
 	waterTank: WaterTankRefs,
 	greenhouseHatch: Part, -- closes the west doorway while the greenhouse is not built
+	labHatch: Part, -- Stage 10: closes the lab doorway while the lab is not built
 }
 
 type WaterTankRefs = { fill: Part, light: PointLight, gauge: Part, bottomY: number, height: number, centre: Vector3, diameter: number }
@@ -677,6 +684,9 @@ local function buildHabitat(base: Instance): HabitatRefs
 			doorSegs[k] = seg
 		elseif k == HUB_DOOR_WEST then
 			Geo.doorSegment(hab, seg, 9, 11, HUB_WALL_HEIGHT, HUB_WALL, hull)
+			doorSegs[k] = seg
+		elseif k == HUB_DOOR_LAB then
+			Geo.doorSegment(hab, seg, HUB_LAB_DOOR_WIDTH, HUB_LAB_DOOR_TOP, HUB_WALL_HEIGHT, HUB_WALL, hull)
 			doorSegs[k] = seg
 		else
 			Geo.windowSegment(hab, seg, HUB_WALL_HEIGHT, HUB_WALL, 7, 11.5, hull, GLASS)
@@ -731,6 +741,7 @@ local function buildHabitat(base: Instance): HabitatRefs
 		[HUB_DOOR_NORTH] = true,
 		[HUB_DOOR_SOUTH] = true,
 		[HUB_DOOR_WEST] = true,
+		[HUB_DOOR_LAB] = true,
 	})
 
 	-- Door frames and lamps (north and south); the west doorway gets the greenhouse hatch.
@@ -749,6 +760,21 @@ local function buildHabitat(base: Instance): HabitatRefs
 		part(hab, "HatchFrame", Vector3.new(0.6, 11.3, 0.6), westSeg.cf * CFrame.new(side * 4.8, 5.65, inner), hatchFrame)
 	end
 	part(hab, "HatchFrame", Vector3.new(10.2, 0.6, 0.6), westSeg.cf * CFrame.new(0, 11.3, inner), hatchFrame)
+	-- Stage 10: the lab doorway's hatch, framed in cyan (systems).
+	local labSeg = doorSegs[HUB_DOOR_LAB]
+	local labHatchHeight = HUB_LAB_DOOR_TOP - 0.5
+	local labHatch = part(hab, "LabHatch", Vector3.new(HUB_LAB_DOOR_WIDTH, labHatchHeight, 0.4), labSeg.cf * CFrame.new(0, 0.5 + labHatchHeight / 2, 0), {
+		color = Color3.fromRGB(205, 236, 232),
+		material = Enum.Material.Glass,
+		transparency = 0.6,
+		shadow = false,
+	})
+	local labFrame: Style = { color = ACCENT_SYSTEM, material = Enum.Material.SmoothPlastic, shadow = false }
+	for _, side in { -1, 1 } do
+		local x = side * (HUB_LAB_DOOR_WIDTH / 2 + 0.3)
+		part(hab, "HatchFrame", Vector3.new(0.6, HUB_LAB_DOOR_TOP + 0.3, 0.6), labSeg.cf * CFrame.new(x, (HUB_LAB_DOOR_TOP + 0.3) / 2, inner), labFrame)
+	end
+	part(hab, "HatchFrame", Vector3.new(HUB_LAB_DOOR_WIDTH + 1.2, 0.6, 0.6), labSeg.cf * CFrame.new(0, HUB_LAB_DOOR_TOP + 0.3, inner), labFrame)
 
 	-- Ceiling lights. Players spend the planning phase in here, so the room must be bright. Every
 	-- interior light casts shadows, so none of it leaks through the walls onto the ground outside.
@@ -1035,6 +1061,7 @@ local function buildHabitat(base: Instance): HabitatRefs
 			diameter = fillDiameter,
 		},
 		greenhouseHatch = greenhouseHatch,
+		labHatch = labHatch,
 	}
 end
 
@@ -1044,7 +1071,7 @@ end
 
 type GreenhouseRefs = {
 	model: Model, -- level 1: dome A and the tube from the hub's west doorway
-	model2: Model, -- level 2: dome B and the short tube from dome A
+	model2: Model, -- level 2: dome B and the short walk-through tube from dome A
 	strips: { Part },
 	stripLights: { PointLight },
 	plants: { Part },
@@ -1054,6 +1081,10 @@ type GreenhouseRefs = {
 	tubeZone: Part,
 	domeZone: Part,
 	dome2Zone: Part,
+	-- Stage 10: the walk-through link tube between the domes (its zone counts from level 2) and the
+	-- glass panels that close dome A's doorway toward it until then.
+	linkZone: Part,
+	linkHatch: { Part },
 }
 
 local GREENHOUSE_GLASS: Style = {
@@ -1063,50 +1094,197 @@ local GREENHOUSE_GLASS: Style = {
 	shadow = false,
 }
 
--- A pressurized walk-through tube from a to b (ground points): an octagon of hull slats around an axis
--- at TUBE_AXIS_Y with glass windows on the upper sides, a floor with cyan guide strips and a blue
--- solar strip on top.
-function Geo.walkTube(parent: Instance, a: Vector3, b: Vector3)
-	local dir = flatUnit(b - a, Vector3.xAxis)
-	local length = (Vector3.new(b.X, 0, b.Z) - Vector3.new(a.X, 0, a.Z)).Magnitude
-	local mid = (a + b) / 2
-	local axis = Vector3.new(mid.X, TUBE_AXIS_Y, mid.Z)
-	local side = Vector3.new(-dir.Z, 0, dir.X)
+-- Stage 10 (playtest: every tube between modules is walkable): optional shape of a walk tube.
+-- startAt / endAt give, for a line parallel to the tube axis (origin at the tube's start, unit
+-- direction), the distance along it where a hull slat starts or ends (default: 0 and the length), so
+-- the hull can meet a round wall or a glass dome without a gap. floorFrom / floorTo do the same for the
+-- floor plate. ribs are fractions of the tube where a trim ring goes round the outside.
+type WalkTubeOptions = {
+	apothem: number?, -- inner half-width of the octagon (default TUBE_APOTHEM)
+	axisHeight: number?, -- axis above the floor's bottom face (default TUBE_AXIS_Y)
+	floorWidth: number?,
+	glass: Style?,
+	startAt: ((origin: Vector3, dir: Vector3) -> number?)?,
+	endAt: ((origin: Vector3, dir: Vector3) -> number?)?,
+	floorFrom: number?,
+	floorTo: number?,
+	ribs: { number }?,
+	ribStyle: Style?,
+	hood: Style?, -- hull reaching past a or b (into a dome) is built in this style (dome glass)
+}
+
+-- Where a line (origin + dir * t) crosses a plane through `point` with normal `normal`.
+function Geo.planeTrim(point: Vector3, normal: Vector3): (Vector3, Vector3) -> number?
+	return function(origin: Vector3, dir: Vector3): number?
+		local along = normal:Dot(dir)
+		if math.abs(along) < 1e-4 then
+			return nil
+		end
+		return normal:Dot(point - origin) / along
+	end
+end
+
+-- Where a line meets an upright half ellipsoid (radius rx, height ry) standing at `centre`: the far
+-- crossing when `leaving` (the tube starts inside it), else the near one. ry = math.huge is a round
+-- wall (an upright cylinder).
+function Geo.domeTrim(centre: Vector3, rx: number, ry: number, leaving: boolean): (Vector3, Vector3) -> number?
+	return function(origin: Vector3, dir: Vector3): number?
+		local p = origin - centre
+		local iy = if ry == math.huge then 0 else 1 / (ry * ry)
+		local ix = 1 / (rx * rx)
+		local qa = (dir.X * dir.X + dir.Z * dir.Z) * ix + dir.Y * dir.Y * iy
+		local qb = 2 * ((p.X * dir.X + p.Z * dir.Z) * ix + p.Y * dir.Y * iy)
+		local qc = (p.X * p.X + p.Z * p.Z) * ix + p.Y * p.Y * iy - 1
+		local disc = qb * qb - 4 * qa * qc
+		if qa < 1e-9 or disc < 0 then
+			return nil
+		end
+		local root = math.sqrt(disc)
+		return if leaving then (-qb + root) / (2 * qa) else (-qb - root) / (2 * qa)
+	end
+end
+
+-- A pressurized walk-through tube from a to b (points on the floor's bottom face, so a.Y = b.Y = 0
+-- is flat ground; a different height makes a gentle ramp): an octagon of hull slats around the axis
+-- with glass windows on the upper sides, a floor with cyan guide strips and a blue solar strip on top.
+function Geo.walkTube(parent: Instance, a: Vector3, b: Vector3, opts: WalkTubeOptions?)
+	local o: WalkTubeOptions = opts or {}
+	local apothem = o.apothem or TUBE_APOTHEM
+	local axisHeight = o.axisHeight or TUBE_AXIS_Y
+	local floorWidth = o.floorWidth or 10.6
+	local flat = flatUnit(b - a, Vector3.xAxis)
+	local rise = b.Y - a.Y
+	local run = (Vector3.new(b.X, 0, b.Z) - Vector3.new(a.X, 0, a.Z)).Magnitude
+	local dir = if math.abs(rise) > 1e-3 then (flat * run + Vector3.new(0, rise, 0)).Unit else flat
+	local length = math.sqrt(run * run + rise * rise)
+	local up = (Vector3.yAxis - dir * dir.Y).Unit
+	local side = dir:Cross(up) -- flat tubes: (-dir.Z, 0, dir.X), as before Stage 10
+	local axis0 = a + up * axisHeight -- the axis at the tube's start
+	local function along(t: number): Vector3
+		return dir * t
+	end
+	-- Slat k's span along the axis (trimmed at the ends where options ask for it).
+	local function span(lineOrigins: { Vector3 }): (number, number)
+		local t0, t1 = 0, length
+		if o.startAt then
+			local best: number? = nil
+			for _, origin in lineOrigins do
+				local t = o.startAt(origin, dir)
+				if t and (best == nil or t < best) then
+					best = t
+				end
+			end
+			t0 = best or t0
+		end
+		if o.endAt then
+			local best: number? = nil
+			for _, origin in lineOrigins do
+				local t = o.endAt(origin, dir)
+				if t and (best == nil or t > best) then
+					best = t
+				end
+			end
+			t1 = best or t1
+		end
+		return t0, t1
+	end
 	local hull: Style = { color = WHITE_HULL, material = Enum.Material.SmoothPlastic }
-	local slatWidth = 2 * (TUBE_APOTHEM + 0.3) * math.tan(math.pi / 8) + 0.15
+	local glass = o.glass or GREENHOUSE_GLASS
+	local slatRadius = apothem + 0.3
+	local slatWidth = 2 * slatRadius * math.tan(math.pi / 8) + 0.15
+	local topFrom, topTo = 0, length
 	for k = 0, 7 do
 		if k == 4 then
 			continue -- the bottom side is the floor plate
 		end
 		local alpha = k * math.pi / 4
-		local normal = Vector3.yAxis * math.cos(alpha) + side * math.sin(alpha)
-		local tangent = Vector3.yAxis * -math.sin(alpha) + side * math.cos(alpha)
-		local centre = axis + normal * (TUBE_APOTHEM + 0.3)
-		local style = if k == 1 or k == 7 then GREENHOUSE_GLASS else hull
-		part(parent, "TubeShell", Vector3.new(length, slatWidth, 0.6), CFrame.fromMatrix(centre, dir, tangent), style)
+		local normal = up * math.cos(alpha) + side * math.sin(alpha)
+		local tangent = up * -math.sin(alpha) + side * math.cos(alpha)
+		local offset = normal * slatRadius
+		-- Trim along the slat's middle line, so it meets a round wall or dome right where it crosses.
+		local t0, t1 = span({ axis0 + offset })
+		if t1 - t0 < 0.2 then
+			continue
+		end
+		local style = if k == 1 or k == 7 then glass else hull
+		local hood = o.hood
+		if hood then
+			-- The stretch past each end (inside a dome) is a glass hood; the hull stays between a and b.
+			local c0, c1 = math.max(t0, 0), math.min(t1, length)
+			for _, piece in { { t0, c0 }, { c1, t1 } } do
+				if piece[2] - piece[1] > 0.1 then
+					local mid = axis0 + offset + along((piece[1] + piece[2]) / 2)
+					part(parent, "TubeHood", Vector3.new(piece[2] - piece[1], slatWidth, 0.6), CFrame.fromMatrix(mid, dir, tangent), hood)
+				end
+			end
+			t0, t1 = c0, c1
+			if t1 - t0 < 0.2 then
+				continue
+			end
+		end
+		if k == 0 then
+			topFrom, topTo = t0, t1
+		end
+		local centre = axis0 + offset + along((t0 + t1) / 2)
+		part(parent, "TubeShell", Vector3.new(t1 - t0, slatWidth, 0.6), CFrame.fromMatrix(centre, dir, tangent), style)
 	end
-	part(parent, "TubeFloor", Vector3.new(length, 0.5, 10.6), CFrame.fromMatrix(Vector3.new(mid.X, 0.25, mid.Z), dir, Vector3.yAxis), {
+	local floorFrom = o.floorFrom or 0
+	local floorTo = o.floorTo or length
+	part(parent, "TubeFloor", Vector3.new(floorTo - floorFrom, 0.5, floorWidth), CFrame.fromMatrix(a + up * 0.25 + along((floorFrom + floorTo) / 2), dir, up), {
 		color = Color3.fromRGB(176, 180, 186),
 		material = Enum.Material.DiamondPlate,
 	})
 	local guide: Style = { color = ACCENT_SYSTEM, material = Enum.Material.Neon, collide = false, shadow = false }
-	for _, s in { -4.6, 4.6 } do
-		part(parent, "TubeGuide", Vector3.new(length - 1, 0.06, 0.3), CFrame.fromMatrix(Vector3.new(mid.X, 0.53, mid.Z) + side * s, dir, Vector3.yAxis), guide)
+	local guideFrom, guideTo = math.max(floorFrom, 0), math.min(floorTo, length)
+	for _, s in { -1, 1 } do
+		part(
+			parent,
+			"TubeGuide",
+			Vector3.new(guideTo - guideFrom - 1, 0.06, 0.3),
+			CFrame.fromMatrix(a + up * 0.53 + side * (s * (floorWidth / 2 - 0.7)) + along((guideFrom + guideTo) / 2), dir, up),
+			guide
+		)
 	end
-	part(parent, "TubeSolar", Vector3.new(length - 1, 0.15, 3.4), CFrame.fromMatrix(axis + Vector3.yAxis * (TUBE_APOTHEM + 0.7), dir, Vector3.yAxis), {
+	local topMid = (topFrom + topTo) / 2
+	local topLength = topTo - topFrom
+	part(parent, "TubeSolar", Vector3.new(topLength - 1, 0.15, 3.4), CFrame.fromMatrix(axis0 + up * (apothem + 0.7) + along(topMid), dir, up), {
 		color = PANEL_CLEAN,
 		material = Enum.Material.Glass,
 		reflectance = 0.12,
 		collide = false,
 		shadow = false,
 	})
-	local lamp = part(parent, "TubeLight", Vector3.new(length - 4, 0.2, 0.8), CFrame.fromMatrix(axis + Vector3.yAxis * (TUBE_APOTHEM - 0.1), dir, Vector3.yAxis), {
+	local lamp = part(parent, "TubeLight", Vector3.new(math.max(1, topLength - 4), 0.2, 0.8), CFrame.fromMatrix(axis0 + up * (apothem - 0.1) + along(topMid), dir, up), {
 		color = Color3.fromRGB(255, 240, 215),
 		material = Enum.Material.Neon,
 		collide = false,
 		shadow = false,
 	})
 	pointLight(lamp, INTERIOR_LIGHT, 14, 0.6, true)
+	-- Trim rings round the outside (no collisions, so they never catch a player).
+	local ribs = o.ribs
+	if ribs then
+		local ribStyle: Style = o.ribStyle or { color = HULL_TRIM, material = Enum.Material.SmoothPlastic, shadow = false }
+		local ribRadius = apothem + 0.85
+		local ribWidth = 2 * ribRadius * math.tan(math.pi / 8) + 0.2
+		for _, f in ribs do
+			local at = topFrom + f * topLength
+			for k = 0, 7 do
+				if k == 4 then
+					continue
+				end
+				local alpha = k * math.pi / 4
+				local normal = up * math.cos(alpha) + side * math.sin(alpha)
+				local tangent = up * -math.sin(alpha) + side * math.cos(alpha)
+				part(parent, "TubeRib", Vector3.new(0.8, ribWidth, 0.5), CFrame.fromMatrix(axis0 + normal * ribRadius + along(at), dir, tangent), {
+					color = ribStyle.color,
+					material = ribStyle.material,
+					collide = false,
+					shadow = false,
+				})
+			end
+		end
+	end
 end
 
 type PlanterRefs = { strips: { Part }, lights: { PointLight }, plants: { Part } }
@@ -1175,25 +1353,58 @@ local function buildGreenhouse(base: Instance): GreenhouseRefs
 	vcylinder(gh, "Floor", 0.5, GREENHOUSE_A_RX * 2, a + Vector3.new(0, 0.25, 0), floorStyle)
 	local entryAngle = math.atan2(entryX - a.X, lineZ - a.Z)
 	local segmentsA = 14
+	-- Stage 10: a second doorway toward dome B, on the panel edge nearest to it (dome A's panels are
+	-- lined up with the hub tube's doorway). Until level 2 its glass panels stand as a hatch.
+	local b = S7.GREENHOUSE_B
+	local stepA = 2 * math.pi / segmentsA
+	local towardB = math.atan2(b.X - a.X, b.Z - a.Z)
+	local linkEdge = math.floor((towardB - entryAngle) / stepA + 0.5)
+	local linkAngle = entryAngle + linkEdge * stepA
+	local skipA = Geo.domeDoorway(segmentsA, 4)
+	local linkKeys: { [number]: boolean } = {}
+	for band = 1, 4 do
+		for _, i in { linkEdge - 1, linkEdge } do
+			linkKeys[band * 1000 + i % segmentsA] = true
+			skipA[band * 1000 + i % segmentsA] = true
+		end
+	end
 	local _, capA = Geo.domeShell(gh, "DomeGlass", a, GREENHOUSE_A_RX, GREENHOUSE_A_RY, GREENHOUSE_GLASS, {
 		bands = 5,
 		segments = segmentsA,
 		thickness = 0.4,
 		rotation = entryAngle + math.pi / segmentsA,
 		capAngle = math.rad(75),
-		skip = Geo.domeDoorway(segmentsA, 4),
+		skip = skipA,
 		capStyle = metal,
 	})
+	local hatchSkip: { [number]: boolean } = {}
+	for band = 1, 5 do
+		for i = 0, segmentsA - 1 do
+			if not linkKeys[band * 1000 + i] then
+				hatchSkip[band * 1000 + i] = true
+			end
+		end
+	end
+	local linkHatch, hatchCap = Geo.domeShell(gh, "LinkHatch", a, GREENHOUSE_A_RX, GREENHOUSE_A_RY, GREENHOUSE_GLASS, {
+		bands = 5,
+		segments = segmentsA,
+		thickness = 0.4,
+		rotation = entryAngle + math.pi / segmentsA,
+		capAngle = math.rad(75),
+		skip = hatchSkip,
+	})
+	hatchCap:Destroy()
 	ball(gh, "DomeBeacon", 0.9, capA.Position + Vector3.new(0, 0.6, 0), {
 		color = ACCENT_SECRET,
 		material = Enum.Material.Neon,
 		collide = false,
 		shadow = false,
 	})
-	-- Planter rows; the third row is short so the path from the tube stays open.
-	Geo.planterRow(gh, rng, a, GREENHOUSE_A_RX, GREENHOUSE_A_RY, a.X - 8, a.Z - 9, a.Z + 9, refs)
-	Geo.planterRow(gh, rng, a, GREENHOUSE_A_RX, GREENHOUSE_A_RY, a.X - 3.5, a.Z - 9, a.Z + 9, refs)
-	Geo.planterRow(gh, rng, a, GREENHOUSE_A_RX, GREENHOUSE_A_RY, a.X + 1, a.Z - 1, a.Z + 9, refs)
+	-- Planter rows; the third row is short so the path from the tube stays open. Stage 10: they stop
+	-- at a.Z + 6, leaving a walkway along the north side to the link tube toward dome B.
+	Geo.planterRow(gh, rng, a, GREENHOUSE_A_RX, GREENHOUSE_A_RY, a.X - 8, a.Z - 9, a.Z + 6, refs)
+	Geo.planterRow(gh, rng, a, GREENHOUSE_A_RX, GREENHOUSE_A_RY, a.X - 3.5, a.Z - 9, a.Z + 6, refs)
+	Geo.planterRow(gh, rng, a, GREENHOUSE_A_RX, GREENHOUSE_A_RY, a.X + 1, a.Z - 2, a.Z + 6, refs)
 
 	-- Harvest table: fresh salad heads on a tray. Players pick food here (ToolService, BaseService).
 	local tableAt = a + Vector3.new(7, 0, 5)
@@ -1239,14 +1450,21 @@ local function buildGreenhouse(base: Instance): GreenhouseRefs
 	})
 	vcylinder(gh, "NutrientCap", 0.4, 2.8, tankAt + Vector3.new(0, 4.7, 0), metal)
 
-	-- Level 2: dome B north of dome A, joined by a short sealed tube (seen through the glass).
-	local b = S7.GREENHOUSE_B
+	-- Level 2: dome B north of dome A. Stage 10: joined by a short walk-through tube from dome A's
+	-- second doorway, aimed at dome B's centre; dome B's panels line up with it for its doorway.
+	local linkFrom = a + dirFromAngle(linkAngle) * GREENHOUSE_A_RX
+	local toB = flatUnit(b - linkFrom, Vector3.zAxis)
+	local linkTo = b - toB * GREENHOUSE_B_RX
+	local segmentsB = 12
+	local arrivalB = math.atan2(-toB.X, -toB.Z)
 	vcylinder(gh2, "Floor", 0.5, GREENHOUSE_B_RX * 2, b + Vector3.new(0, 0.25, 0), floorStyle)
 	local _, capB = Geo.domeShell(gh2, "DomeGlass", b, GREENHOUSE_B_RX, GREENHOUSE_B_RY, GREENHOUSE_GLASS, {
 		bands = 5,
-		segments = 12,
+		segments = segmentsB,
 		thickness = 0.4,
+		rotation = arrivalB + math.pi / segmentsB,
 		capAngle = math.rad(75),
+		skip = Geo.domeDoorway(segmentsB, 4),
 		capStyle = metal,
 	})
 	ball(gh2, "DomeBeacon", 0.9, capB.Position + Vector3.new(0, 0.6, 0), {
@@ -1257,17 +1475,19 @@ local function buildGreenhouse(base: Instance): GreenhouseRefs
 	})
 	Geo.planterRow(gh2, rng, b, GREENHOUSE_B_RX, GREENHOUSE_B_RY, b.X - 4, b.Z - 7, b.Z + 7, refs)
 	Geo.planterRow(gh2, rng, b, GREENHOUSE_B_RX, GREENHOUSE_B_RY, b.X + 3, b.Z - 7, b.Z + 7, refs)
-	local toB = flatUnit(b - a, Vector3.zAxis)
-	local linkA = a + toB * (GREENHOUSE_A_RX - 2) + Vector3.new(0, 4, 0)
-	local linkB = b - toB * (GREENHOUSE_B_RX - 2) + Vector3.new(0, 4, 0)
-	pipe(gh2, "LinkTube", linkA, linkB, 8, { color = WHITE_HULL, material = Enum.Material.SmoothPlastic })
-	for _, t in { 0.3, 0.7 } do
-		pipe(gh2, "LinkBand", linkA:Lerp(linkB, t) - toB * 0.3, linkA:Lerp(linkB, t) + toB * 0.3, 8.4, {
-			color = ACCENT_SECRET,
-			material = Enum.Material.SmoothPlastic,
-			shadow = false,
-		})
-	end
+	-- The hull meets both glass shells (trimmed just inside them); the floor runs onto both dome floors.
+	local linkLength = (linkTo - linkFrom).Magnitude
+	Geo.walkTube(gh2, linkFrom, linkTo, {
+		startAt = Geo.domeTrim(a, GREENHOUSE_A_RX - 0.6, GREENHOUSE_A_RY - 0.6, true),
+		endAt = Geo.domeTrim(b, GREENHOUSE_B_RX - 0.6, GREENHOUSE_B_RY - 0.6, false),
+		-- Far enough onto both round dome floors that the plate's corners leave no ground showing
+		-- (the hub tube overlaps dome A's floor the same way).
+		floorFrom = -1.4,
+		floorTo = linkLength + 1.2,
+		ribs = { 0.5 },
+		ribStyle = { color = ACCENT_SECRET, material = Enum.Material.SmoothPlastic }, -- magenta = greenhouse
+		hood = GREENHOUSE_GLASS,
+	})
 
 	-- Stage 8: pressurized zones. The tube's zone runs 3 studs into the hub and 2 more into dome A, so
 	-- walking through the doorways never reads as outside.
@@ -1281,6 +1501,20 @@ local function buildGreenhouse(base: Instance): GreenhouseRefs
 		"GreenhouseTubeZone",
 		CFrame.fromMatrix(zoneMid, Vector3.new(-tubeDir.Z, 0, tubeDir.X), tubeDir),
 		Vector3.new(tubeRadius * 2, (zoneTo - zoneFrom).Magnitude, tubeRadius * 2),
+		"cylinder"
+	)
+	-- Stage 10: the link tube's zone runs 4 studs into each dome past the glass line.
+	local linkZoneFrom = linkFrom - toB * 4
+	local linkZoneTo = linkTo + toB * 4
+	local linkZone = shapedZone(
+		base,
+		"GreenhouseLinkZone",
+		CFrame.fromMatrix(
+			Vector3.new((linkZoneFrom.X + linkZoneTo.X) / 2, TUBE_AXIS_Y, (linkZoneFrom.Z + linkZoneTo.Z) / 2),
+			Vector3.new(-toB.Z, 0, toB.X),
+			toB
+		),
+		Vector3.new(tubeRadius * 2, (linkZoneTo - linkZoneFrom).Magnitude, tubeRadius * 2),
 		"cylinder"
 	)
 	local function domeZone(name: string, centre: Vector3, rx: number, ry: number): Part
@@ -1298,6 +1532,8 @@ local function buildGreenhouse(base: Instance): GreenhouseRefs
 		centre = a + Vector3.new(0, 3, 0),
 		foodPrompt = foodPrompt,
 		tubeZone = tubeZone,
+		linkZone = linkZone,
+		linkHatch = linkHatch,
 		domeZone = domeZone("GreenhouseZone", a, GREENHOUSE_A_RX, GREENHOUSE_A_RY),
 		dome2Zone = domeZone("GreenhouseDome2Zone", b, GREENHOUSE_B_RX, GREENHOUSE_B_RY),
 	}
@@ -1885,60 +2121,74 @@ function WorldBuilder.build(data: any): World
 	local greenhouse = buildGreenhouse(base)
 	local rover = buildRover(base, rampAngle)
 
-	-- The tube corridor from the hub to the lab's docking collar (shown with the lab). Without a dock
-	-- from WorldSites it stops LAB_TUBE_INSET from the lab centre.
+	-- The tube corridor from the hub to the lab's docking doorway (shown with the lab). Stage 10
+	-- (playtest): it is a walk-through tube like the greenhouse one. It leaves the hub's lab doorway
+	-- (HUB_DOOR_LAB) and ends at the lab's dock doorway, its floor ramping gently from the hub floor up
+	-- to the lab floor. Without a dock from WorldSites it stops LAB_TUBE_INSET from the lab centre.
 	local labTube: Model? = nil
 	local labTubeZone: Part? = nil
 	if siteBuilds.lab then
 		local tube = model(base, "LabTube")
 		local dockCf = if sites and typeof(sites.labDock) == "CFrame" then sites.labDock :: CFrame else nil
-		local tubeY = 4.6
-		local diameter = 9
+		local interior = sites and sites.labInterior
+		local labCentre = if type(interior) == "table" and typeof(interior.centre) == "Vector3" then interior.centre :: Vector3 else S7.LAB_CENTRE
+		local labWall = if type(interior) == "table" and type(interior.radius) == "number" then interior.radius :: number else LAB_TUBE_INSET - 0.6
+		local hubFloorTop = 0.5
+		local labFloorTop = hubFloorTop
 		local to: Vector3
 		if dockCf then
-			tubeY = dockCf.Position.Y
-			diameter = 7.4
-			to = dockCf.Position
+			labFloorTop = dockCf.Position.Y
+			to = Vector3.new(dockCf.Position.X, 0, dockCf.Position.Z)
 		else
-			local toLab = flatUnit(S7.LAB_CENTRE - HABITAT_CENTRE, -Vector3.xAxis)
-			local labDistance = (Vector3.new(S7.LAB_CENTRE.X, 0, S7.LAB_CENTRE.Z) - Vector3.new(HABITAT_CENTRE.X, 0, HABITAT_CENTRE.Z)).Magnitude
-			to = HABITAT_CENTRE + toLab * (labDistance - LAB_TUBE_INSET) + Vector3.new(0, tubeY, 0)
+			local toLab = flatUnit(labCentre - HABITAT_CENTRE, -Vector3.xAxis)
+			local labDistance = (Vector3.new(labCentre.X, 0, labCentre.Z) - Vector3.new(HABITAT_CENTRE.X, 0, HABITAT_CENTRE.Z)).Magnitude
+			to = HABITAT_CENTRE + toLab * (labDistance - LAB_TUBE_INSET)
 		end
-		local toLab = flatUnit(to - HABITAT_CENTRE, -Vector3.xAxis)
-		local from = HABITAT_CENTRE + toLab * (HUB_APOTHEM + 0.5) + Vector3.new(0, tubeY, 0)
-		pipe(tube, "Corridor", from, to, diameter, { color = WHITE_HULL, material = Enum.Material.SmoothPlastic })
-		local top = Vector3.new(0, diameter / 2 - 0.25, 0)
-		pipe(tube, "CorridorSolar", from + top + toLab * 2, to + top - toLab * 2, 2.2, {
-			color = PANEL_CLEAN,
-			material = Enum.Material.Glass,
-			reflectance = 0.12,
-			collide = false,
-			shadow = false,
+		local hubNormal = dirFromAngle(HUB_DOOR_LAB * 2 * math.pi / HUB_SEGMENTS)
+		local hubOuter = HUB_APOTHEM + HUB_WALL
+		local from = HABITAT_CENTRE + hubNormal * hubOuter
+		-- Floor-bottom points: the floor's top is the hub floor at `from` and the lab floor at `to`.
+		local a = Vector3.new(from.X, hubFloorTop - 0.5, from.Z)
+		local b = Vector3.new(to.X, labFloorTop - 0.5, to.Z)
+		local flatDir = flatUnit(b - a, -Vector3.xAxis)
+		local run = (Vector3.new(b.X, 0, b.Z) - Vector3.new(a.X, 0, a.Z)).Magnitude
+		local slope = (b.Y - a.Y) / math.max(run, 1)
+		local lengthScale = math.sqrt(1 + slope * slope) -- distance along the tube per stud of run
+		-- Where the floor's corners cross the hub's inner wall face, measured along the floor.
+		-- (flatDir and hubNormal both point out of the hub, so their dot is the cosine of the slant.)
+		local cosHub = math.max(0.2, flatDir:Dot(hubNormal))
+		local sinHub = math.sqrt(math.max(0, 1 - cosHub * cosHub))
+		local labApothem = 5
+		local floorWidth = 6.6
+		local floorFrom = -(HUB_WALL / cosHub + (floorWidth / 2) * sinHub / cosHub + 0.6) * lengthScale
+		local floorTo = (run + 0.8) * lengthScale -- onto the lab floor, past the doorway
+		Geo.walkTube(tube, a, b, {
+			apothem = labApothem,
+			axisHeight = 4.6,
+			floorWidth = floorWidth,
+			glass = GLASS,
+			startAt = Geo.planeTrim(from, hubNormal),
+			endAt = Geo.domeTrim(labCentre, labWall + 0.4, math.huge, false),
+			floorFrom = floorFrom,
+			floorTo = floorTo,
+			ribs = { 0.25, 0.5, 0.75, 0.97 },
 		})
-		for _, t in { 0.2, 0.5, 0.8 } do
-			local c = from:Lerp(to, t)
-			pipe(tube, "CorridorRib", c - toLab * 0.4, c + toLab * 0.4, diameter + 0.6, {
-				color = HULL_TRIM,
-				material = Enum.Material.SmoothPlastic,
-				shadow = false,
-			})
-			local footY = c.Y - diameter / 2
-			if footY > 0.3 then
-				vcylinder(tube, "CorridorLeg", footY, 0.8, Vector3.new(c.X, footY / 2, c.Z), { color = METAL, material = Enum.Material.Metal })
-			end
-		end
 		labTube = tube
 		-- Stage 8: its pressurized zone, the round inside of the corridor (a little into both modules).
-		local axis = (to - from).Unit
+		-- Stage 10: it starts well inside the hub (the tube meets the hub wall at a slant).
+		local axisFrom = a + Vector3.new(0, 4.6, 0)
+		local axisTo = b + Vector3.new(0, 4.6, 0)
+		local axis = (axisTo - axisFrom).Unit
 		local across = axis:Cross(Vector3.yAxis)
 		across = if across.Magnitude > 1e-3 then across.Unit else Vector3.xAxis
-		local zoneFrom = from - axis * 2
-		local zoneTo = to + axis * 3
+		local zoneFrom = axisFrom - axis * 6
+		local zoneTo = axisTo + axis * 3
+		local zoneDiameter = (labApothem - 0.1) * 2
 		labTubeZone = shapedZone(
 			base,
 			"LabTubeZone",
 			CFrame.fromMatrix((zoneFrom + zoneTo) / 2, across, axis),
-			Vector3.new(diameter - 0.8, (zoneTo - zoneFrom).Magnitude, diameter - 0.8),
+			Vector3.new(zoneDiameter, (zoneTo - zoneFrom).Magnitude, zoneDiameter),
 			"cylinder"
 		)
 	end
@@ -2432,11 +2682,20 @@ function WorldBuilder.build(data: any): World
 	if sites and typeof(sites.labPrompt) == "Instance" and sites.labPrompt:IsA("ProximityPrompt") then
 		labPrompt = sites.labPrompt
 	end
+	-- Stage 10: the hub's lab doorway stays closed by its glass hatch until the lab and its tube stand.
+	local labHatch = habitat.labHatch
+	local labHatchAlpha = labHatch.Transparency
+	local function setLabHatch(open: boolean)
+		labHatch.Transparency = if open then 1 else labHatchAlpha
+		labHatch.CanCollide = not open
+		labHatch.CanQuery = not open
+	end
 	if labEntry then
 		labEntry.onLevel = function(level: number)
 			if labPrompt then
 				labPrompt.Enabled = level >= 1
 			end
+			setLabHatch(level >= 1 and labTube ~= nil)
 		end
 	elseif labPrompt then
 		labPrompt.Enabled = false
@@ -2449,6 +2708,8 @@ function WorldBuilder.build(data: any): World
 		{ id = "greenhouse_tube", part = greenhouse.tubeZone, build = "greenhouse", minLevel = 1, shape = "cylinder" },
 		{ id = "greenhouse_a", part = greenhouse.domeZone, build = "greenhouse", minLevel = 1, shape = "dome" },
 		{ id = "greenhouse_b", part = greenhouse.dome2Zone, build = "greenhouse", minLevel = 2, shape = "dome" },
+		-- Stage 10: the walk-through tube between dome A and dome B (a greenhouse tube, like the hub's).
+		{ id = "greenhouse_tube", part = greenhouse.linkZone, build = "greenhouse", minLevel = 2, shape = "cylinder" },
 		{ id = "lander", part = lander.zone :: BasePart, shape = "box" },
 	}
 	if labEntry then
@@ -2498,6 +2759,13 @@ function WorldBuilder.build(data: any): World
 		hatch.CanCollide = not open
 		hatch.CanQuery = not open
 		greenhouse.foodPrompt.Enabled = open
+		-- Stage 10: dome A's doorway toward dome B opens once the link tube stands (level 2).
+		local linkOpen = level >= 2
+		for _, panel in greenhouse.linkHatch do
+			panel.Transparency = if linkOpen then 1 else GREENHOUSE_GLASS.transparency or 0
+			panel.CanCollide = not linkOpen
+			panel.CanQuery = not linkOpen
+		end
 	end
 
 	-- A blueprint shelter has no mass, so it protects nobody: its zone moves far below the ground

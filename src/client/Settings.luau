@@ -7,6 +7,10 @@
 --   * a "Redeem code" box. The server checks the code (src/server/Codes.luau, never sent to clients)
 --     and answers through C.A.R.L. (carl.code_ok / carl.code_used / carl.code_bad); the answer also
 --     shows inside the panel. Owned event cosmetics are listed under the box.
+--   * Stage 10 (playtest: "I did not know how to save"): "Your game saves by itself" and a
+--     "Save now" button (Action SaveNow; the server saves the loaded slot as soon as the DataStore
+--     allows, and SaveIndicator.luau shows the "Game saved" pill when it lands). Rows are a bit
+--     shorter to make room.
 -- Settings live in the Store and as attributes of the local player (Store.SETTING_ATTRIBUTES).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
@@ -24,6 +28,7 @@ local MUSIC_GROUP = "SBO_Music"
 local SFX_GROUP = "SBO_SFX"
 local CODE_MAX_LENGTH = 24 -- same limit as the server
 local REDEEM_COOLDOWN = 2 -- seconds; the server rate-limits too
+local SAVE_NOW_COOLDOWN = 3 -- seconds between "Save now" presses; the server rate-limits too
 local Z = 62 -- above every other screen (C.A.R.L. bubble 50, panels 55-60)
 
 local Settings = {}
@@ -110,7 +115,7 @@ function Settings.new(root: Frame): SettingsView
 	}, close)
 
 	-- One labelled row: icon, label on the left, control area on the right (returned).
-	local ROW_HEIGHT = 0.095
+	local ROW_HEIGHT = 0.085 -- Stage 10: rows every 0.1 (was 0.095 every 0.115) to fit the save row
 	local function row(name: string, y: number, image: string, tint: Color3): (TextLabel, Frame)
 		local frame = Ui.frame(panel, {
 			name = name,
@@ -147,7 +152,7 @@ function Settings.new(root: Frame): SettingsView
 	end
 
 	-- Language ----------------------------------------------------------------------------------
-	local languageLabel, languageControl = row("Language", 0.14, Ui.ICONS.language, ROLE.accent)
+	local languageLabel, languageControl = row("Language", 0.135, Ui.ICONS.language, ROLE.accent)
 	-- Two buttons with the language codes; the chosen one is cyan.
 	local LANGUAGE_CODES: { [Store.Language]: string } = { en = "EN", es = "ES" }
 	local languageButtons: { [Store.Language]: TextButton } = {}
@@ -262,9 +267,9 @@ function Settings.new(root: Frame): SettingsView
 		return { set = show }
 	end
 
-	local musicLabel, musicControl = row("Music", 0.255, Ui.ICONS.play, ROLE.reward)
+	local musicLabel, musicControl = row("Music", 0.235, Ui.ICONS.play, ROLE.reward)
 	local musicSlider = slider(musicControl, "musicVolume", ROLE.reward)
-	local effectsLabel, effectsControl = row("Effects", 0.37, Ui.ICONS.cell, ROLE.star)
+	local effectsLabel, effectsControl = row("Effects", 0.335, Ui.ICONS.cell, ROLE.star)
 	local effectsSlider = slider(effectsControl, "effectsVolume", ROLE.star)
 
 	-- C.A.R.L. toggles --------------------------------------------------------------------------
@@ -285,16 +290,37 @@ function Settings.new(root: Frame): SettingsView
 		table.insert(toggles, entry)
 		return entry
 	end
-	local factsLabel, factsControl = row("FunFacts", 0.485, Ui.ICONS.book, ROLE.star)
+	local factsLabel, factsControl = row("FunFacts", 0.435, Ui.ICONS.book, ROLE.star)
 	toggle(factsControl, "funFacts")
-	local guideLabel, guideControl = row("Guidance", 0.6, Ui.ICONS.robot, ROLE.accent)
+	local guideLabel, guideControl = row("Guidance", 0.535, Ui.ICONS.robot, ROLE.accent)
 	toggle(guideControl, "guidance")
+
+	-- Stage 10: save -----------------------------------------------------------------------------
+	-- "Your game saves by itself" + "Save now". Grey (and ignored) until a world is loaded: the
+	-- panel also opens from the start menu.
+	local saveLabel, saveControl = row("Save", 0.635, Ui.ICONS.check, ROLE.good)
+	local lastSaveNow = -math.huge
+	local saveButton = Ui.button(saveControl, {
+		name = "SaveNow",
+		color = Ui.COLORS.go,
+		stroke = 2,
+		corner = 0.4,
+		icon = Ui.ICONS.check,
+		maxText = 22,
+		zindex = Z + 3,
+	}, function()
+		if not Store.isSlotChosen() or os.clock() - lastSaveNow < SAVE_NOW_COOLDOWN then
+			return
+		end
+		lastSaveNow = os.clock()
+		Store.send({ type = "SaveNow" })
+	end)
 
 	-- Redeem code -------------------------------------------------------------------------------
 	local redeem = Ui.frame(panel, {
 		name = "Redeem",
-		size = UDim2.fromScale(0.9, 0.27),
-		position = UDim2.fromScale(0.05, 0.715),
+		size = UDim2.fromScale(0.9, 0.25),
+		position = UDim2.fromScale(0.05, 0.735),
 		color = ROLE.panelRaised,
 		corner = 0.12,
 		stroke = 2,
@@ -425,6 +451,9 @@ function Settings.new(root: Frame): SettingsView
 			Ui.setButton(entry.button, Store.t(if on then "ui.on" else "ui.off"), if on then Ui.ICONS.check else Ui.ICONS.close)
 			Ui.setButtonColor(entry.button, if on then Ui.COLORS.go else Ui.COLORS.secondary)
 		end
+		saveLabel.Text = Store.t("ui.save_auto")
+		Ui.setButton(saveButton, Store.t("ui.save_now"))
+		Ui.setButtonLook(saveButton, Store.isSlotChosen(), Ui.COLORS.go)
 		redeemTitle.Text = Store.t("ui.redeem_title")
 		box.PlaceholderText = Store.t("ui.redeem_placeholder")
 		Ui.setButton(redeemButton, Store.t("ui.redeem_button"))
@@ -453,8 +482,17 @@ function Settings.new(root: Frame): SettingsView
 			end
 		elseif kind == "progress" and modal.Visible then
 			renderResult()
+		elseif kind == "slots" and modal.Visible then
+			Ui.setButtonLook(saveButton, Store.isSlotChosen(), Ui.COLORS.go) -- a world just loaded
 		end
 	end)
+	-- Stage 10: a slot that loads while the panel is open (no "slots" change is sent then).
+	local localPlayer = game:GetService("Players").LocalPlayer
+	if localPlayer then
+		localPlayer:GetAttributeChangedSignal(Store.SLOT_CHOSEN_ATTRIBUTE):Connect(function()
+			Ui.setButtonLook(saveButton, Store.isSlotChosen(), Ui.COLORS.go)
+		end)
+	end
 
 	-- Top-right corner button (where the language button used to be).
 	local gear = Ui.button(root, {

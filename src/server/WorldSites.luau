@@ -10,8 +10,9 @@
 --     padPosition.Y is the bottom of the build pad (the ship's pad stands on the landing pad surface).
 --   Sites.labPrompt: ProximityPrompt "LabPrompt" (TextKey "prompt.lab"), disabled until world-core
 --     enables it when the lab is built. It sits on the kiosk screen beside the lab door.
---   Sites.labDock: CFrame at the outer face of the lab's docking collar; LookVector points out toward
---     the habitat. The habitat tube corridor attaches here (tube diameter up to LAB_DOCK_DIAMETER).
+--   Sites.labDock: CFrame at the outer wall face of the lab's dock doorway, at floor-top height;
+--     LookVector points out toward the habitat. Stage 10: the habitat's walk-through tube attaches
+--     here (its floor meets the lab floor; the doorway is one wall panel wide, LAB_DOOR_TOP tall).
 --   Sites.labInterior: Stage 8, the lab's pressurized room as a round prism { centre, radius, bottomY,
 --     topY } (inner wall face, foundation to roof). World-core turns it into an inside zone.
 --   Sites.garageBays: two CFrames on the garage bay floors, facing out of the doors (-X).
@@ -92,8 +93,6 @@ local LAB_WALL_TOP = 11
 local LAB_DOOR_TOP = 8.2
 local LAB_WINDOW_BOTTOM = 6.2
 local LAB_WINDOW_TOP = 8.6
-local LAB_DOCK_HEIGHT = 5.6 -- centre of the docking collar above the ground
-local LAB_DOCK_DIAMETER = 7.8
 local LAB_PROMPT_HOLD = 0
 local LAB_PROMPT_DISTANCE = 10
 
@@ -480,7 +479,14 @@ local function buildLab(parent: Instance): (Model, ProximityPrompt, CFrame)
 			local stepPos = c + n * (LAB_FOUNDATION_DIAMETER / 2 + 0.7) + Vector3.new(0, 0.25, 0)
 			part(m, "DoorStep", Vector3.new(4, 0.5, 1.6), facing(stepPos, n), { color = CONCRETE, material = Enum.Material.Concrete })
 		elseif k == dockSegment then
-			wall("DockWall", LAB_WALL_BOTTOM, LAB_WALL_TOP, HULL)
+			-- Stage 10: the dock is a doorway into the walk-through tube from the hub (no step: the
+			-- tube's floor meets the lab floor).
+			wall("DockLintel", LAB_DOOR_TOP, LAB_WALL_TOP, HULL)
+			local t = sideFromAngle(angle)
+			for s = -1, 1, 2 do
+				local pos = c + n * (centreRadius + 0.1) + t * (s * (width / 2 - 0.25)) + Vector3.new(0, (LAB_WALL_BOTTOM + LAB_DOOR_TOP) / 2, 0)
+				part(m, "DockFrame", Vector3.new(0.5, LAB_DOOR_TOP - LAB_WALL_BOTTOM, 1.2), facing(pos, n), neon(ACCENT))
+			end
 		elseif k % 2 == 1 then
 			wall("Wall", LAB_WALL_BOTTOM, LAB_WINDOW_BOTTOM, HULL)
 			wall("Window", LAB_WINDOW_BOTTOM, LAB_WINDOW_TOP, GLASS)
@@ -561,18 +567,13 @@ local function buildLab(parent: Instance): (Model, ProximityPrompt, CFrame)
 		})
 	end
 
-	-- Docking collar facing the habitat: the tube corridor from the hub attaches here.
+	-- Dock doorway facing the habitat: the walk-through tube from the hub attaches here (Stage 10: the
+	-- old sealed collar and hatches are gone, so players walk in). A cyan sill lamp marks it inside.
 	local dockAngle = dockSegment * step
 	local dn = dirFromAngle(dockAngle)
-	local function dockCf(radius: number): CFrame
-		local pos = c + dn * radius + Vector3.new(0, LAB_DOCK_HEIGHT, 0)
-		return CFrame.lookAt(pos, pos + dn) * ALONG_LOOK
-	end
-	cylinder(m, "DockCollar", 2.6, LAB_DOCK_DIAMETER - 0.8, dockCf(LAB_RADIUS + 1), METAL_STYLE)
-	cylinder(m, "DockRing", 0.6, LAB_DOCK_DIAMETER, dockCf(LAB_RADIUS + 2), { color = ACCENT })
-	cylinder(m, "DockHatch", 0.2, 5, dockCf(LAB_RADIUS + 2.4), DARK_STYLE)
-	cylinder(m, "InnerHatch", 0.2, 5, dockCf(LAB_RADIUS - 1.1), DARK_STYLE)
-	local dockPos = c + dn * (LAB_RADIUS + 2.5) + Vector3.new(0, LAB_DOCK_HEIGHT, 0)
+	local sillPos = c + dn * (LAB_RADIUS - 1.3) + Vector3.new(0, LAB_FLOOR_TOP + 0.02, 0)
+	part(m, "DockSill", Vector3.new(width - 1, 0.05, 0.4), facing(sillPos, dn), neon(ACCENT))
+	local dockPos = c + dn * LAB_RADIUS + Vector3.new(0, LAB_FLOOR_TOP, 0)
 	local labDock = CFrame.lookAt(dockPos, dockPos + dn)
 
 	-- Sign over the door and the kiosk that opens the Lab.

@@ -314,6 +314,44 @@ Tested in Studio (assistant-driven):
 - F3 builds following the base tree.
 - The mission console prompt active in the habitat.
 
+**About 08:00 – Team feedback, round 7 (playtest).** The team asked for:
+- Smaller text boxes, because they covered the screen.
+- A visible way to save: a player pressed Leave in a Studio test and lost the world.
+- Walkable tubes between the greenhouse domes and to the lab.
+- An air and food panel that stays on screen.
+- Notices when a quest opens or is done, because players finished steps without seeing them.
+
+**09:20 – Stage 10: playtest polish.**
+- **Smaller boxes:**
+  - The C.A.R.L. bubble is about 60% of its old size.
+  - The bottom pills (carrying ice, parts, auto-run, gas) are about two thirds as tall.
+- **Vitals panel:**
+  - A panel in the left column is always on while playing. It shows suit air, fresh food from the greenhouse (ready, a countdown, or the energy boost) and silo ice.
+  - The big suit air bar at the bottom is gone. A small pulsing "Low air" pill appears only when the air runs low outside.
+- **Quest notices (QuestToasts.luau):** a card on the right says:
+  - "New quest!" or "New side quest!";
+  - "Done: <step>";
+  - "Quest complete!" with the credits and XP earned.
+  - Steps that were already done when a quest opened show as "Already done". The quest tracker flashes too.
+  - Cards wait while a full-screen panel is open.
+- **Saving you can see:**
+  - A small "Game saved" pill appears after autosaves (at most every 30 s) and after a manual save.
+  - Settings has a "Save now" button (a validated SaveNow action, rate limited for DataStores).
+  - The start menu and Settings say "Your game saves by itself".
+  - Studio uses a separate real DataStore when the place is published, else memory. When saves only live in memory, the pill says "Saved for this test only".
+- **Walkable tubes:**
+  - Dome A to dome B and hub to lab are now walk-through tubes with floors, doorways and a gentle ramp to the lab floor.
+  - Pressurized zones cover the whole path.
+  - Glass hatches close the doorways until the greenhouse level 2 and the lab are built.
+
+Tested in Studio (assistant-driven):
+- Start menu, New game, Solo.
+- The vitals panel showed suit air, fresh food and silo ice.
+- The step and "Quest complete" cards appeared with the reward, and waited behind the mission report.
+- "Save now" showed the memory-only pill (the place is not published).
+- Walking the hub to the lab and dome A to dome B never counted as outside.
+- No script errors.
+
 ## Decisions
 
 | Decision | Who decided | Why |

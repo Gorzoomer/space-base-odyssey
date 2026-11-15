@@ -1963,8 +1963,11 @@ function MissionService.start(worldRefs: any, crewService: Crew, progressService
 
 	remoteEvents.action.OnServerEvent:Connect(function(player: Player, action: any)
 		-- Stage 9: the start menu's slot actions belong to ProgressService (its own listener) and must
-		-- not use up this player's action budget.
-		if type(action) == "table" and (action.type == "ChooseSlot" or action.type == "RequestSlots") then
+		-- not use up this player's action budget. Stage 10: so does SaveNow (ProgressService rate-limits it).
+		if
+			type(action) == "table"
+			and (action.type == "ChooseSlot" or action.type == "RequestSlots" or action.type == "SaveNow")
+		then
 			return
 		end
 		if rateLimited(player) then

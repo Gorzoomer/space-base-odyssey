@@ -59,6 +59,7 @@ export type SlotInfo = {
 export type SlotsMeta = {
 	slots: { SlotInfo }, -- always Store.SLOT_COUNT entries
 	last: number?, -- the slot used last time (nil = none yet)
+	offline: boolean?, -- Stage 10: true = saves could not be read, nothing is saved this visit
 }
 
 -- Stage 9 quests: the active quest as the server sends it in BaseState.quest.
@@ -568,7 +569,8 @@ function Store.setSlots(value: any)
 	if last ~= nil and (last ~= math.floor(last) or last < 1 or last > Store.SLOT_COUNT) then
 		last = nil
 	end
-	slotsMeta = { slots = slots, last = last }
+	-- Stage 10: offline is kept so the start menu never says "saves by itself" when it cannot.
+	slotsMeta = { slots = slots, last = last, offline = if value.offline == true then true else nil }
 	emit("slots")
 end
 

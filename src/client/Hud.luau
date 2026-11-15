@@ -2,7 +2,8 @@
 -- Space Base Odyssey - in-game HUD.
 --   Shift screen: meters, shift timer, event banner, storm countdown (with the flare's data source),
 --   Earth-link indicator.
---   Field (shift and while roaming the base): suit air bar (out of PlayerStats.suitMax) and ice.
+--   Field (shift and while roaming the base): the vitals panel (suit air out of PlayerStats.suitMax)
+--   and the carried ice.
 --   Fix 8 (playtest): the field pills stack upwards from just above Roblox's tool bar (the backpack
 --   hotbar, bottom centre, about 70 real pixels tall while the player has tools) and above the
 --   vehicle panel while driving, so nothing hides under them. The left column starts under the
@@ -23,6 +24,13 @@
 --   your base" hint pill in base mode until the habitat and the solar panels stand (Stage 8: it used
 --   to wait for every core build; Stage 9: never while the quest tracker shows a quest). Stage 7: no Base button (team feedback: building from a menu
 --   let players upgrade everything while standing still; builds happen at the pads in the world).
+--   Stage 10 (playtest polish): an always-on vitals panel in the left column in every field mode
+--   (shift, roam, base) with the same rows as the meters panel (Meters.fillRow): suit air (always),
+--   fresh greenhouse food (ready or seconds left, once the greenhouse stands; the food boost countdown
+--   replaces it while the boost runs, also during a shift) and the silo ice (once a drill stands).
+--   It replaces the big suit air bar and the food boost pill at the bottom centre; a small pulsing
+--   "Low air! Go inside" pill stays there while the suit is low outside. The bottom pills are about
+--   two thirds of their old height (team feedback: big boxes hid the world).
 -- Screen layout (fractions of the screen):
 --   top centre   y 0.02-0.09  shift timer 0.25-0.49 | today's event 0.51-0.75
 --   top right    y 0.02-0.10  settings button 0.815-0.985 (Settings.luau); y 0.115-0.18 Earth link
@@ -31,16 +39,20 @@
 --                elsewhere:  an icon-only Wardrobe square at the right edge, under the settings
 --                            button (y 0.115: mission select, roaming) or under the Earth link or
 --                            sources button (y 0.195: shift, power board)
---   left column  x 0.01-0.21  objectives or, in base mode, the quest tracker (Objectives.luau, from
---                             y 0.10-0.12), then the meters panel
---                             right under it (air, food, radiation, water, data waiting), then the
---                             wallet (at y 0.105 when nothing is above it, lower when the Roblox top
---                             bar is taller, e.g. on phones)
---   centre       y 0.115-0.26 C.A.R.L. bubble (Messages.luau, x 0.29-0.71; y 0.19 in base mode)
+--   left column  x 0.01-0.21  stacked top-down with 0.012 gaps (see placeColumn):
+--                             objectives or, in base mode, the quest tracker (Objectives.luau, from
+--                             y 0.10-0.12; its bottom comes from deps.columnTop), then in a shift
+--                             the meters panel (0.19 tall: air, food, radiation, water, data
+--                             waiting), then the vitals panel (field modes, 0.049-0.119 tall: one
+--                             to three rows of 0.035), then the wallet (0.125). The first panel
+--                             starts at y 0.105 (0.12 for the meters) when nothing is above it,
+--                             lower when the Roblox top bar is taller (e.g. on phones). Worst case
+--                             (a shift with the tallest objectives) ends near y 0.85.
+--   centre       y 0.115-0.21 C.A.R.L. bubble (Messages.luau, x 0.33-0.67; y 0.19-0.285 in base mode)
 --                y 0.27-0.48  storm countdown and flare source (x 0.22-0.78)
---   bottom       stacked upwards from the tool bar's top edge (see placeStack): suit air (0.085
---                tall), then the gear gas tank (0.06), then auto-run (0.05), then carrying ice or
---                parts (0.07), then the food boost (0.055)
+--   bottom       stacked upwards from the tool bar's top edge (see placeStack): the low air pill
+--                (0.046 tall, x 0.39-0.61), then the gear gas tank (0.042, x 0.375-0.625), then
+--                auto-run (0.034, x 0.425-0.575), then carrying ice or parts (0.048, x 0.405-0.595)
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local GuiService = game:GetService("GuiService")
@@ -94,11 +106,16 @@ local HOTBAR_PIXELS = 70
 local HOTBAR_GAP_PIXELS = 14
 local EDGE_PIXELS = 14 -- bottom margin when no tool bar shows
 local STACK_GAP = 0.012
-local SUIT_SIZE = UDim2.fromScale(0.42, 0.085)
-local CARRY_SIZE = UDim2.fromScale(0.26, 0.07)
-local FOOD_SIZE = UDim2.fromScale(0.22, 0.055)
-local GAS_SIZE = UDim2.fromScale(0.34, 0.06)
-local AUTORUN_SIZE = UDim2.fromScale(0.2, 0.05)
+-- Stage 10: about two thirds of the old heights (carry 0.07, gas 0.06, auto-run 0.05) and narrower.
+local CARRY_SIZE = UDim2.fromScale(0.19, 0.048)
+local GAS_SIZE = UDim2.fromScale(0.25, 0.042)
+local AUTORUN_SIZE = UDim2.fromScale(0.15, 0.034)
+local LOW_AIR_SIZE = UDim2.fromScale(0.22, 0.046)
+local PILL_TEXT_MAX = 22 -- one line, sized to the pill (Ui.oneLine)
+-- Stage 10: vitals panel rows (the meters panel's row height: 0.19 * 0.92 / 5).
+local VITALS_ROW = 0.035
+local VITALS_PAD = 0.007
+local VITALS_ROW_FILL = 0.92 -- share of a row slot the row's cell fills
 local GAS_LOW_FRACTION = 0.25 -- the gas bar turns orange below this share of the tank (display only)
 local VEHICLE_PANEL_NAME = "VehiclePanel" -- VehicleClient.luau, bottom centre while driving
 -- Build-progress signs over the pads: screen-sized (pixels at UI scale 1), high above the pad so
@@ -148,9 +165,29 @@ local function suitMaxOf(stats: Store.PlayerStats): number
 	return MissionData.SUIT.MAX
 end
 
+-- Stage 10: a short pill's icon and one-line text, laid out for its smaller height.
+local function compactPill(pill: Ui.IconText)
+	pill.icon.Size = UDim2.fromScale(0.14, 0.74)
+	pill.icon.Position = UDim2.fromScale(0.035, 0.5)
+	pill.label.Size = UDim2.fromScale(0.77, 0.84)
+	pill.label.Position = UDim2.fromScale(0.19, 0.5)
+	Ui.oneLine(pill.label)
+end
+
+-- Stage 10: at least one automatic ice drill stands (the silo only fills with one).
+local function hasDrill(builds: { [string]: number }): boolean
+	for id, level in builds do
+		if level >= 1 and string.match(id, "^drill_%d+$") then
+			return true
+		end
+	end
+	return false
+end
+
 function Hud.new(root: Frame, deps: Deps?): HudView
 	local screen = Ui.frame(root, { name = "Hud", zindex = 5, visible = false })
-	-- Suit air and carried ice: shown at work and while roaming the base.
+	-- Bottom field pills (low air, gas tank, auto-run, carried ice or parts): at work and roaming.
+	-- Stage 10: the suit air value lives in the vitals panel (left column), not here.
 	local field = Ui.frame(root, { name = "HudField", zindex = 5, visible = false })
 
 	local meters = Meters.new(screen, {
@@ -247,13 +284,14 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		position = UDim2.fromScale(0.5, 0.76),
 		anchor = Vector2.new(0.5, 0),
 		color = Ui.COLORS.ice,
-		stroke = 3,
+		stroke = 2,
 		strokeColor = ROLE.background,
 		textColor = Ui.COLORS.textDark,
 		icon = Ui.ICONS.ice,
-		maxText = 32,
+		maxText = PILL_TEXT_MAX,
 		visible = false,
 	})
+	compactPill(iceBadge)
 
 	-- Stage 7: a parts crate carried from the lander to a build pad (same place as the ice: one at a time).
 	local crateBadge = Ui.iconText(field, {
@@ -262,28 +300,32 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		position = UDim2.fromScale(0.5, 0.76),
 		anchor = Vector2.new(0.5, 0),
 		color = ROLE.star,
-		stroke = 3,
+		stroke = 2,
 		strokeColor = ROLE.background,
 		textColor = Ui.COLORS.textDark,
 		icon = Ui.Icons.crate,
-		maxText = 32,
+		maxText = PILL_TEXT_MAX,
 		visible = false,
 	})
+	compactPill(crateBadge)
 
-	-- Stage 7: greenhouse food eaten: a short speed boost with a countdown.
-	local foodBadge = Ui.iconText(field, {
-		name = "FoodBoost",
-		size = FOOD_SIZE,
-		position = UDim2.fromScale(0.5, 0.68),
+	-- Stage 10: the suit is low outside: a small pulsing pill (the vitals panel shows the value).
+	-- The Stage 7 food boost pill moved into the vitals panel's food row.
+	local lowAirBadge = Ui.iconText(field, {
+		name = "LowAir",
+		size = LOW_AIR_SIZE,
+		position = UDim2.fromScale(0.5, 0.8),
 		anchor = Vector2.new(0.5, 0),
-		color = ROLE.good,
-		stroke = 3,
+		color = Ui.COLORS.warning,
+		stroke = 2,
 		strokeColor = ROLE.background,
 		textColor = Ui.COLORS.textDark,
-		icon = Ui.ICONS.food,
-		maxText = 26,
+		icon = Ui.ICONS.warning,
+		tint = Ui.COLORS.textDark,
+		maxText = PILL_TEXT_MAX,
 		visible = false,
 	})
+	compactPill(lowAirBadge)
 
 	-- Stage 8: the gear gas tank and the gear row (one chip per owned gear, lit while it is on).
 	local gasPanel = Ui.panel(field, {
@@ -358,44 +400,44 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		position = UDim2.fromScale(0.5, 0.72),
 		anchor = Vector2.new(0.5, 0),
 		color = ROLE.accent,
-		stroke = 3,
+		stroke = 2,
 		strokeColor = ROLE.background,
 		textColor = Ui.COLORS.textDark,
 		icon = Ui.Icons.autorun,
-		maxText = 24,
+		maxText = PILL_TEXT_MAX,
 		visible = false,
 	})
+	compactPill(autoRunBadge)
 
-	local suitPanel = Ui.panel(field, {
-		name = "Suit",
-		size = SUIT_SIZE,
-		position = UDim2.fromScale(0.5, 0.86),
-		anchor = Vector2.new(0.5, 0),
-		transparency = 0.1,
-		corner = 0.3,
+	-- Stage 10: the always-on vitals panel (left column, field modes). Rows are made once here and
+	-- only shown, hidden and moved while playing (no Instances per frame).
+	local vitals = Ui.panel(root, {
+		name = "Vitals",
+		size = UDim2.fromScale(COLUMN_WIDTH, VITALS_PAD * 2 + VITALS_ROW),
+		position = UDim2.fromScale(COLUMN_X, WALLET_TOP),
+		transparency = 0.08,
+		corner = 0.2,
+		stroke = 2,
+		zindex = 15,
 		visible = false,
 	})
-	local suitIcon = Ui.icon(suitPanel, Ui.ICONS.suit, {
-		size = UDim2.fromScale(0.11, 0.7),
-		position = UDim2.fromScale(0.03, 0.5),
-		anchor = Vector2.new(0, 0.5),
-		tint = ROLE.suit,
-	})
-	local suitName = Ui.label(suitPanel, {
-		name = "Name",
-		size = UDim2.fromScale(0.3, 0.8),
-		position = UDim2.fromScale(0.15, 0.5),
-		anchor = Vector2.new(0, 0.5),
-		alignX = Enum.TextXAlignment.Left,
-		maxText = 28,
-	})
-	local suitBar = Ui.bar(suitPanel, {
-		name = "Bar",
-		size = UDim2.fromScale(0.52, 0.66),
-		position = UDim2.fromScale(0.46, 0.5),
-		anchor = Vector2.new(0, 0.5),
-		maxText = 28,
-	})
+	type VitalRow = { cell: Frame, icon: ImageLabel, name: TextLabel, bar: Ui.Bar }
+	local function vitalRow(name: string, image: string, tint: Color3): VitalRow
+		local cell = Ui.frame(vitals, {
+			name = name,
+			size = UDim2.fromScale(0.94, VITALS_ROW_FILL),
+			position = UDim2.fromScale(0.03, 0),
+			corner = 0.3,
+			zindex = 16,
+			visible = false,
+		})
+		local icon, label, bar = Meters.fillRow(cell, image, tint, 16)
+		return { cell = cell, icon = icon, name = label, bar = bar }
+	end
+	local suitRow = vitalRow("SuitAir", Ui.ICONS.suit, ROLE.suit)
+	local foodRow = vitalRow("FreshFood", Ui.ICONS.food, ROLE.food)
+	local siloRow = vitalRow("SiloIce", Ui.Icons.silo, Ui.COLORS.ice)
+	local vitalRows: { VitalRow } = { suitRow, foodRow, siloRow }
 
 	-- Wallet: credits (gold coin), player level and an XP bar (magenta sparkles).
 	local wallet = Ui.panel(root, {
@@ -514,8 +556,10 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	end
 
 	-- Keep the meters panel right under the objectives panel (its height changes with the mission).
-	-- The wallet follows the meters (shift) or the objectives (roaming), else it sits at the top.
-	-- Nothing starts under the Roblox top bar.
+	-- Stage 10: the vitals panel follows the meters (shift) or the objectives (roaming, base mode),
+	-- and the wallet follows the vitals panel (or the objectives on the mission select); the first
+	-- one sits at the top. Nothing starts under the Roblox top bar.
+	local vitalsTop = WALLET_TOP
 	local function placeColumn()
 		local topLimit = topbarBottom()
 		local bottom = if deps and deps.columnTop then deps.columnTop() else nil
@@ -525,6 +569,14 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 			meters.frame.Position = UDim2.fromScale(COLUMN_X, top)
 		end
 		local below: number? = if mode == "shift" then columnTop + METERS_HEIGHT else bottom
+		if vitals.Visible then
+			local nextVitalsTop = if below then below + COLUMN_GAP else math.max(WALLET_TOP, topLimit)
+			if math.abs(nextVitalsTop - vitalsTop) > 0.0005 then
+				vitalsTop = nextVitalsTop
+				vitals.Position = UDim2.fromScale(COLUMN_X, vitalsTop)
+			end
+			below = vitalsTop + vitals.Size.Y.Scale
+		end
 		local nextWalletTop = if below then below + COLUMN_GAP else math.max(WALLET_TOP, topLimit)
 		if math.abs(nextWalletTop - walletTop) > 0.0005 then
 			walletTop = nextWalletTop
@@ -564,9 +616,8 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	end
 
 	-- Bottom centre pills, stacked upwards from bottomLimit (only the visible ones take room):
-	-- suit air, the gear gas tank, auto-run, then carrying ice or parts, then the food boost.
-	local stackOrder: { GuiObject } =
-		{ suitPanel, gasPanel, autoRunBadge.frame, crateBadge.frame, iceBadge.frame, foodBadge.frame }
+	-- the low air warning, the gear gas tank, auto-run, then carrying ice or parts.
+	local stackOrder: { GuiObject } = { lowAirBadge.frame, gasPanel, autoRunBadge.frame, crateBadge.frame, iceBadge.frame }
 	local function placeStack()
 		local y = bottomLimit()
 		for _, item in stackOrder do
@@ -657,12 +708,113 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	-- Defined below (after the gear widgets); render() calls it.
 	local renderGear: () -> ()
 
+	-- Stage 10: place the visible vitals rows top-down and fit the panel to them.
+	local function layoutVitals()
+		local count = 0
+		for _, row in vitalRows do
+			if row.cell.Visible then
+				count += 1
+			end
+		end
+		local height = VITALS_PAD * 2 + VITALS_ROW * math.max(1, count)
+		local panelSize = UDim2.fromScale(COLUMN_WIDTH, height)
+		if vitals.Size ~= panelSize then
+			vitals.Size = panelSize
+		end
+		local cellSize = UDim2.fromScale(0.94, VITALS_ROW * VITALS_ROW_FILL / height)
+		local index = 0
+		for _, row in vitalRows do
+			if row.cell.Visible then
+				local y = (VITALS_PAD + VITALS_ROW * index + VITALS_ROW * (1 - VITALS_ROW_FILL) / 2) / height
+				local position = UDim2.fromScale(0.03, y)
+				if row.cell.Position ~= position then
+					row.cell.Position = position
+				end
+				if row.cell.Size ~= cellSize then
+					row.cell.Size = cellSize
+				end
+				index += 1
+			end
+		end
+	end
+
+	-- Stage 10: suit air (always), fresh food or the food boost, silo ice; plus the low air pill.
+	-- Runs on every render and HUD tick (a few times a second): property writes only.
+	local function renderVitals()
+		local stats = Store.getStats()
+		local state = Store.getBase()
+		local fieldMode = mode == "shift" or mode == "roam" or mode == "base"
+		vitals.Visible = fieldMode and stats ~= nil
+		if not fieldMode or stats == nil then
+			lowAirBadge.frame.Visible = false
+			return
+		end
+		local now = workspace:GetServerTimeNow()
+
+		-- Suit air: the same zones as the base air meter.
+		local suitMax = suitMaxOf(stats)
+		local percent = math.clamp(stats.suitO2 / suitMax * 100, 0, 100)
+		local zone = Simulation.meterZone(percent, "air", MissionData)
+		suitRow.cell.Visible = true
+		suitRow.name.Text = Store.t("ui.meter.suit")
+		suitRow.bar.set(stats.suitO2 / suitMax, Ui.zoneColor(zone), tostring(math.floor(stats.suitO2 + 0.5)), Ui.ZONE_ICONS[zone])
+		Ui.setIcon(suitRow.icon, if stats.inside then Ui.ICONS.home else Ui.ICONS.suit, ROLE.suit)
+
+		-- Low air outside: a small pulsing pill at the bottom (faster in the red zone).
+		local lowAir = not stats.inside and zone ~= "green"
+		lowAirBadge.frame.Visible = lowAir
+		if lowAir then
+			lowAirBadge.label.Text = Store.t("ui.low_air")
+			local rate = if zone == "red" then 4 else 2
+			local pulse = math.floor(os.clock() * rate) % 2 == 0
+			lowAirBadge.frame.BackgroundColor3 = if pulse then Ui.COLORS.warning else Ui.COLORS.star
+		end
+
+		-- Food: the boost countdown while it runs (any field mode), else fresh greenhouse food
+		-- (roaming and base mode, once the greenhouse stands): ready, or seconds until it is.
+		local boostValue = player:GetAttribute(FOOD_BOOST_ATTRIBUTE)
+		local boostLeft = if type(boostValue) == "number" then boostValue - now else 0
+		local greenhouse = state ~= nil and (state.builds.greenhouse or 0) >= 1
+		if boostLeft > 0 then
+			foodRow.cell.Visible = true
+			foodRow.name.Text = Store.t("ui.vitals.boost")
+			local fraction = boostLeft / math.max(1, MissionData.BASE.FOOD.BOOST_SECONDS)
+			foodRow.bar.set(fraction, ROLE.good, Store.t("ui.vitals.seconds", { seconds = math.ceil(boostLeft) }), nil)
+			Ui.setIcon(foodRow.icon, Ui.Icons.run, ROLE.good)
+		elseif greenhouse and state and mode ~= "shift" then
+			foodRow.cell.Visible = true
+			foodRow.name.Text = Store.t("ui.vitals.food")
+			Ui.setIcon(foodRow.icon, Ui.ICONS.food, ROLE.food)
+			local left = (state.foodReadyAt or 0) - now
+			if left <= 0 then
+				foodRow.bar.set(1, Ui.zoneColor("green"), Store.t("ui.vitals.ready"), Ui.ZONE_ICONS.green)
+			else
+				local cooldown = math.max(1, BaseBuild.foodCooldown(MissionData, state.builds))
+				local text = Store.t("ui.vitals.seconds", { seconds = math.ceil(left) })
+				foodRow.bar.set(1 - left / cooldown, ROLE.food, text, nil)
+			end
+		else
+			foodRow.cell.Visible = false
+		end
+
+		-- Silo ice: once an automatic drill stands (roaming and base mode). Gold when full.
+		local siloShown = state ~= nil and mode ~= "shift" and state.siloMax > 0 and hasDrill(state.builds)
+		siloRow.cell.Visible = siloShown
+		if siloShown and state then
+			local ice = math.floor(state.siloIce)
+			local max = math.floor(state.siloMax)
+			siloRow.name.Text = Store.t("ui.vitals.silo")
+			local color = if ice >= max then ROLE.star else Ui.COLORS.ice
+			siloRow.bar.set(ice / max, color, `{ice}/{max}`, nil)
+		end
+		layoutVitals()
+	end
+
 	local function render()
 		local snap = Store.getSnapshot()
 		local stats = Store.getStats()
 		placeColumn()
 		meters.render()
-		suitName.Text = Store.t("ui.meter.suit")
 		if snap then
 			local event = snap.todayEvent
 			eventBanner.set(Ui.EVENT_ICONS[event] or "", Store.t("event." .. event), Ui.EVENT_COLORS[event])
@@ -685,38 +837,25 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		crateBadge.set(Ui.Icons.crate, Store.t("ui.carrying_parts"), Ui.COLORS.textDark)
 		crateBadge.frame.Visible = carryingCrate
 		if stats then
-			local suitMax = suitMaxOf(stats)
 			iceBadge.set(Ui.ICONS.ice, Store.t("ui.carrying_ice"), Ui.COLORS.textDark)
 			iceBadge.frame.Visible = stats.carryingIce and not carryingCrate
-
-			local suitShown = (not stats.inside) or stats.suitO2 < suitMax
-			suitPanel.Visible = suitShown
-			local percent = math.clamp(stats.suitO2 / suitMax * 100, 0, 100)
-			local zone = Simulation.meterZone(percent, "air", MissionData)
-			local shown = math.floor(stats.suitO2 + 0.5)
-			suitBar.set(stats.suitO2 / suitMax, Ui.zoneColor(zone), tostring(shown), Ui.ZONE_ICONS[zone])
-			Ui.setIcon(suitIcon, if stats.inside then Ui.ICONS.home else Ui.ICONS.suit)
 		else
 			iceBadge.frame.Visible = false
-			suitPanel.Visible = false
 		end
 		renderGear()
+		renderVitals()
 		renderWallet()
+		placeColumn() -- renderWallet skips it before the first BaseState; the vitals may have changed
 		placeStack()
 	end
 
-	-- Food boost countdown (server time from the player attribute set by the server's ToolService).
-	local function renderFood()
-		local value = player:GetAttribute(FOOD_BOOST_ATTRIBUTE)
-		local left = if type(value) == "number" then value - workspace:GetServerTimeNow() else 0
-		local boosted = left > 0
-		foodBadge.frame.Visible = boosted
-		if boosted then
-			foodBadge.set(Ui.ICONS.food, Store.t("ui.food_boost", { seconds = math.ceil(left) }), Ui.COLORS.textDark)
-		end
+	-- Food boost (server time in the player attribute set by the server's ToolService): the vitals
+	-- panel's food row shows it at once; the HUD tick keeps the countdown going.
+	player:GetAttributeChangedSignal(FOOD_BOOST_ATTRIBUTE):Connect(function()
+		renderVitals()
+		placeColumn()
 		placeStack()
-	end
-	player:GetAttributeChangedSignal(FOOD_BOOST_ATTRIBUTE):Connect(renderFood)
+	end)
 
 	-- Stage 8: gear gas tank, gear row and the auto-run pill (tick and render place the stack after).
 	function renderGear()
@@ -944,10 +1083,11 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	local function tick()
 		if field.Visible then
 			renderGear() -- the gas tank drains and refills on this client
-			renderFood() -- also places the bottom stack (the tool bar comes and goes with the tools)
+			renderVitals() -- food and boost countdowns, the low air pulse
+			placeStack() -- the tool bar comes and goes with the tools
 		end
-		if wallet.Visible then
-			placeColumn() -- the objectives panel above the wallet can change height
+		if wallet.Visible or vitals.Visible then
+			placeColumn() -- the objectives panel above can change height
 		end
 		if not visible then
 			return

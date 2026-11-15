@@ -704,6 +704,27 @@ local KEYS: { string } = {
 	"ui.menu_credits_help",
 	"ui.menu_credit_ai",
 	"ui.menu_quest_badge",
+	-- Stage 10: quest toasts (QuestToasts.luau).
+	"ui.toast.quest_new",
+	"ui.toast.side_new",
+	"ui.toast.quest_done",
+	"ui.toast.quest_already",
+	"ui.toast.step_done",
+	"ui.toast.step_already",
+	"ui.toast.current",
+	-- Stage 10: always-on vitals panel and the low air pill (Hud.luau).
+	"ui.low_air",
+	"ui.vitals.food",
+	"ui.vitals.boost",
+	"ui.vitals.ready",
+	"ui.vitals.seconds",
+	"ui.vitals.silo",
+	-- Stage 10: save feedback (SaveIndicator pill, Settings "Save now", start menu line).
+	"ui.save_done",
+	"ui.save_test_only",
+	"ui.save_failed",
+	"ui.save_now",
+	"ui.save_auto",
 	-- "funfact.01" .. "funfact.NN" are appended below from the fun fact lists.
 }
 
@@ -1391,6 +1412,27 @@ local EN: { [string]: string } = {
 	["ui.menu_credits_help"] = "Made with help",
 	["ui.menu_credit_ai"] = "AI assistance: Claude (Anthropic)",
 	["ui.menu_quest_badge"] = "Quest",
+	-- Stage 10: quest toasts (QuestToasts.luau).
+	["ui.toast.quest_new"] = "New quest!",
+	["ui.toast.side_new"] = "New side quest!",
+	["ui.toast.quest_done"] = "Quest complete!",
+	["ui.toast.quest_already"] = "Already done! Quest complete!",
+	["ui.toast.step_done"] = "Done: {step}",
+	["ui.toast.step_already"] = "Already done: {step}",
+	["ui.toast.current"] = "Your quest right now",
+	-- Stage 10: always-on vitals panel and the low air pill (Hud.luau).
+	["ui.low_air"] = "Low air! Go inside",
+	["ui.vitals.food"] = "Fresh food",
+	["ui.vitals.boost"] = "Energy boost",
+	["ui.vitals.ready"] = "Ready",
+	["ui.vitals.seconds"] = "{seconds} s",
+	["ui.vitals.silo"] = "Silo ice",
+	-- Stage 10: save feedback (SaveIndicator pill, Settings "Save now", start menu line).
+	["ui.save_done"] = "Game saved",
+	["ui.save_test_only"] = "Saved for this test only",
+	["ui.save_failed"] = "Could not save. Try again soon.",
+	["ui.save_now"] = "Save now",
+	["ui.save_auto"] = "Your game saves by itself",
 }
 
 local ES: { [string]: string } = {
@@ -2077,6 +2119,27 @@ local ES: { [string]: string } = {
 	["ui.menu_credits_help"] = "Hecho con ayuda",
 	["ui.menu_credit_ai"] = "Ayuda de IA: Claude (Anthropic)",
 	["ui.menu_quest_badge"] = "Aventura",
+	-- Stage 10: quest toasts (QuestToasts.luau).
+	["ui.toast.quest_new"] = "¡Nueva aventura!",
+	["ui.toast.side_new"] = "¡Nueva aventura extra!",
+	["ui.toast.quest_done"] = "¡Aventura completa!",
+	["ui.toast.quest_already"] = "¡Ya la hiciste! ¡Aventura completa!",
+	["ui.toast.step_done"] = "Listo: {step}",
+	["ui.toast.step_already"] = "Ya hecho: {step}",
+	["ui.toast.current"] = "Tu aventura ahora",
+	-- Stage 10: always-on vitals panel and the low air pill (Hud.luau).
+	["ui.low_air"] = "¡Poco aire! Ve adentro",
+	["ui.vitals.food"] = "Comida fresca",
+	["ui.vitals.boost"] = "Energía extra",
+	["ui.vitals.ready"] = "Lista",
+	["ui.vitals.seconds"] = "{seconds} s",
+	["ui.vitals.silo"] = "Hielo del silo",
+	-- Stage 10: save feedback (SaveIndicator pill, Settings "Save now", start menu line).
+	["ui.save_done"] = "Juego guardado",
+	["ui.save_test_only"] = "Guardado solo para esta prueba",
+	["ui.save_failed"] = "No se pudo guardar. Intenta pronto.",
+	["ui.save_now"] = "Guardar ahora",
+	["ui.save_auto"] = "Tu juego se guarda solo",
 }
 
 -- Fun facts C.A.R.L. says now and then, in order "funfact.01", "funfact.02", ...

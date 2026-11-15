@@ -582,7 +582,7 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		local card: SlotCard
 		local button = Ui.button(slotsView, {
 			name = `Slot{slot}`,
-			size = UDim2.fromScale(CARD_WIDTH, 0.9),
+			size = UDim2.fromScale(CARD_WIDTH, 0.84), -- Stage 10: was 0.9, the save line sits below
 			position = UDim2.fromScale((1 - CARD_WIDTH * 3 - CARD_GAP * 2) / 2 + (CARD_WIDTH + CARD_GAP) * (slot - 1), 0.06),
 			color = ROLE.panelRaised,
 			corner = 0.07,
@@ -687,6 +687,18 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		}
 		table.insert(slotCards, card)
 	end
+
+	-- Stage 10: under the cards, "Your game saves by itself" (playtest: nobody knew how to save).
+	local slotsSaveNote = Ui.body(slotsView, {
+		name = "SaveNote",
+		size = UDim2.fromScale(0.6, 0.06),
+		position = UDim2.fromScale(0.5, 0.935),
+		anchor = Vector2.new(0.5, 0.5),
+		alignX = Enum.TextXAlignment.Center,
+		textColor = ROLE.good,
+		maxText = 20,
+		zindex = Z + 12,
+	})
 
 	-- Confirm a wipe: covers the cards, asks once, "No" is the safe default on the left.
 	confirm = Ui.modal(slotsView, "Confirm", Z + 20)
@@ -987,7 +999,12 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			tintIcon(loadButton, ROLE.accent)
 		end
 		newStroke.Color = if newPrimary then ROLE.stroke else ROLE.accent
-		homeStatus.Text = if meta == nil then Store.t("ui.menu_loading") else ""
+		-- Stage 10: once the list is here, say that the game saves by itself (playtest feedback).
+		-- Not when saves could not be read (meta.offline): then nothing is saved this visit.
+		homeStatus.Text = if meta == nil
+			then Store.t("ui.menu_loading")
+			elseif meta.offline then ""
+			else Store.t("ui.save_auto")
 	end
 
 	local function renderSlots()
@@ -1037,6 +1054,7 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			card.stroke.Thickness = if isLast then Ui.STROKE + 2 else Ui.STROKE
 			card.button.BackgroundColor3 = if used then ROLE.panelRaised else ROLE.panel
 		end
+		slotsSaveNote.Text = if meta and meta.offline then "" else Store.t("ui.save_auto")
 		confirmTitle.Text = Store.t("ui.menu_wipe_title")
 		confirmText.Text = Store.t("ui.menu_wipe_text")
 		Ui.setButton(confirmNo, Store.t("ui.menu_wipe_no"))

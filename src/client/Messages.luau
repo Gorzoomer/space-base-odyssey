@@ -5,6 +5,8 @@
 -- A tip may carry a style: C.A.R.L.'s fun facts show a book badge and stay a little longer.
 -- Fix 8 (playtest): a message that asks for a tool (or a parts crate) shows that tool's icon in a
 -- gold round badge between C.A.R.L.'s avatar and the text, so young players see what to hold.
+-- Stage 10 (playtest): the bubble is about half its old area in every mode (team feedback: it covered
+-- too much of the world). Badges and the name tag are sized in bubble heights, so they shrink with it.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -51,16 +53,24 @@ export type MessagesView = {
 --   last system row, which ends at y 0.77. See the layout table in PowerBoard.luau. The tool bar is
 --   hidden while the board is open.
 -- * Walking around ("shift", "roam"): top centre, under the shift timer and above the storm
---   countdown (y 0.27); the left column (objectives, meters, wallet) ends at x 0.21, the Earth link
---   starts at x 0.815. The bottom centre belongs to the tool bar and the suit air bar.
+--   countdown (y 0.27); the left column (objectives, meters, vitals, wallet) ends at x 0.21, the
+--   right buttons (Earth link, Wardrobe) start at x 0.74 or later. The bottom centre belongs to the
+--   tool bar and the field pills.
 -- * Base mode ("base"): top centre too, under the "Build your base" hint pill (y 0.115-0.175).
-local MENU_POSITION = UDim2.fromScale(0.02, 0.8)
-local MENU_SIZE = UDim2.fromScale(0.26, 0.18)
-local PLANNING_POSITION = UDim2.fromScale(0.315, 0.795)
-local PLANNING_SIZE = UDim2.fromScale(0.27, 0.18)
-local PLAY_POSITION = UDim2.fromScale(0.29, 0.115)
-local PLAY_SIZE = UDim2.fromScale(0.42, 0.145)
-local BASE_POSITION = UDim2.fromScale(0.29, 0.19)
+-- Stage 10 table (fractions of the screen; the name tag rises about 0.012 above the bubble's top):
+--   mode              x            y
+--   select, none      0.02-0.26    0.835-0.945
+--   board             0.32-0.58    0.835-0.95
+--   shift, roam       0.33-0.67    0.115-0.21
+--   base              0.33-0.67    0.19-0.285
+local MENU_POSITION = UDim2.fromScale(0.02, 0.835)
+local MENU_SIZE = UDim2.fromScale(0.24, 0.11)
+local PLANNING_POSITION = UDim2.fromScale(0.32, 0.835)
+local PLANNING_SIZE = UDim2.fromScale(0.26, 0.115)
+local PLAY_POSITION = UDim2.fromScale(0.33, 0.115)
+local PLAY_SIZE = UDim2.fromScale(0.34, 0.095)
+local BASE_POSITION = UDim2.fromScale(0.33, 0.19)
+local TEXT_MAX = 20 -- biggest text size: two lines of 8 words still fit the small play bubble
 
 -- Badge layout inside the bubble, in bubble heights (the bubble's width changes with the screen).
 local EDGE = 0.16 -- left edge to the avatar
@@ -70,6 +80,9 @@ local BADGE_GAP = 0.07 -- avatar to tool badge
 local TEXT_GAP = 0.13 -- last badge to the text
 local RIGHT_PAD = 0.12 -- text to the right edge
 local BADGE_Y = 0.55 -- badge centres (the name tag sits above the avatar)
+local NAME_WIDTH = 1.15 -- name tag width, starting at the avatar's right edge
+local NAME_HEIGHT = 0.3 -- name tag height (fraction of the bubble height), centred on the top edge
+local NAME_Y = -0.12
 local TOOL_POP_SECONDS = 0.35
 
 -- Messages that ask for a tool, by localization key -> tool id (MissionData.BASE.TOOLS) or "crate"
@@ -140,7 +153,7 @@ function Messages.new(root: Frame): MessagesView
 		position = MENU_POSITION,
 		color = Ui.ROLE.panelRaised,
 		corner = 0.2,
-		stroke = 4,
+		stroke = 3,
 		strokeColor = Ui.ROLE.accent,
 		zindex = 50,
 		visible = false,
@@ -189,12 +202,13 @@ function Messages.new(root: Frame): MessagesView
 	toolScale.Parent = toolBadge
 	local nameTag = Ui.label(bubble, {
 		name = "Name",
-		size = UDim2.fromScale(0.4, 0.3),
-		position = UDim2.fromScale(0.25, -0.12),
+		size = UDim2.fromScale(0.32, NAME_HEIGHT),
+		position = UDim2.fromScale(0.25, NAME_Y),
 		color = Ui.ROLE.accent,
 		textColor = Ui.COLORS.textDark,
 		corner = 0.5,
-		maxText = 26,
+		maxText = 16,
+		minText = 8,
 		zindex = 52,
 	})
 	local text = Ui.body(bubble, {
@@ -202,7 +216,8 @@ function Messages.new(root: Frame): MessagesView
 		size = UDim2.fromScale(0.68, 0.72),
 		position = UDim2.fromScale(0.28, 0.2),
 		textColor = Ui.ROLE.text,
-		maxText = 26,
+		maxText = TEXT_MAX,
+		minText = 9,
 		zindex = 51,
 	})
 
@@ -216,6 +231,8 @@ function Messages.new(root: Frame): MessagesView
 		iconBadge.Size = UDim2.fromScale(AVATAR * h, AVATAR)
 		iconBadge.Position = UDim2.fromScale(EDGE * h, BADGE_Y)
 		local right = EDGE + AVATAR
+		nameTag.Size = UDim2.fromScale(math.min(0.6, NAME_WIDTH * h), NAME_HEIGHT)
+		nameTag.Position = UDim2.fromScale(right * h, NAME_Y)
 		if toolBadge.Visible then
 			local toolLeft = right + BADGE_GAP
 			toolBadge.Size = UDim2.fromScale(TOOL * h, TOOL)

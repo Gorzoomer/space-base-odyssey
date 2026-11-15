@@ -43,6 +43,9 @@ local MAX_ROWS = 6
 local POP_SECONDS = 0.35
 local FLASH_SECONDS = 0.6 -- a finished quest: the panel border glows lime
 local SLIDE_SECONDS = 0.35 -- the next quest slides in from the left
+-- Stage 10 (playtest): a ticked step or a new quest also thickens the border for a moment, so the
+-- eye goes to the tracker (QuestToasts.luau tells the same news on the right side).
+local PULSE_THICKNESS = 2.5 -- times the normal border thickness
 
 local Objectives = {}
 
@@ -221,6 +224,19 @@ function Objectives.new(root: Frame): ObjectivesView
 	})
 	local panelStroke = panel:FindFirstChildOfClass("UIStroke")
 
+	-- Stage 10: the border glows `color` and thickens, then eases back to the accent border.
+	local function pulse(color: Color3)
+		if panelStroke == nil then
+			return
+		end
+		panelStroke.Color = color
+		panelStroke.Thickness = Ui.STROKE * PULSE_THICKNESS
+		TweenService:Create(panelStroke, TweenInfo.new(FLASH_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Color = ROLE.accent,
+			Thickness = Ui.STROKE,
+		}):Play()
+	end
+
 	-- Quest tag ("Main quest" / "Side quest"): a small pill above the title.
 	local tag = Ui.label(panel, {
 		name = "QuestTag",
@@ -334,6 +350,7 @@ function Objectives.new(root: Frame): ObjectivesView
 			TweenService:Create(row.scale, TweenInfo.new(POP_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 				Scale = 1,
 			}):Play()
+			pulse(ROLE.good)
 		end
 		row.done = done
 		row.id = id
@@ -391,12 +408,7 @@ function Objectives.new(root: Frame): ObjectivesView
 
 	-- A finished quest: the border glows lime, then the next quest slides in from the left.
 	local function animateNewQuest()
-		if panelStroke then
-			panelStroke.Color = ROLE.good
-			TweenService:Create(panelStroke, TweenInfo.new(FLASH_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-				Color = ROLE.accent,
-			}):Play()
-		end
+		pulse(ROLE.good)
 		local goal = panel.Position
 		panel.Position = UDim2.fromScale(goal.X.Scale - PANEL_WIDTH * 0.4, goal.Y.Scale)
 		TweenService:Create(panel, TweenInfo.new(SLIDE_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
