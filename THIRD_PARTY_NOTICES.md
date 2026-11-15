@@ -33,3 +33,7 @@ SOFTWARE.
 - Roblox Studio (Roblox Corporation)
 - Rojo (MPL-2.0), https://rojo.space
 - Lune (MPL-2.0), https://github.com/lune-org/lune
+
+## Earth image
+
+The in-game Earth uses NASA's "Blue Marble: Land Surface, Ocean Color and Sea Ice" (NASA Visible Earth, NASA Goddard Space Flight Center), public domain, scaled to 1024x512. Credit: NASA. NASA's use does not imply endorsement. The file was taken from the public-domain copy on Wikimedia Commons ("Whole world - land and oceans.jpg"), because NASA's image server did not respond.

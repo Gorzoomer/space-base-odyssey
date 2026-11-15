@@ -51,6 +51,9 @@ local Icons = {
 	play = "rbxassetid://98866873797236", -- player-play (filled)
 }
 
+-- Earth map: NASA Visible Earth "Blue Marble" (public domain, NASA Goddard), 1024x512 equirectangular.
+Icons.earthMap = "rbxassetid://108242726596736"
+
 -- Aliases share an image.
 Icons.lifesupport = Icons.air
 Icons.repair = Icons.failure
