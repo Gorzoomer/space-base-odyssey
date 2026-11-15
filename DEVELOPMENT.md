@@ -344,6 +344,7 @@ Tested in Studio (assistant-driven):
   - Pressurized zones cover the whole path.
   - Glass hatches close the doorways until the greenhouse level 2 and the lab are built.
   - Team follow-up: greenhouse dome A now sits on the hub tube's line (it was 8 studs off, so the tube met the dome at a slant). Dome B and the lab pad moved with it.
+  - Team follow-up: dome A had an opening above the hub tube's doorway (the tube ended before the glass). The tube's upper slats now reach into the dome as glass, and the dome A to B link does the same. Rays cast every stud from above over both doorways found no gap.
 
 Tested in Studio (assistant-driven):
 - Start menu, New game, Solo.

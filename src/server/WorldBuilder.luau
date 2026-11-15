@@ -1349,7 +1349,14 @@ local function buildGreenhouse(base: Instance): GreenhouseRefs
 	local entryX = a.X + math.sqrt(GREENHOUSE_A_RX * GREENHOUSE_A_RX - (lineZ - a.Z) * (lineZ - a.Z))
 	local tubeFrom = Vector3.new(hubX, 0, lineZ)
 	local tubeTo = Vector3.new(entryX - 3, 0, lineZ)
-	Geo.walkTube(gh, tubeFrom, tubeTo)
+	-- Stage 10 (playtest: "dome A has a hole"): the hull is trimmed where it meets dome A's glass, and
+	-- the upper slats reach on into the dome as glass, so the doorway's top panels leave no opening.
+	Geo.walkTube(gh, tubeFrom, tubeTo, {
+		-- 1.5 studs inside the glass: the top slat then runs under the doorway's top panels, leaving no
+		-- sliver beside it (0.6 left 1-stud gaps at the slat's corners).
+		endAt = Geo.domeTrim(a, GREENHOUSE_A_RX - 1.5, GREENHOUSE_A_RY - 1.5, false),
+		hood = GREENHOUSE_GLASS,
+	})
 	vcylinder(gh, "Floor", 0.5, GREENHOUSE_A_RX * 2, a + Vector3.new(0, 0.25, 0), floorStyle)
 	local entryAngle = math.atan2(entryX - a.X, lineZ - a.Z)
 	local segmentsA = 14
@@ -1478,7 +1485,11 @@ local function buildGreenhouse(base: Instance): GreenhouseRefs
 	-- The hull meets both glass shells (trimmed just inside them); the floor runs onto both dome floors.
 	local linkLength = (linkTo - linkFrom).Magnitude
 	Geo.walkTube(gh2, linkFrom, linkTo, {
-		startAt = Geo.domeTrim(a, GREENHOUSE_A_RX - 0.6, GREENHOUSE_A_RY - 0.6, true),
+		-- Dome A: 2 studs inside its glass, so the hood runs under the doorway's top panels with no
+		-- sliver beside the upper slats (checked by rays from above). Dome B is lower (RY 12): its trim
+		-- stays 0.6 inside, else the top slat (axis + apothem, about 11.3 high) misses the trim shell
+		-- and stops at the doorway.
+		startAt = Geo.domeTrim(a, GREENHOUSE_A_RX - 2, GREENHOUSE_A_RY - 2, true),
 		endAt = Geo.domeTrim(b, GREENHOUSE_B_RX - 0.6, GREENHOUSE_B_RY - 0.6, false),
 		-- Far enough onto both round dome floors that the plate's corners leave no ground showing
 		-- (the hub tube overlaps dome A's floor the same way).
