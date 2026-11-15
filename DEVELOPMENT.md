@@ -252,7 +252,7 @@ Tested in Studio (assistant-driven):
 
 Found in that test: Roblox refuses to set a script source over 200,000 characters, so the 238,000-character world builder stopped Rojo live sync. It was split into smaller modules.
 
-**Morning – Team playtest feedback, round 4, and fixes.** The team reported, and the fixes:
+**02:30 – Team playtest feedback, round 4, and fixes.** The team reported, and the fixes:
 - **Overlapping boxes and HUD under the tool bar:** the suit air bar and the carrying pills now stack above the Roblox hotbar. The C.A.R.L. bubble sits at the top centre while playing. The "Step 1/2" sign over a build pad is smaller and higher, so it never covers the pad's prompt.
 - **Too many markers on screen:** a marker shows only when the player is close, when C.A.R.L. points at it, or when the current objective needs it.
 - **Two tools with the same icon:** the repair kit now uses its own case icon (Tabler briefcase-2), different from the wrench.
