@@ -6,10 +6,15 @@
 -- never goes down; plants take time (food tomorrow); oxygen is made from water with electricity;
 -- storm warnings come from forecasters on Earth; a big flare does not always bring particles.
 -- Storm events are REPLAYS of real flares observed near Earth, never claimed to have hit the Moon.
+-- Plain language: every gameplay line is written for a 7-year-old (no "life support", "dose",
+-- "telemetry" or "SEP" jargon). Only the Sources screen ("fact." and "src.") keeps real units.
 -- Word limit: at most 8 words per string; "fact." and "src." strings may use up to 10;
--- "card.", "mission." and "story." strings (intro, outro and collectible cards) up to 20.
+-- "card.", "mission.", "story." and "funfact." strings up to 16.
 -- No emoji anywhere: the UI shows icons from Icons.luau instead.
 -- "fact." strings take their numbers from MissionData.REAL (see DATA_SOURCES.md).
+-- "funfact." lines are short facts C.A.R.L. says now and then. Every number in them appears in
+-- DATA_SOURCES.md (tests/localization checks this). A fact without a DATA_SOURCES.md row is left out
+-- (for example the eclipse seen from the Moon: C.A.R.L. explains it with carl.eclipse_* instead).
 
 export type Language = "en" | "es"
 export type Params = { [string]: string | number }
@@ -131,6 +136,8 @@ local KEYS: { string } = {
 	"fact.ice",
 	"fact.flare_vs_storm",
 	"fact.career_limit",
+	"fact.sky_sun",
+	"fact.sky_earth",
 	"src.donki",
 	"src.bvad",
 	"src.lro",
@@ -223,22 +230,50 @@ local KEYS: { string } = {
 	"carl.all_secrets",
 	"observatory.teaser",
 	"story.secrets_hint",
+	-- Stage 5: settings, codes, water, antenna data, eclipse, meter hints, event cosmetic.
+	"ui.settings",
+	"ui.music_volume",
+	"ui.effects_volume",
+	"ui.funfacts_toggle",
+	"ui.guidance_toggle",
+	"ui.redeem_title",
+	"ui.redeem_placeholder",
+	"ui.redeem_button",
+	"ui.on",
+	"ui.off",
+	"ui.meter.water",
+	"ui.meter_hint.air",
+	"ui.meter_hint.food",
+	"ui.meter_hint.dose",
+	"ui.meter_hint.water",
+	"ui.data_waiting",
+	"carl.data_sent",
+	"carl.no_water",
+	"carl.code_ok",
+	"carl.code_used",
+	"carl.code_bad",
+	"carl.eclipse_start",
+	"carl.eclipse_end",
+	"cause.no_water",
+	"cause.data_waiting",
+	"cosmetic.explorer26.name",
+	-- "funfact.01" .. "funfact.NN" are appended below from the fun fact lists.
 }
 
 local EN: { [string]: string } = {
 	["ui.title"] = "Space Base Odyssey",
 	["ui.pitch"] = "Run a Moon base. Every choice costs something.",
 	["ui.start_mission"] = "Start mission",
-	["ui.start_shift"] = "Start shift",
+	["ui.start_shift"] = "Start work time",
 	["ui.day"] = "Day {day} of {total}",
 	["ui.power_left"] = "{n} power left",
-	["ui.shift_time"] = "{seconds} s left",
-	["ui.system.LifeSupport"] = "Life support",
+	["ui.shift_time"] = "Time left: {seconds} s",
+	["ui.system.LifeSupport"] = "Air maker",
 	["ui.system.Greenhouse"] = "Greenhouse",
-	["ui.system.Science"] = "Science",
-	["ui.system_hint.LifeSupport"] = "Makes air from water using power",
+	["ui.system.Science"] = "Science lab",
+	["ui.system_hint.LifeSupport"] = "Turns water into air. Needs power and water.",
 	["ui.system_hint.Greenhouse"] = "Grows food. Plants feed you tomorrow.",
-	["ui.system_hint.Science"] = "Experiments that send discoveries to Earth",
+	["ui.system_hint.Science"] = "Discoveries the antenna sends to Earth.",
 	["ui.meter.air"] = "Air",
 	["ui.meter.food"] = "Food",
 	["ui.meter.dose"] = "Radiation",
@@ -249,7 +284,7 @@ local EN: { [string]: string } = {
 	["ui.restart"] = "Try another plan",
 	["ui.report_title"] = "Mission report",
 	["ui.language"] = "Language: English",
-	["ui.storm_in"] = "Storm in {seconds} s! Go to the shelter!",
+	["ui.storm_in"] = "Storm in {seconds} seconds! Go to the shelter!",
 	["ui.storm_now"] = "Storm now! Stay in the shelter!",
 	["ui.assistant_name"] = "C.A.R.L.",
 	["ui.outcome.Completed"] = "Mission complete!",
@@ -260,52 +295,52 @@ local EN: { [string]: string } = {
 	["ui.sources_button"] = "Real NASA data",
 	["ui.sources_title"] = "Where our numbers come from",
 	["ui.close"] = "Close",
-	["ui.weather_live"] = "Live NASA data: {n} solar flares, last 30 days",
-	["ui.weather_latest"] = "Latest flare: {class} on {date}",
+	["ui.weather_live"] = "Live from NASA: {n} Sun flares in 30 days",
+	["ui.weather_latest"] = "Newest Sun flare: {class}, {date}",
 	["ui.weather_offline"] = "No live link now: using saved NASA data",
-	["ui.weather_archive"] = "Saved storms downloaded from NASA on {date}",
+	["ui.weather_archive"] = "Saved storms, downloaded from NASA on {date}",
 	["ui.weather_checked"] = "Checked with NASA at {time}",
-	["ui.flare_source_live"] = "Real flare, live NASA data, {date}",
-	["ui.flare_source_archive"] = "Replay of a real flare from {date}",
-	["ui.earth_link_on"] = "Linked with Earth",
-	["ui.earth_link_off"] = "Not linked with Earth",
+	["ui.flare_source_live"] = "Real Sun flare, live NASA data, {date}",
+	["ui.flare_source_archive"] = "Replay of a real Sun flare from {date}",
+	["ui.earth_link_on"] = "Connected to Earth",
+	["ui.earth_link_off"] = "Not connected to Earth",
 	["event.None"] = "Calm day",
 	["event.Dust"] = "Dust on the solar panels",
-	["event.SolarStorm"] = "Solar storm watch",
+	["event.SolarStorm"] = "A Sun storm may come",
 	["event.EquipmentFailure"] = "Something broke: air leak",
 	["carl.welcome"] = "Hi! I'm C.A.R.L., your base helper.",
 	["carl.plan_hint"] = "Share the power. It can't run everything.",
-	["carl.shift_start"] = "Shift started! Go do your tasks.",
+	["carl.shift_start"] = "Work time! Go do your tasks.",
 	["carl.dust"] = "Dust covers the solar panels. Clean them!",
 	["carl.leak"] = "Air is leaking out! Fix the pipe!",
-	["carl.leak_fixed"] = "Leak fixed! Great job!",
-	["carl.panel_clean"] = "Panel clean! Sunlight reaches it again.",
-	["carl.antenna_linked"] = "Antenna linked with Earth!",
+	["carl.leak_fixed"] = "Leak fixed! No more air escaping.",
+	["carl.panel_clean"] = "Panel clean! More sunlight, more power.",
+	["carl.antenna_linked"] = "Antenna connected! Earth can hear us now.",
 	["carl.earth_delay"] = "Signal to Earth: {moon} seconds. Mars: up to {mars} minutes!",
-	["carl.storm_warning"] = "Replay: real {class} flare from {date}. To the shelter!",
-	["carl.storm_now"] = "Particles are here! Stay in the shelter!",
+	["carl.storm_warning"] = "Like the real {class} flare of {date}! To the shelter!",
+	["carl.storm_now"] = "Sun particles are here! Stay in the shelter!",
 	["carl.storm_over"] = "Storm over. You can go outside.",
 	["carl.false_alarm"] = "The real {class} flare of {date} brought no particles!",
 	["carl.suit_low"] = "Suit air is low! Go inside!",
 	["carl.rescued"] = "Suit air ran out! I brought you back.",
 	["carl.ice_picked"] = "Got ice! Take it to the water machine.",
-	["carl.ice_delivered"] = "Ice delivered! Ice makes water and air.",
-	["carl.shift_over"] = "Shift over! Let's see how we did.",
+	["carl.ice_delivered"] = "Ice is now water for the air maker!",
+	["carl.shift_over"] = "Time's up! Let's see how we did.",
 	["cause.dose_limit"] = "Too much radiation. The crew went home.",
 	["cause.air_empty"] = "The air ran out. The crew went home.",
 	["cause.food_empty"] = "The food ran out. The crew went home.",
-	["cause.storm_exposed"] = "Outside in the storm: dose went up.",
+	["cause.storm_exposed"] = "Outside in the storm: more radiation.",
 	["cause.storm_sheltered"] = "The thick dirt shelter kept everyone safe.",
 	["cause.false_alarm"] = "Big flare, but no storm came. Good practice!",
 	["cause.leak_unrepaired"] = "The leak was not fixed. Air escaped.",
 	["cause.dusty_panels"] = "Dusty panels made less power.",
 	["cause.no_greenhouse"] = "No power for plants. Less food later.",
-	["cause.air_falling"] = "Too little life support. Air went down.",
-	["cause.ice_delivered"] = "Ice from the crater made more water.",
+	["cause.air_falling"] = "Too little power for air. Air went down.",
+	["cause.ice_delivered"] = "Crater ice made more water and air.",
 	["cause.big_science"] = "Lots of power to science. Great discoveries!",
 	["cause.smooth_day"] = "A calm day. Everything worked.",
-	["error.unknown_system"] = "That system does not exist.",
-	["error.cells_range"] = "That many cells won't fit there.",
+	["error.unknown_system"] = "That machine does not exist.",
+	["error.cells_range"] = "No more room there.",
 	["error.no_power_left"] = "No power left. Take some from another.",
 	["prompt.clean"] = "Clean panel",
 	["prompt.drill"] = "Drill ice",
@@ -314,31 +349,34 @@ local EN: { [string]: string } = {
 	["prompt.antenna"] = "Point at Earth",
 	["prompt.console"] = "Power board",
 	["tip.day1_plan"] = "Give power to air first. We must breathe!",
-	["tip.day1_science"] = "Power for science earns points. Try it!",
+	["tip.day1_science"] = "Science earns stars. Try giving it power!",
 	["tip.greenhouse_tomorrow"] = "Plants need time. Food comes tomorrow.",
-	["tip.day1_shift"] = "Follow the markers to find your tasks.",
-	["tip.find_ice"] = "Ice hides in the dark crater. Drill it!",
-	["tip.antenna"] = "Point the antenna at Earth for early warnings.",
+	["tip.day1_shift"] = "Follow C.A.R.L.'s light to find your tasks.",
+	["tip.find_ice"] = "Bring crater ice. It makes water for air!",
+	["tip.antenna"] = "Connect the antenna: get warnings, send discoveries!",
 	["tip.day2_greenhouse"] = "Power the plants today. They feed you tomorrow.",
-	["tip.storm_follow"] = "Follow C.A.R.L.'s light to the shelter!",
+	["tip.storm_follow"] = "Follow C.A.R.L.'s orange light to the shelter!",
 	["tip.suit_home"] = "Suit air low? Go inside to refill.",
 	["marker.task"] = "Task",
+	-- Sources screen: real units stay, with a short explanation where needed.
 	["fact.gravity"] = "Moon gravity is only {percent}% of Earth's.",
 	["fact.light_delay"] = "Radio signals from the Moon reach Earth in about {moon} seconds.",
 	["fact.mars_delay"] = "Messages to Mars take {min} to {max} minutes, one way.",
 	["fact.oxygen"] = "Each astronaut uses about {kg} kg of oxygen a day.",
-	["fact.water"] = "Water for drinks and food: {kg} kg per astronaut daily.",
+	["fact.water"] = "Water to drink and cook: {kg} kg per astronaut daily.",
 	["fact.food"] = "An astronaut needs about {kcal} calories of food a day.",
 	["fact.lettuce"] = "On the Space Station, lettuce took {days} days to grow.",
-	["fact.dose_moon"] = "On the Moon's surface: {msv} millisieverts of radiation a day.",
-	["fact.dose_earth"] = "In the USA, the average person gets {msv} millisieverts a year.",
+	["fact.dose_moon"] = "Moon surface radiation: {msv} millisieverts a day (radiation unit).",
+	["fact.dose_earth"] = "Average person in the USA: {msv} millisieverts a year.",
 	["fact.shelter"] = "Thick walls of water or soil block storm particles.",
-	["fact.sep"] = "The fastest storm particles reach Earth in {min} minutes or less.",
+	["fact.sep"] = "The fastest Sun particles reach Earth in {min} minutes or less.",
 	["fact.sunlight"] = "One spot near Shackleton crater has sunlight {days} days a year.",
 	["fact.cold"] = "Coldest Moon spot measured: {k} kelvin, Hermite crater, near north pole.",
 	["fact.ice"] = "Where LCROSS hit Cabeus crater, soil was about {percent}% water ice.",
 	["fact.flare_vs_storm"] = "A big flare does not always send particles.",
 	["fact.career_limit"] = "NASA career radiation limit: under {msv} millisieverts per astronaut.",
+	["fact.sky_sun"] = "Game sky is fast: the real Sun circles in {days} days.",
+	["fact.sky_earth"] = "The real Earth turns once a day; here much faster.",
 	["src.donki"] = "Space weather: NASA / CCMC DONKI",
 	["src.bvad"] = "Astronaut needs: NASA Life Support Baseline (BVAD) 2022",
 	["src.lro"] = "Moon light and cold: NASA Lunar Reconnaissance Orbiter",
@@ -354,23 +392,23 @@ local EN: { [string]: string } = {
 	["mission.t1_steps.intro"] = "Welcome to the Moon! Step outside in your suit, look around, then come back inside.",
 	["mission.t1_steps.outro"] = "Great steps! On the Moon you weigh less.",
 	["mission.t2_power.title"] = "Share the power",
-	["mission.t2_power.intro"] = "The base has little power. Share it on the power board, then start your shift.",
+	["mission.t2_power.intro"] = "The base has little power. Share it on the power board, then start work time.",
 	["mission.t2_power.outro"] = "Power shared! Air comes first, always.",
 	["mission.t3_tasks.title"] = "Base chores",
-	["mission.t3_tasks.intro"] = "Dust day! Point the antenna at Earth, clean a panel, then bring ice from the crater.",
-	["mission.t3_tasks.outro"] = "Chores done! Ice gives water and air.",
+	["mission.t3_tasks.intro"] = "Dust day! Connect the antenna, clean a panel, then bring crater ice to make water.",
+	["mission.t3_tasks.outro"] = "Chores done! Ice makes water, and water makes air.",
 	["mission.t4_storm.title"] = "Storm drill",
-	["mission.t4_storm.intro"] = "Storm drill! When C.A.R.L. warns you, run to the thick shelter. Its dirt walls block particles.",
+	["mission.t4_storm.intro"] = "Storm drill! When C.A.R.L. warns you, run to the shelter. Its thick dirt walls block particles.",
 	["mission.t4_storm.outro"] = "Safe! Thick walls stopped the particles.",
 	["mission.c1_arrival.title"] = "Chapter 1: New home",
-	["mission.c1_arrival.intro"] = "Your crew just landed! Keep everyone safe for a few days and bring ice from the crater.",
-	["mission.c1_arrival.outro"] = "The base works! Earth sends news: solar storms are on the way.",
+	["mission.c1_arrival.intro"] = "Your crew just landed! Keep everyone safe for a few days and bring crater ice.",
+	["mission.c1_arrival.outro"] = "The base works! Earth sends news: Sun storms are on the way.",
 	["mission.c2_storm.title"] = "Chapter 2: Storm season",
-	["mission.c2_storm.intro"] = "The Sun is very active. Watch the warnings, keep the antenna linked, and shelter when particles come.",
+	["mission.c2_storm.intro"] = "The Sun is very busy! Keep the antenna connected and hide when storms come.",
 	["mission.c2_storm.outro"] = "You beat the storm! But a strange noise comes from the pipes...",
 	["mission.c3_failure.title"] = "Chapter 3: Things break",
-	["mission.c3_failure.intro"] = "A pipe broke and more flares are coming. Fix the leak, earn stars. Not every flare brings particles.",
-	["mission.c3_failure.outro"] = "Base stable! Earth says: Mars is next. But secrets still hide on the Moon...",
+	["mission.c3_failure.intro"] = "A pipe broke! Fix the leak and earn stars. Not every Sun flare brings a storm.",
+	["mission.c3_failure.outro"] = "Base safe! Earth says: Mars is next. But secrets still hide on the Moon...",
 	["mission.free_play.title"] = "Free play",
 	["mission.free_play.intro"] = "Run the base your way for many days. Any day can surprise you!",
 	["mission.free_play.outro"] = "Great commander! Play again for more stars.",
@@ -378,11 +416,11 @@ local EN: { [string]: string } = {
 	["obj.go_outside"] = "Go outside the base",
 	["obj.return_inside"] = "Come back inside",
 	["obj.set_power"] = "Share power on the board",
-	["obj.start_shift"] = "Start the shift",
+	["obj.start_shift"] = "Start work time",
 	["obj.clean_panel"] = "Clean a solar panel",
 	["obj.drill_ice"] = "Drill ice in the crater",
 	["obj.deliver_ice"] = "Take ice to the water machine",
-	["obj.align_antenna"] = "Point the antenna at Earth",
+	["obj.align_antenna"] = "Connect the antenna to Earth",
 	["obj.repair_leak"] = "Fix the air leak",
 	["obj.reach_shelter"] = "Get into the shelter",
 	["obj.survive_storm"] = "Stay safe during the storm",
@@ -403,7 +441,7 @@ local EN: { [string]: string } = {
 	["ui.objectives"] = "Goals",
 	["ui.mission_success"] = "Mission complete!",
 	["ui.mission_failed"] = "Not yet! You can try again.",
-	["ui.missing"] = "Still missing:",
+	["ui.missing"] = "Still to do:",
 	["ui.collection_button"] = "Collection",
 	["ui.collection_title"] = "Moon secrets",
 	["ui.secrets_found"] = "Secrets found: {n}/{total}",
@@ -418,38 +456,65 @@ local EN: { [string]: string } = {
 	["collect.cheese.name"] = "Moon cheese",
 	["collect.mars_potato.name"] = "Mars potato",
 	["card.mini_earth.myth"] = "Myth: there is no gravity in space.",
-	["card.mini_earth.science"] = "Truth: on the Space Station gravity is still about 90% of Earth's. Astronauts float because they are always falling.",
-	["card.mini_earth.reward"] = "C.A.R.L. gets a blue and green Earth look!",
+	["card.mini_earth.science"] = "Truth: Space Station gravity is about 90% of Earth's. Astronauts float because they keep falling!",
+	["card.mini_earth.reward"] = "C.A.R.L. turns into a tiny spinning Earth!",
 	["card.laika.myth"] = "Who was the first animal to orbit Earth?",
-	["card.laika.science"] = "It was Laika, a little dog: Sputnik 2, 3 November 1957. Early flights helped design life support.",
-	["card.laika.reward"] = "A magenta life-support backpack for your suit!",
+	["card.laika.science"] = "It was Laika, a little dog, on Sputnik 2 in 1957. Early flights helped protect astronauts.",
+	["card.laika.reward"] = "A magenta air backpack for your suit!",
 	["card.cheese.myth"] = "Myth: the Moon is made of cheese.",
-	["card.cheese.science"] = "Truth: Moon rocks are anorthosite and basalt. About 43% of the soil's weight is oxygen, locked in minerals!",
+	["card.cheese.science"] = "Truth: the Moon is made of rock! About 43% of its soil's weight is oxygen.",
 	["card.cheese.reward"] = "The science rover gets a cheese-yellow paint job!",
-	["card.mars_potato.myth"] = "Myth: aliens built the 'Face on Mars', and potatoes grow fine in plain Mars soil.",
-	["card.mars_potato.science"] = "Truth: Viking 1's 1976 'face' was a worn hill; seeing faces is pareidolia. Phoenix (2008) found toxic perchlorates.",
-	["card.mars_potato.reward"] = "Your team flag appears on the habitat roof!",
+	["card.mars_potato.myth"] = "Myth: aliens built the 'Face on Mars', and potatoes grow fine in Mars soil.",
+	["card.mars_potato.science"] = "Truth: the 1976 'face' was a worn hill. Mars soil has perchlorates, salts toxic to people.",
+	["card.mars_potato.reward"] = "Your team flag appears on the base roof!",
 	["prompt.collect"] = "Pick up",
 	["carl.secret_found"] = "You found a Moon secret!",
 	["carl.all_secrets"] = "All four found! The observatory is open!",
 	["observatory.teaser"] = "Next mission: Mars",
 	["story.secrets_hint"] = "Four secrets hide around the base. Explore every corner, even the dark ones!",
+	-- Stage 5: settings, codes, water, antenna data, eclipse, meter hints, event cosmetic.
+	["ui.settings"] = "Settings",
+	["ui.music_volume"] = "Music volume",
+	["ui.effects_volume"] = "Sound effects volume",
+	["ui.funfacts_toggle"] = "C.A.R.L. fun facts",
+	["ui.guidance_toggle"] = "C.A.R.L. shows the way",
+	["ui.redeem_title"] = "Have a code?",
+	["ui.redeem_placeholder"] = "Type your code here",
+	["ui.redeem_button"] = "Use code",
+	["ui.on"] = "On",
+	["ui.off"] = "Off",
+	["ui.meter.water"] = "Water",
+	["ui.meter_hint.air"] = "Everyone breathes it. Keep it high!",
+	["ui.meter_hint.food"] = "Everyone eats every day. Plants help.",
+	["ui.meter_hint.dose"] = "Space rays: hide in the shelter",
+	["ui.meter_hint.water"] = "Ice gives water. Water gives air.",
+	["ui.data_waiting"] = "Waiting to send: {n}",
+	["carl.data_sent"] = "Discoveries sent to Earth: {n}! Scientists say thanks!",
+	["carl.no_water"] = "Water is low! The air maker needs ice.",
+	["carl.code_ok"] = "Code works! Your new suit look is ready.",
+	["carl.code_used"] = "You already used this code.",
+	["carl.code_bad"] = "Hmm, that code does not work.",
+	["carl.eclipse_start"] = "Eclipse! Earth is hiding the Sun!",
+	["carl.eclipse_end"] = "The Sun is back. Eclipse over!",
+	["cause.no_water"] = "No water: the air maker made less air.",
+	["cause.data_waiting"] = "Discoveries waiting! Connect the antenna to send them.",
+	["cosmetic.explorer26.name"] = "Explorer 2026 gold suit",
 }
 
 local ES: { [string]: string } = {
 	["ui.title"] = "Space Base Odyssey", -- the game name stays in English
 	["ui.pitch"] = "Dirige una base lunar. Cada decisión cuesta algo.",
 	["ui.start_mission"] = "Empezar misión",
-	["ui.start_shift"] = "Empezar turno",
+	["ui.start_shift"] = "Empezar a trabajar",
 	["ui.day"] = "Día {day} de {total}",
 	["ui.power_left"] = "Queda energía: {n}",
 	["ui.shift_time"] = "Quedan {seconds} s",
-	["ui.system.LifeSupport"] = "Soporte vital",
+	["ui.system.LifeSupport"] = "Máquina de aire",
 	["ui.system.Greenhouse"] = "Invernadero",
-	["ui.system.Science"] = "Ciencia",
-	["ui.system_hint.LifeSupport"] = "Hace aire del agua con electricidad",
-	["ui.system_hint.Greenhouse"] = "Cultiva comida. Las plantas alimentan mañana.",
-	["ui.system_hint.Science"] = "Experimentos que mandan descubrimientos a la Tierra",
+	["ui.system.Science"] = "Laboratorio",
+	["ui.system_hint.LifeSupport"] = "Convierte agua en aire. Necesita energía y agua.",
+	["ui.system_hint.Greenhouse"] = "Cultiva comida. Las plantas te alimentan mañana.",
+	["ui.system_hint.Science"] = "Descubrimientos que la antena manda a la Tierra.",
 	["ui.meter.air"] = "Aire",
 	["ui.meter.food"] = "Comida",
 	["ui.meter.dose"] = "Radiación",
@@ -460,7 +525,7 @@ local ES: { [string]: string } = {
 	["ui.restart"] = "Prueba otro plan",
 	["ui.report_title"] = "Reporte de la misión",
 	["ui.language"] = "Idioma: Español",
-	["ui.storm_in"] = "¡Tormenta en {seconds} s! ¡Ve al refugio!",
+	["ui.storm_in"] = "¡Tormenta en {seconds} segundos! ¡Ve al refugio!",
 	["ui.storm_now"] = "¡Tormenta ahora! ¡Quédate en el refugio!",
 	["ui.assistant_name"] = "C.A.R.L.",
 	["ui.outcome.Completed"] = "¡Misión cumplida!",
@@ -472,7 +537,7 @@ local ES: { [string]: string } = {
 	["ui.sources_title"] = "De dónde salen nuestros números",
 	["ui.close"] = "Cerrar",
 	["ui.weather_live"] = "NASA en vivo: {n} llamaradas solares en 30 días",
-	["ui.weather_latest"] = "Última llamarada: {class}, el {date}",
+	["ui.weather_latest"] = "Llamarada solar más nueva: {class}, {date}",
 	["ui.weather_offline"] = "Sin conexión: usamos datos guardados de la NASA",
 	["ui.weather_archive"] = "Tormentas guardadas, bajadas de la NASA el {date}",
 	["ui.weather_checked"] = "Consultado con la NASA: {time}",
@@ -482,42 +547,42 @@ local ES: { [string]: string } = {
 	["ui.earth_link_off"] = "Sin conexión con la Tierra",
 	["event.None"] = "Día tranquilo",
 	["event.Dust"] = "Polvo en los paneles solares",
-	["event.SolarStorm"] = "Alerta de tormenta solar",
+	["event.SolarStorm"] = "Puede venir una tormenta solar",
 	["event.EquipmentFailure"] = "Algo se rompió: fuga de aire",
 	["carl.welcome"] = "¡Hola! Soy C.A.R.L., tu ayudante de base.",
 	["carl.plan_hint"] = "Reparte la energía. No alcanza para todo.",
-	["carl.shift_start"] = "¡Empezó el turno! Ve a hacer tus tareas.",
+	["carl.shift_start"] = "¡A trabajar! Ve a hacer tus tareas.",
 	["carl.dust"] = "Hay polvo en los paneles. ¡Límpialos!",
 	["carl.leak"] = "¡Se está saliendo el aire! ¡Arregla el tubo!",
-	["carl.leak_fixed"] = "¡Fuga arreglada! ¡Buen trabajo!",
-	["carl.panel_clean"] = "¡Panel limpio! Ya le llega el Sol.",
-	["carl.antenna_linked"] = "¡Antena conectada con la Tierra!",
+	["carl.leak_fixed"] = "¡Fuga arreglada! Ya no se escapa el aire.",
+	["carl.panel_clean"] = "¡Panel limpio! Más luz, más energía.",
+	["carl.antenna_linked"] = "¡Antena conectada! La Tierra ya nos escucha.",
 	["carl.earth_delay"] = "Señal a Tierra: {moon} segundos. ¡A Marte, hasta {mars} minutos!",
-	["carl.storm_warning"] = "Repetición: llamarada real {class} del {date}. ¡Al refugio!",
-	["carl.storm_now"] = "¡Llegaron las partículas! ¡Quédate en el refugio!",
+	["carl.storm_warning"] = "¡Como la llamarada real {class} del {date}! ¡Al refugio!",
+	["carl.storm_now"] = "¡Llegaron las partículas solares! ¡Quédate en el refugio!",
 	["carl.storm_over"] = "Ya pasó la tormenta. Puedes salir.",
 	["carl.false_alarm"] = "¡La llamarada real {class} del {date} no trajo partículas!",
 	["carl.suit_low"] = "¡Queda poco aire en el traje! ¡Entra!",
 	["carl.rescued"] = "¡Sin aire! Te regresé a la base.",
 	["carl.ice_picked"] = "¡Tienes hielo! Llévalo a la máquina de agua.",
-	["carl.ice_delivered"] = "¡Hielo entregado! Da agua y aire.",
-	["carl.shift_over"] = "¡Terminó el turno! Veamos cómo nos fue.",
+	["carl.ice_delivered"] = "¡Hielo convertido en agua para hacer aire!",
+	["carl.shift_over"] = "¡Se acabó el tiempo! Veamos cómo nos fue.",
 	["cause.dose_limit"] = "Demasiada radiación. La tripulación volvió a casa.",
 	["cause.air_empty"] = "Se acabó el aire. La tripulación volvió.",
 	["cause.food_empty"] = "Se acabó la comida. La tripulación volvió.",
-	["cause.storm_exposed"] = "Afuera en la tormenta: subió la dosis.",
+	["cause.storm_exposed"] = "Afuera en la tormenta: más radiación.",
 	["cause.storm_sheltered"] = "El grueso refugio de tierra los protegió.",
 	["cause.false_alarm"] = "Gran llamarada, pero no llegó tormenta. ¡Buena práctica!",
 	["cause.leak_unrepaired"] = "No arreglaron la fuga. Se escapó aire.",
 	["cause.dusty_panels"] = "Paneles con polvo dieron menos energía.",
 	["cause.no_greenhouse"] = "Sin energía para plantas. Menos comida después.",
-	["cause.air_falling"] = "Poco soporte vital. Bajó el aire.",
-	["cause.ice_delivered"] = "El hielo del cráter dio más agua.",
+	["cause.air_falling"] = "Poca energía para el aire. Bajó el aire.",
+	["cause.ice_delivered"] = "El hielo del cráter dio agua y aire.",
 	["cause.big_science"] = "Mucha energía a la ciencia. ¡Grandes descubrimientos!",
 	["cause.smooth_day"] = "Un día tranquilo. Todo funcionó.",
-	["error.unknown_system"] = "Ese sistema no existe.",
-	["error.cells_range"] = "Esa cantidad de celdas no cabe ahí.",
-	["error.no_power_left"] = "No queda energía. Quítale a otro sistema.",
+	["error.unknown_system"] = "Esa máquina no existe.",
+	["error.cells_range"] = "Ya no cabe más ahí.",
+	["error.no_power_left"] = "No queda energía. Quítale a otra máquina.",
 	["prompt.clean"] = "Limpiar panel",
 	["prompt.drill"] = "Perforar hielo",
 	["prompt.deliver"] = "Entregar hielo",
@@ -525,31 +590,34 @@ local ES: { [string]: string } = {
 	["prompt.antenna"] = "Apuntar a la Tierra",
 	["prompt.console"] = "Tablero de energía",
 	["tip.day1_plan"] = "Primero dale energía al aire. ¡Hay que respirar!",
-	["tip.day1_science"] = "La energía para ciencia da puntos. ¡Pruébalo!",
+	["tip.day1_science"] = "La ciencia da estrellas. ¡Dale energía!",
 	["tip.greenhouse_tomorrow"] = "Las plantas tardan. La comida llega mañana.",
-	["tip.day1_shift"] = "Sigue las marcas para encontrar tus tareas.",
-	["tip.find_ice"] = "Hay hielo en el cráter oscuro. ¡Perfóralo!",
-	["tip.antenna"] = "Apunta la antena a la Tierra para avisos.",
+	["tip.day1_shift"] = "Sigue la luz de C.A.R.L. a tus tareas.",
+	["tip.find_ice"] = "Trae hielo del cráter. ¡Da agua y aire!",
+	["tip.antenna"] = "Conecta la antena: recibe avisos y manda descubrimientos.",
 	["tip.day2_greenhouse"] = "Dale energía a las plantas. Mañana te alimentan.",
-	["tip.storm_follow"] = "¡Sigue la luz de C.A.R.L. al refugio!",
+	["tip.storm_follow"] = "¡Sigue la luz naranja de C.A.R.L. al refugio!",
 	["tip.suit_home"] = "¿Poco aire en el traje? Entra a recargar.",
 	["marker.task"] = "Tarea",
+	-- Pantalla de fuentes: se quedan las unidades reales, con una explicación corta.
 	["fact.gravity"] = "La gravedad lunar es solo el {percent}% de la terrestre.",
 	["fact.light_delay"] = "Señal de radio Luna-Tierra: tarda unos {moon} segundos.",
 	["fact.mars_delay"] = "Mensajes a Marte tardan de {min} a {max} minutos, solo ida.",
 	["fact.oxygen"] = "Cada astronauta usa unos {kg} kg de oxígeno al día.",
-	["fact.water"] = "Agua para beber y comer: {kg} kg por astronauta al día.",
+	["fact.water"] = "Agua para beber y cocinar: {kg} kg por astronauta al día.",
 	["fact.food"] = "Un astronauta necesita unas {kcal} calorías de comida al día.",
 	["fact.lettuce"] = "En la Estación Espacial, la lechuga tardó {days} días en crecer.",
-	["fact.dose_moon"] = "En la superficie lunar: {msv} milisieverts de radiación al día.",
-	["fact.dose_earth"] = "En Estados Unidos, el promedio es {msv} milisieverts al año.",
+	["fact.dose_moon"] = "Radiación en la Luna: {msv} milisieverts al día (unidad de radiación).",
+	["fact.dose_earth"] = "Persona promedio en Estados Unidos: {msv} milisieverts al año.",
 	["fact.shelter"] = "Paredes gruesas de agua o tierra bloquean las partículas.",
-	["fact.sep"] = "Las partículas más rápidas llegan a la Tierra en {min} minutos.",
+	["fact.sep"] = "Partículas solares más rápidas: llegan a la Tierra en {min} minutos.",
 	["fact.sunlight"] = "Un sitio junto al cráter Shackleton: sol {days} días al año.",
 	["fact.cold"] = "Frío récord lunar: {k} kelvin, cráter Hermite, cerca del polo norte.",
 	["fact.ice"] = "Donde chocó LCROSS (cráter Cabeus), el suelo tenía {percent}% de hielo.",
 	["fact.flare_vs_storm"] = "Una gran llamarada no siempre manda partículas.",
 	["fact.career_limit"] = "Límite NASA por astronauta: menos de {msv} milisieverts en su carrera.",
+	["fact.sky_sun"] = "Cielo acelerado: el Sol real da la vuelta en {days} días.",
+	["fact.sky_earth"] = "Tierra real: una vuelta al día; aquí, mucho más rápido.",
 	["src.donki"] = "Clima espacial: NASA / CCMC DONKI",
 	["src.bvad"] = "Necesidades de astronautas: NASA Life Support Baseline (BVAD) 2022",
 	["src.lro"] = "Luz y frío lunar: NASA Lunar Reconnaissance Orbiter",
@@ -562,26 +630,26 @@ local ES: { [string]: string } = {
 	["src.list"] = "Lista completa con enlaces: DATA_SOURCES.md en nuestro código",
 	-- Misiones (títulos, tarjetas de inicio y de cierre). c3_failure.outro es el final parcial.
 	["mission.t1_steps.title"] = "Primeros pasos",
-	["mission.t1_steps.intro"] = "¡Te damos la bienvenida a la Luna! Sal con tu traje, mira alrededor y vuelve a entrar.",
+	["mission.t1_steps.intro"] = "¡Llegaste a la Luna! Sal con tu traje, mira alrededor y vuelve a entrar.",
 	["mission.t1_steps.outro"] = "¡Buenos pasos! En la Luna pesas menos.",
 	["mission.t2_power.title"] = "Reparte la energía",
-	["mission.t2_power.intro"] = "La base tiene poca energía. Repártela en el tablero y luego empieza tu turno.",
+	["mission.t2_power.intro"] = "La base tiene poca energía. Repártela en el tablero y luego ponte a trabajar.",
 	["mission.t2_power.outro"] = "¡Energía repartida! Primero el aire, siempre.",
 	["mission.t3_tasks.title"] = "Tareas de la base",
-	["mission.t3_tasks.intro"] = "¡Día de polvo! Apunta la antena a la Tierra, limpia un panel y trae hielo del cráter.",
-	["mission.t3_tasks.outro"] = "¡Tareas listas! El hielo da agua y aire.",
+	["mission.t3_tasks.intro"] = "¡Día de polvo! Conecta la antena, limpia un panel y trae hielo para hacer agua.",
+	["mission.t3_tasks.outro"] = "¡Tareas listas! El hielo da agua y el agua da aire.",
 	["mission.t4_storm.title"] = "Simulacro de tormenta",
-	["mission.t4_storm.intro"] = "¡Simulacro de tormenta! Cuando C.A.R.L. avise, corre al refugio grueso. Sus paredes de tierra frenan partículas.",
+	["mission.t4_storm.intro"] = "¡Simulacro! Cuando C.A.R.L. avise, corre al refugio. Sus gruesas paredes de tierra frenan partículas.",
 	["mission.t4_storm.outro"] = "¡A salvo! Las paredes gruesas frenaron las partículas.",
 	["mission.c1_arrival.title"] = "Capítulo 1: Nuevo hogar",
 	["mission.c1_arrival.intro"] = "¡Tu tripulación acaba de llegar! Cuídala unos días y trae hielo del cráter.",
-	["mission.c1_arrival.outro"] = "¡La base funciona! Desde la Tierra avisan: se acercan tormentas solares.",
+	["mission.c1_arrival.outro"] = "¡La base funciona! Desde la Tierra avisan: vienen tormentas solares.",
 	["mission.c2_storm.title"] = "Capítulo 2: Temporada de tormentas",
-	["mission.c2_storm.intro"] = "El Sol está muy activo. Atiende los avisos, mantén la antena conectada y refúgiate si llegan partículas.",
+	["mission.c2_storm.intro"] = "¡El Sol está muy activo! Mantén la antena conectada y escóndete cuando lleguen tormentas.",
 	["mission.c2_storm.outro"] = "¡Venciste la tormenta! Pero se oye un ruido raro en los tubos...",
 	["mission.c3_failure.title"] = "Capítulo 3: Algo se rompe",
-	["mission.c3_failure.intro"] = "Se rompió un tubo y vienen más llamaradas. Arregla la fuga y gana estrellas. No toda llamarada trae partículas.",
-	["mission.c3_failure.outro"] = "¡Base estable! Desde la Tierra: el siguiente destino es Marte. Pero la Luna aún guarda secretos...",
+	["mission.c3_failure.intro"] = "¡Se rompió un tubo! Arregla la fuga y gana estrellas. No toda llamarada trae tormenta.",
+	["mission.c3_failure.outro"] = "¡Base a salvo! Desde la Tierra: lo siguiente es Marte. Pero la Luna aún guarda secretos...",
 	["mission.free_play.title"] = "Juego libre",
 	["mission.free_play.intro"] = "Dirige la base a tu manera por muchos días. ¡Cualquier día te puede sorprender!",
 	["mission.free_play.outro"] = "¡Gran comandante! Juega otra vez por más estrellas.",
@@ -589,11 +657,11 @@ local ES: { [string]: string } = {
 	["obj.go_outside"] = "Sal de la base",
 	["obj.return_inside"] = "Vuelve a entrar",
 	["obj.set_power"] = "Reparte energía en el tablero",
-	["obj.start_shift"] = "Empieza el turno",
+	["obj.start_shift"] = "Ponte a trabajar",
 	["obj.clean_panel"] = "Limpia un panel solar",
 	["obj.drill_ice"] = "Perfora hielo en el cráter",
 	["obj.deliver_ice"] = "Lleva hielo a la máquina de agua",
-	["obj.align_antenna"] = "Apunta la antena a la Tierra",
+	["obj.align_antenna"] = "Conecta la antena con la Tierra",
 	["obj.repair_leak"] = "Arregla la fuga de aire",
 	["obj.reach_shelter"] = "Entra al refugio",
 	["obj.survive_storm"] = "Quédate a salvo en la tormenta",
@@ -629,23 +697,192 @@ local ES: { [string]: string } = {
 	["collect.cheese.name"] = "Queso lunar",
 	["collect.mars_potato.name"] = "Papa marciana",
 	["card.mini_earth.myth"] = "Mito: en el espacio no hay gravedad.",
-	["card.mini_earth.science"] = "Verdad: en la Estación Espacial la gravedad es cerca del 90% de la terrestre. Los astronautas flotan porque siempre caen.",
-	["card.mini_earth.reward"] = "¡C.A.R.L. se pinta azul y verde, como la Tierra!",
+	["card.mini_earth.science"] = "Verdad: en la Estación Espacial la gravedad es cerca del 90%. ¡Flotan porque siempre van cayendo!",
+	["card.mini_earth.reward"] = "¡C.A.R.L. se convierte en una mini Tierra que gira!",
 	["card.laika.myth"] = "¿Quién fue el primer animal en orbitar la Tierra?",
-	["card.laika.science"] = "Fue Laika, una perrita: Sputnik 2, 3 de noviembre de 1957. Los primeros vuelos ayudaron a crear el soporte vital.",
-	["card.laika.reward"] = "¡Una mochila de soporte vital color magenta!",
+	["card.laika.science"] = "Fue Laika, una perrita, en el Sputnik 2 en 1957. Esos vuelos ayudaron a proteger astronautas.",
+	["card.laika.reward"] = "¡Una mochila de aire color magenta para tu traje!",
 	["card.cheese.myth"] = "Mito: la Luna está hecha de queso.",
-	["card.cheese.science"] = "Verdad: las rocas lunares son anortosita y basalto. ¡Cerca del 43% del peso del suelo es oxígeno, atrapado en minerales!",
+	["card.cheese.science"] = "Verdad: la Luna es de roca. ¡Cerca del 43% del peso de su suelo es oxígeno!",
 	["card.cheese.reward"] = "¡El rover de ciencia se pinta amarillo queso!",
 	["card.mars_potato.myth"] = "Mito: extraterrestres hicieron la 'Cara de Marte', y las papas crecen fácil en suelo marciano.",
-	["card.mars_potato.science"] = "Verdad: la 'cara' de Viking 1 (1976) era un cerro gastado; ver caras es pareidolia. Phoenix (2008) encontró percloratos tóxicos.",
+	["card.mars_potato.science"] = "Verdad: la 'cara' de 1976 era un cerro gastado. El suelo marciano tiene percloratos, sales tóxicas.",
 	["card.mars_potato.reward"] = "¡Tu bandera de equipo aparece en el techo!",
 	["prompt.collect"] = "Recoger",
 	["carl.secret_found"] = "¡Encontraste un secreto de la Luna!",
 	["carl.all_secrets"] = "¡Los cuatro! ¡El observatorio está abierto!",
 	["observatory.teaser"] = "Próxima misión: Marte",
 	["story.secrets_hint"] = "Cuatro secretos se esconden cerca de la base. ¡Explora cada rincón, hasta los oscuros!",
+	-- Etapa 5: configuración, códigos, agua, datos de la antena, eclipse, pistas, traje del evento.
+	["ui.settings"] = "Configuración",
+	["ui.music_volume"] = "Volumen de la música",
+	["ui.effects_volume"] = "Volumen de los efectos",
+	["ui.funfacts_toggle"] = "Datos curiosos de C.A.R.L.",
+	["ui.guidance_toggle"] = "C.A.R.L. te muestra el camino",
+	["ui.redeem_title"] = "¿Tienes un código?",
+	["ui.redeem_placeholder"] = "Escribe tu código aquí",
+	["ui.redeem_button"] = "Usar código",
+	["ui.on"] = "Encendido",
+	["ui.off"] = "Apagado",
+	["ui.meter.water"] = "Agua",
+	["ui.meter_hint.air"] = "Todos lo respiran. ¡Mantenlo alto!",
+	["ui.meter_hint.food"] = "Todos comen cada día. Las plantas ayudan.",
+	["ui.meter_hint.dose"] = "Rayos del espacio: escóndete en el refugio",
+	["ui.meter_hint.water"] = "El hielo da agua. El agua da aire.",
+	["ui.data_waiting"] = "Por enviar: {n}",
+	["carl.data_sent"] = "¡Descubrimientos enviados a la Tierra: {n}! ¡Bien hecho!",
+	["carl.no_water"] = "¡Poca agua! La máquina de aire necesita hielo.",
+	["carl.code_ok"] = "¡El código funciona! Tu traje nuevo está listo.",
+	["carl.code_used"] = "Ya usaste este código.",
+	["carl.code_bad"] = "Mmm, ese código no funciona.",
+	["carl.eclipse_start"] = "¡Eclipse! La Tierra está tapando el Sol.",
+	["carl.eclipse_end"] = "¡Volvió el Sol! Terminó el eclipse.",
+	["cause.no_water"] = "Sin agua, la máquina hizo menos aire.",
+	["cause.data_waiting"] = "¡Descubrimientos esperando! Conecta la antena para enviarlos.",
+	["cosmetic.explorer26.name"] = "Traje dorado Explorador 2026",
 }
+
+-- Fun facts C.A.R.L. says now and then, in order "funfact.01", "funfact.02", ...
+-- Each line notes the DATA_SOURCES.md section and row it comes from.
+local FUNFACTS_EN: { string } = {
+	"On the Moon you weigh about one-sixth of your Earth weight. Jump high!", -- Power 29
+	"A day on Mars lasts 24 hours and 39 minutes.", -- Power 2
+	"A year on Mars lasts 687 Earth days. A long wait for birthdays!", -- Power 3
+	"Astronauts grew red lettuce on the Space Station. It took 33 days!", -- Life support 21
+	"About 43% of Moon soil's weight is oxygen, locked inside the rocks.", -- Cards 3
+	"A radio message from the Moon reaches Earth in about 1.3 seconds.", -- Communications 12
+	"A message to Mars takes 3 to 22 minutes, one way.", -- Communications 1
+	"The Space Station recycles 98% of its water. Even sweat gets cleaned!", -- Life support 13, 34
+	"Each astronaut breathes about 0.9 kg of oxygen every day.", -- Life support 1
+	"Hermite crater on the Moon reached about -250 degrees Celsius, the coldest ever measured!", -- Power 26
+	"Perseverance rover has driven more than 45 km on Mars. A record!", -- Communications 38
+	"Laika the dog was the first animal to orbit Earth, in 1957.", -- Cards 2
+	"Fruit flies went to space in 1947, before Laika!", -- Cards 2
+	"The 'Face on Mars' was just a worn hill. Seeing faces in things is called pareidolia!", -- Cards 4
+	"In 2008, the Phoenix lander found perchlorates in Mars soil: salts toxic to people.", -- Cards 5
+	"A rover tool called MOXIE made 122 grams of oxygen from Mars air!", -- Life support 15
+	"MOXIE's first try made enough oxygen for an astronaut to breathe for 10 minutes.", -- Life support 17
+	"In April 2026, Artemis II carried four astronauts on a 9-day trip.", -- Communications 37
+	"Jeremy Hansen of Canada flew on Artemis II in 2026.", -- Communications 37
+	"An astronaut uses about 2.5 kg of water a day for drinks and food.", -- Life support 3
+	"Astronauts need about 3000 calories of food every day.", -- Life support 7
+	"Radishes grown on the Space Station were ready in just 27 days.", -- Life support 37
+	"In 2021, astronauts ate chile peppers grown in space for the first time!", -- Life support 37
+	"Veggie, a garden on the Space Station, is about the size of a carry-on suitcase.", -- Life support 22
+	"The Space Station makes oxygen by splitting water with electricity from its solar panels.", -- Life support 9
+	"The Sahara desert has 100 times more water than sunny Moon soil!", -- Life support 36
+	"Ice hides in Moon craters where sunlight never reaches the floor.", -- Life support 19
+	"In 2009, LCROSS crashed into a Moon crater on purpose and found water!", -- Life support 20
+	"Shackleton crater is 21 km wide and 4 km deep. Its floor is always dark.", -- Power 27
+	"One spot near Shackleton crater gets sunlight 240 days a year.", -- Power 27
+	"On the Moon, daytime lasts about 14 Earth days. So does the night!", -- Power 24
+	"Near the Moon's middle, days reach 120 degrees Celsius and nights drop to -130!", -- Power 25
+	"On Mars you would weigh about 38% of what you weigh on Earth.", -- Power 9
+	"Mars air is about 95% carbon dioxide, so people can't breathe it.", -- Power 8
+	"In 2018, a dust storm covered a quarter of Mars!", -- Power 10
+	"Opportunity rover was built for 90 Mars days but worked almost 15 years!", -- Power 11
+	"The strongest Mars winds are less than half as fast as some hurricanes.", -- Power 36
+	"The InSight lander felt 1,319 marsquakes. Mars shakes too!", -- Power 14
+	"The Space Station's solar wings stretch 109 meters from tip to tip.", -- Power 23
+	"NASA's big antennas listen to space from California, Spain and Australia.", -- Communications 13
+	"Perseverance sends 99.9% of its science through spacecraft flying above Mars.", -- Communications 16
+	"Lasers can send space data up to 100 times faster than radio.", -- Communications 39
+	"The Moon is about 384,400 km away from Earth.", -- Communications 35
+	"A trip to Mars takes about 200 days. The best launch chance comes every 26 months.", -- Communications 22
+	"Four volunteers lived 378 days in a pretend Mars home on Earth!", -- Communications 18
+	"Light from a Sun flare reaches Earth in about 8 minutes.", -- Radiation 20
+	"The fastest Sun particles can reach Earth in about 30 minutes.", -- Radiation 22
+	"A big Sun flare does not always send a particle storm.", -- Radiation 43, game science rule
+	"About 10 cm of water shields a crew from the worst Sun storm in 100 years.", -- Radiation 23
+	"Orion astronauts can build a storm shelter from their bags in under an hour!", -- Radiation 26
+	"A huge 1972 Sun storm came between two Apollo trips. No astronauts were in its path!", -- Radiation 14
+	"In May 2024, Earth had its strongest space storm since 2003.", -- Radiation 15
+	"In 2017, a Sun storm lit up a glowing aurora all over Mars!", -- Radiation 12
+	"Space rays from far away come from every direction, all the time.", -- Radiation 11
+	"On the Space Station gravity is still about 90%. Astronauts float because they keep falling!", -- Cards 1
+	"Sunlight on Mars is less than half as strong as on Earth.", -- Power 1
+	"Mars air is only about 1% as thick as Earth's air.", -- Power 36
+	"Perseverance drove more than 90% of its trip by itself, choosing its own path!", -- Communications 38
+	"Every 26 months, Mars hides behind the Sun and radio messages can get scrambled.", -- Communications 5
+	"Growing all the food for one person would need about 50 square meters of plants.", -- Life support 24
+}
+
+local FUNFACTS_ES: { string } = {
+	"En la Luna pesas cerca de una sexta parte que en la Tierra. ¡Salta alto!",
+	"Un día en Marte dura 24 horas y 39 minutos.",
+	"Un año en Marte dura 687 días terrestres. ¡Mucha espera para tu cumpleaños!",
+	"Los astronautas cultivaron lechuga roja en la Estación Espacial. ¡Tardó 33 días!",
+	"Cerca del 43% del peso del suelo lunar es oxígeno, atrapado en las rocas.",
+	"Un mensaje de radio de la Luna llega a la Tierra en unos 1.3 segundos.",
+	"Un mensaje a Marte tarda de 3 a 22 minutos, solo de ida.",
+	"La Estación Espacial recicla el 98% de su agua. ¡Hasta el sudor se limpia!",
+	"Cada astronauta respira unos 0.9 kg de oxígeno al día.",
+	"El cráter Hermite, en la Luna, midió unos -250 grados Celsius. ¡El lugar más frío medido!",
+	"El rover Perseverance ha recorrido más de 45 km en Marte. ¡Un récord!",
+	"La perrita Laika fue el primer animal en orbitar la Tierra, en 1957.",
+	"Unas moscas de la fruta viajaron al espacio en 1947, ¡antes que Laika!",
+	"La 'Cara de Marte' era un cerro gastado. Ver caras en las cosas se llama pareidolia.",
+	"En 2008, la sonda Phoenix halló percloratos en suelo marciano: sales tóxicas para las personas.",
+	"MOXIE, un aparato del rover, hizo 122 gramos de oxígeno con el aire de Marte.",
+	"La primera prueba de MOXIE hizo oxígeno para que un astronauta respire 10 minutos.",
+	"En abril de 2026, Artemis II llevó a cuatro astronautas en un viaje de 9 días.",
+	"Jeremy Hansen, de Canadá, voló en Artemis II en 2026.",
+	"Un astronauta usa unos 2.5 kg de agua al día para beber y comer.",
+	"Los astronautas necesitan unas 3000 calorías de comida cada día.",
+	"Los rábanos de la Estación Espacial estuvieron listos en solo 27 días.",
+	"En 2021, los astronautas comieron por primera vez chiles cultivados en el espacio.",
+	"Veggie, un huerto de la Estación Espacial, mide como una maleta de mano.",
+	"La Estación Espacial hace oxígeno partiendo agua con electricidad de sus paneles solares.",
+	"¡El desierto del Sahara tiene 100 veces más agua que el suelo lunar soleado!",
+	"Hay hielo escondido en cráteres lunares donde el Sol nunca llega al fondo.",
+	"En 2009, LCROSS chocó a propósito contra un cráter lunar y encontró agua.",
+	"El cráter Shackleton: 21 km de ancho, 4 km de hondo, ¡y fondo siempre oscuro!",
+	"Un lugar junto al cráter Shackleton recibe sol 240 días al año.",
+	"En la Luna, el día dura unos 14 días terrestres. ¡Y la noche también!",
+	"Cerca del ecuador lunar, el día llega a 120 grados Celsius y la noche a -130.",
+	"En Marte pesarías cerca del 38% de lo que pesas en la Tierra.",
+	"El aire de Marte es casi 95% dióxido de carbono: no se puede respirar.",
+	"¡En 2018, una tormenta de polvo cubrió una cuarta parte de Marte!",
+	"El rover Opportunity se hizo para 90 días marcianos, ¡pero funcionó casi 15 años!",
+	"Los vientos más fuertes de Marte van a menos de la mitad que algunos huracanes.",
+	"La sonda InSight sintió 1,319 sismos en Marte. ¡Marte también tiembla!",
+	"Las alas solares de la Estación Espacial miden 109 metros de punta a punta.",
+	"Las grandes antenas de la NASA escuchan el espacio desde California, España y Australia.",
+	"Perseverance manda el 99.9% de su ciencia por naves que vuelan sobre Marte.",
+	"Los láseres pueden mandar datos espaciales hasta 100 veces más rápido que la radio.",
+	"La Luna está a unos 384,400 km de la Tierra.",
+	"Ir a Marte toma unos 200 días. La mejor salida llega cada 26 meses.",
+	"¡Cuatro voluntarios vivieron 378 días en una casa marciana de práctica, en la Tierra!",
+	"La luz de una llamarada solar llega a la Tierra en unos 8 minutos.",
+	"Las partículas solares más rápidas pueden llegar a la Tierra en unos 30 minutos.",
+	"Una gran llamarada solar no siempre manda una tormenta de partículas.",
+	"10 cm de agua protegen a la tripulación de la peor tormenta solar en 100 años.",
+	"¡En Orion, los astronautas arman un refugio con sus bolsas en menos de una hora!",
+	"Una gran tormenta solar de 1972 llegó entre dos viajes Apollo. ¡Ningún astronauta en su camino!",
+	"En mayo de 2024, la Tierra tuvo su tormenta espacial más fuerte desde 2003.",
+	"¡En 2017, una tormenta solar encendió una aurora en todo Marte!",
+	"Los rayos del espacio lejano llegan desde todas direcciones, todo el tiempo.",
+	"En la Estación Espacial la gravedad es cerca del 90%. ¡Flotan porque siempre van cayendo!",
+	"La luz del Sol en Marte es menos de la mitad que en la Tierra.",
+	"La atmósfera de Marte tiene apenas el 1% de la densidad de la terrestre.",
+	"Perseverance manejó solo más del 90% de su camino, ¡eligiendo su propia ruta!",
+	"Cada 26 meses, Marte se esconde tras el Sol y la radio puede fallar.",
+	"Para cultivar toda la comida de una persona, harían falta unos 50 metros cuadrados de plantas.",
+}
+
+assert(#FUNFACTS_EN == #FUNFACTS_ES, "fun fact lists differ in length")
+local FUNFACT_COUNT = #FUNFACTS_EN
+
+local function funFactKey(index: number): string
+	return string.format("funfact.%02d", index)
+end
+
+for index = 1, FUNFACT_COUNT do
+	local key = funFactKey(index)
+	table.insert(KEYS, key)
+	EN[key] = FUNFACTS_EN[index]
+	ES[key] = FUNFACTS_ES[index]
+end
 
 local STRINGS: { [Language]: { [string]: string } } = {
 	en = table.freeze(EN),
@@ -695,6 +932,13 @@ function Localization.getLanguage(): Language
 	return currentLanguage
 end
 
+-- Key of fun fact number `index` (1-based): 1 -> "funfact.01". No range check: callers use
+-- 1 .. Localization.FUNFACT_COUNT.
+function Localization.funFactKey(index: number): string
+	return funFactKey(index)
+end
+
+Localization.FUNFACT_COUNT = FUNFACT_COUNT
 Localization.KEYS = table.freeze(KEYS)
 Localization.LANGUAGES = table.freeze({ "en", "es" } :: { Language })
 Localization.STRINGS = table.freeze(STRINGS)

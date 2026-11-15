@@ -29,6 +29,8 @@ local DemoKeys = require(Client:WaitForChild("DemoKeys"))
 local Objectives = require(Client:WaitForChild("Objectives"))
 local Collection = require(Client:WaitForChild("Collection"))
 local Rewards = require(Client:WaitForChild("Rewards"))
+local Settings = require(Client:WaitForChild("Settings"))
+local FunFacts = require(Client:WaitForChild("FunFacts"))
 
 print(`[SpaceBaseOdyssey] client started, build {Version.BUILD}`)
 
@@ -53,32 +55,13 @@ local missionSelect = MissionSelect.new(root, {
 	openCollection = collection.open,
 })
 local powerBoard = PowerBoard.new(root, messages.show, sources.addButton)
-local hud = Hud.new(root)
+local objectives = Objectives.new(root)
+-- The HUD meters sit in the left column, right under the objectives panel.
+local hud = Hud.new(root, { columnTop = objectives.getBottom })
 local report = Report.new(root, sources.addButton)
 local sprint = Sprint.new(root)
-local objectives = Objectives.new(root)
-
--- Language toggle (top right): shows the current language; a tap switches EN <-> ES.
-local languageButton = Ui.button(root, {
-	name = "Language",
-	size = UDim2.fromScale(0.17, 0.08),
-	position = UDim2.fromScale(0.985, 0.02),
-	anchor = Vector2.new(1, 0),
-	color = Ui.COLORS.secondary,
-	strokeColor = Ui.ROLE.accent,
-	icon = Ui.ICONS.language,
-	tint = Ui.ROLE.accent,
-	maxText = 24,
-	zindex = 60,
-}, function()
-	local nextLanguage: Store.Language = if Store.getLanguage() == "en" then "es" else "en"
-	Store.setLanguage(nextLanguage)
-	Store.send({ type = "SetLanguage", language = nextLanguage })
-end)
-
-local function renderLanguageButton()
-	Ui.setButton(languageButton, Store.t("ui.language"))
-end
+-- Settings button (top right) and panel: language, volumes, C.A.R.L. options, redeem code.
+local settings = Settings.new(root)
 
 local shownPhase: string? = nil
 local boardShown: boolean? = nil
@@ -118,6 +101,7 @@ local function showPhase(phase: string)
 	messages.setPhase(phase)
 	-- A new phase needs the player's attention (e.g. the shift clock starts): close the panels.
 	sources.close()
+	settings.close()
 	if phase ~= "Briefing" then
 		collection.close()
 	end
@@ -134,10 +118,13 @@ local function renderAll()
 	sources.render()
 	objectives.render()
 	collection.render()
-	renderLanguageButton()
+	settings.render()
 end
 
 Store.onChanged(function(kind: Store.ChangeKind)
+	if kind == "settings" then
+		return -- Settings, C.A.R.L. and the fun facts read their settings themselves
+	end
 	if kind == "stats" then
 		hud.render()
 		return
@@ -146,6 +133,7 @@ Store.onChanged(function(kind: Store.ChangeKind)
 		missionSelect.render()
 		collection.render()
 		report.render()
+		hud.render()
 		return
 	end
 	local phase = Store.phase()
@@ -193,6 +181,7 @@ end)
 Markers.start()
 CarlDrone.start()
 Rewards.start()
+FunFacts.start({ showTip = messages.showTip, isIdle = messages.isIdle })
 Onboarding.start({
 	show = messages.show,
 	showTip = messages.showTip,
@@ -235,6 +224,10 @@ end)
 messageRemote.OnClientEvent:Connect(function(ref: any)
 	if type(ref) == "table" and type(ref.key) == "string" then
 		messages.show(ref)
+		-- Answers to a redeem code also show inside the Settings panel (it covers the bubble).
+		if string.match(ref.key, "^carl%.code_") then
+			settings.showRedeemResult(ref)
+		end
 	end
 end)
 

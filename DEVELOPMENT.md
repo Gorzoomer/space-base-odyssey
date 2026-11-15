@@ -134,6 +134,40 @@ Tested in Studio:
 - The observatory door opening only after all four finds, with the teaser localized.
 - The backpack and team flag rewards.
 
+**About 19:00 – Team playtest feedback.** The team asked for:
+- Compact meters on the left, and bars that move.
+- A reason to link the antenna and to fetch water.
+- A real, rotating Earth with phases and eclipses.
+- An astronaut suit that fits any avatar.
+- C.A.R.L. pointing the way and telling fun facts.
+- A settings menu with an event code.
+- Simpler words everywhere.
+
+**20:42 – Stage 5: feedback built.**
+- **Live meters:** air, food, radiation and water move during the shift toward the end-of-day result. Actions show at once: ice raises water and air, a leak drains air.
+- **Water matters:** oxygen is made from water with electricity. Without ice the water tank empties and the air maker makes less air.
+- **Antenna matters:** science only counts when it is sent to Earth. Real rovers need a radio link to send data. Without the antenna, data waits and gives no stars.
+- **Real Earth:** NASA Blue Marble map (public domain) on a cheap rotating disc. The day/night line follows the Sun.
+  - Roblox's Sun model does not circle the pole on its own, so the Sun follows a precomputed horizon track, as at the real lunar south pole.
+  - When the Sun passes behind the Earth, an eclipse dims the base and shows Earth's red-orange ring.
+  - A plain black skybox keeps the airless sky black.
+- **Astronaut suit for every avatar:** bubble helmet with a gold visor, helmet lamp, chest panel, backpack (magenta with the Laika reward).
+- **C.A.R.L.:**
+  - A guidance beam points to the next task.
+  - About 60 verified fun facts appear at random without repeats.
+  - The Earth skin now uses the real Earth map.
+- **Settings:** language, music and effects volume (ready for future audio), fun facts and guidance toggles, and a redeem-code box validated on the server.
+- **Plain-language rewrite** of all texts for ages 7–12.
+
+Tested in Studio:
+- Compact HUD with water and the "data waiting" indicator.
+- Live meters moving.
+- Suit on an R15 avatar.
+- Guidance beam.
+- Black sky.
+- Real Earth with continents and phase shading.
+- Eclipse triggered with F10.
+
 ## Decisions
 
 | Decision | Who decided | Why |
@@ -149,6 +183,10 @@ Tested in Studio:
 | Visual identity "Lunar Sunrise", Tabler icons | Team | Consistent, kid-friendly look; human-made MIT icons. |
 | Four original collectibles plus an observatory | Team | The team's own first idea, kept without any agency letters. |
 | Tutorial plus a 3-chapter story | Team, on AI recommendation | Teaches every mechanic, then lets kids apply it. |
+| Water and antenna with real consequences | Team, on AI recommendation | Every task must unlock something or cost something. |
+| Real NASA Earth map with eclipses | Team | Gives the base lighting a reason and teaches lunar eclipses. |
+| Same astronaut suit for every avatar | Team | Consistent look whatever the player's skin. |
+| No Space Apps or NASA shirt as the event reward | Team, on AI recommendation | NASA insignia is not allowed; an original Explorer 2026 look instead. |
 | Roblox Studio as the engine | Team | Team skills; Roblox was used in earlier Space Apps editions. |
 
 ## Testing evidence

@@ -13,12 +13,12 @@ local ROLE = Ui.ROLE
 
 -- Layout (fractions of the screen). Below the Roblox menu buttons in the top-left corner.
 --   Planning: y 0.10 to at most 0.28, above the first power-board row (y 0.29); meters start at x 0.23.
---   Shift: y 0.12 to at most 0.48, left of the meters (x >= 0.22), above the C.A.R.L. bubble (y 0.5).
+--   Shift: y 0.12 to at most 0.42; the HUD meters panel sits right under it (see getBottom).
 local PANEL_X = 0.01
 local PANEL_WIDTH = 0.2
 local LAYOUT = table.freeze({
 	Planning = { top = 0.1, header = 0.034, row = 0.034, maxHeight = 0.18 },
-	Shift = { top = 0.12, header = 0.042, row = 0.05, maxHeight = 0.36 },
+	Shift = { top = 0.12, header = 0.04, row = 0.046, maxHeight = 0.3 },
 })
 local PAD = 0.006
 local MAX_ROWS = 6
@@ -29,6 +29,8 @@ local Objectives = {}
 export type ObjectivesView = {
 	setPhase: (phase: string) -> (),
 	render: () -> (),
+	-- Bottom edge of the panel as a fraction of the screen height, or nil while it is hidden.
+	getBottom: () -> number?,
 }
 
 type Row = {
@@ -178,7 +180,14 @@ function Objectives.new(root: Frame): ObjectivesView
 		render()
 	end
 
-	return { setPhase = setPhase, render = render }
+	local function getBottom(): number?
+		if not panel.Visible then
+			return nil
+		end
+		return panel.Position.Y.Scale + panel.Size.Y.Scale
+	end
+
+	return { setPhase = setPhase, render = render, getBottom = getBottom }
 end
 
 return Objectives

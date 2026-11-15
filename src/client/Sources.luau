@@ -145,6 +145,15 @@ local FACTS: { Fact } = {
 		tint = ROLE.reward,
 		params = { msv = formatNumber(REAL.CAREER_DOSE_LIMIT_MSV, 0) },
 	},
+	-- The game sky is sped up (WorldBuilder: the Sun circles in minutes, the Earth turns in minutes).
+	-- At the south pole the real Sun circles the horizon once per lunar day.
+	{
+		key = "fact.sky_sun",
+		icon = ICONS.storm,
+		tint = ROLE.star,
+		params = { days = formatNumber(REAL.LUNAR_DAY_EARTH_DAYS, 1) },
+	},
+	{ key = "fact.sky_earth", icon = ICONS.earth, tint = ROLE.accent, params = {} },
 }
 
 local SOURCE_KEYS: { string } = {

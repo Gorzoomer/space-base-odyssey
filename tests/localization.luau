@@ -2,10 +2,11 @@
 -- Space Base Odyssey - localization tests. Run with: lune run tests/localization
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 -- Fails if a key is missing in English or Spanish, a string has too many words (after removing
--- {placeholders}: 8 for gameplay text, 10 for "fact." and "src." lines on the Sources screen, 20
--- for "card.", "mission." and "story." cards), placeholders differ between languages, a string
--- contains emoji or symbols outside Latin text, a source file uses an unknown key, or the API
--- misbehaves.
+-- {placeholders}: 8 for gameplay text, 10 for "fact." and "src." lines on the Sources screen, 16
+-- for "card.", "mission.", "story." cards and "funfact." lines), placeholders differ between
+-- languages, a string contains emoji or symbols outside Latin text, gameplay text uses technical
+-- jargon, a fun fact repeats or quotes a number missing from DATA_SOURCES.md, a source file uses
+-- an unknown key, or the API misbehaves.
 
 local fs = require("@lune/fs")
 local process = require("@lune/process")
@@ -17,9 +18,10 @@ local MAX_WORDS = 8
 local PREFIX_MAX_WORDS: { [string]: number } = {
 	fact = 10,
 	src = 10,
-	card = 20,
-	mission = 20,
-	story = 20,
+	card = 16,
+	mission = 16,
+	story = 16,
+	funfact = 16,
 }
 
 local function maxWords(key: string): number
@@ -145,6 +147,8 @@ local EXPECTED: { [string]: { string } } = {
 	["fact.ice"] = { "percent" },
 	["fact.flare_vs_storm"] = {},
 	["fact.career_limit"] = { "msv" },
+	["fact.sky_sun"] = { "days" },
+	["fact.sky_earth"] = {},
 	["src.donki"] = {},
 	["src.bvad"] = {},
 	["src.lro"] = {},
@@ -237,7 +241,41 @@ local EXPECTED: { [string]: { string } } = {
 	["carl.all_secrets"] = {},
 	["observatory.teaser"] = {},
 	["story.secrets_hint"] = {},
+	-- Stage 5: settings, codes, water, antenna data, eclipse, meter hints, event cosmetic.
+	["ui.settings"] = {},
+	["ui.music_volume"] = {},
+	["ui.effects_volume"] = {},
+	["ui.funfacts_toggle"] = {},
+	["ui.guidance_toggle"] = {},
+	["ui.redeem_title"] = {},
+	["ui.redeem_placeholder"] = {},
+	["ui.redeem_button"] = {},
+	["ui.on"] = {},
+	["ui.off"] = {},
+	["ui.meter.water"] = {},
+	["ui.meter_hint.air"] = {},
+	["ui.meter_hint.food"] = {},
+	["ui.meter_hint.dose"] = {},
+	["ui.meter_hint.water"] = {},
+	["ui.data_waiting"] = { "n" },
+	["carl.data_sent"] = { "n" },
+	["carl.no_water"] = {},
+	["carl.code_ok"] = {},
+	["carl.code_used"] = {},
+	["carl.code_bad"] = {},
+	["carl.eclipse_start"] = {},
+	["carl.eclipse_end"] = {},
+	["cause.no_water"] = {},
+	["cause.data_waiting"] = {},
+	["cosmetic.explorer26.name"] = {},
 }
+
+-- Fun facts: "funfact.01" .. "funfact.NN" with N = Localization.FUNFACT_COUNT, no placeholders.
+local MIN_FUNFACTS = 45
+local funFactCount: number = Localization.FUNFACT_COUNT
+for index = 1, funFactCount do
+	EXPECTED[string.format("funfact.%02d", index)] = {}
+end
 
 local failures = 0
 local passes = 0
@@ -341,6 +379,74 @@ for _, lang in Localization.LANGUAGES do
 	end
 end
 
+-- 2c. Plain language: gameplay text avoids technical words. Only the Sources screen ("fact." and
+-- "src.") may keep real terms such as millisieverts, kelvin or the BVAD document name.
+local JARGON: { string } = {
+	"allocation",
+	"allocate",
+	"telemetry",
+	"sep",
+	"mev",
+	"dose",
+	"life support",
+	"life-support",
+	"millisievert",
+	"kelvin",
+	"flare class",
+	"asignación",
+	"telemetría",
+	"dosis",
+	"soporte vital",
+	"milisievert",
+}
+
+local function sourcesScreenKey(key: string): boolean
+	return string.sub(key, 1, 5) == "fact." or string.sub(key, 1, 4) == "src."
+end
+
+for _, lang in Localization.LANGUAGES do
+	for key, text in Localization.STRINGS[lang] do
+		if not sourcesScreenKey(key) then
+			local lower = string.lower(text)
+			for _, word in JARGON do
+				-- Whole words only: frontier patterns stop "sep" matching inside "separate".
+				local pattern = "%f[%w]" .. string.gsub(word, "%-", "%%-") .. "%f[%W]"
+				check(
+					string.find(lower, pattern) == nil,
+					string.format("%s %s uses the technical word '%s': %s", lang, key, word, text)
+				)
+			end
+		end
+	end
+end
+
+-- 2d. Fun facts: enough of them, the API matches, no line repeats, and every number they quote is
+-- written somewhere in DATA_SOURCES.md (no invented numbers).
+check(type(funFactCount) == "number" and funFactCount >= MIN_FUNFACTS, "at least 45 fun facts")
+check(Localization.funFactKey(1) == "funfact.01", "funFactKey(1)")
+check(Localization.funFactKey(funFactCount) == string.format("funfact.%02d", funFactCount), "funFactKey(last)")
+check(Localization.STRINGS.en[string.format("funfact.%02d", funFactCount + 1)] == nil, "no fun fact past the count")
+
+local dataSources = fs.readFile("DATA_SOURCES.md")
+for _, lang in Localization.LANGUAGES do
+	local seen: { [string]: string } = {}
+	for index = 1, funFactCount do
+		local key = string.format("funfact.%02d", index)
+		local text = Localization.STRINGS[lang][key]
+		if type(text) == "string" then
+			check(seen[text] == nil, string.format("%s %s repeats %s", lang, key, seen[text] or ""))
+			seen[text] = key
+			for number in string.gmatch(text, "%d[%d,.]*") do
+				local clean = string.gsub(number, "[,.]+$", "")
+				check(
+					string.find(dataSources, clean, 1, true) ~= nil,
+					string.format("%s %s quotes %s, not found in DATA_SOURCES.md", lang, key, clean)
+				)
+			end
+		end
+	end
+end
+
 -- 3. Every full key quoted in the game source exists (scan src/ for quoted keys). Keys built at
 -- run time from a quoted prefix ending in "." (for example "ui.system." .. name) are skipped.
 local KEY_PREFIXES = {
@@ -360,6 +466,8 @@ local KEY_PREFIXES = {
 	"card",
 	"story",
 	"observatory",
+	"cosmetic",
+	"funfact",
 }
 
 local function luauFiles(dir: string, out: { string })
@@ -381,7 +489,8 @@ luauFiles("src", sourceFiles)
 table.sort(sourceFiles)
 check(table.find(sourceFiles, "src/shared/Simulation.luau") ~= nil, "source scan finds Simulation.luau")
 for _, file in sourceFiles do
-	local source = fs.readFile(file)
+	-- Comments may name key patterns such as "funfact.NN"; only code counts.
+	local source = string.gsub(fs.readFile(file), "%-%-[^\n]*", "")
 	for quoted in string.gmatch(source, '"([%a_]+%.[%w_.]+)"') do
 		local prefix = string.match(quoted, "^([%a_]+)%.")
 		if prefix and table.find(KEY_PREFIXES, prefix) and string.sub(quoted, -1) ~= "." then

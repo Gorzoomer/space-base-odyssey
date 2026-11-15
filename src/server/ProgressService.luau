@@ -1,5 +1,6 @@
 --!strict
--- Space Base Odyssey - saved progress per player: completed missions and the four hidden collectibles.
+-- Space Base Odyssey - saved progress per player: completed missions, the four hidden collectibles
+-- and event cosmetics from redeem codes.
 -- Progress is saved with DataStoreService ("SBO_Progress_v1", key "u_" .. UserId). When DataStores
 -- are not available (an unpublished place, or Studio without API access) progress lives in memory for
 -- the session. A save only ever adds: it merges with what is already stored, so nothing is lost if two
@@ -8,10 +9,12 @@
 -- Collectibles and their rewards (team decision; each reward is a visual surprise, never a gameplay
 -- advantage, so the mission stays fair for every player):
 --   mini_earth  -> C.A.R.L. "Earth skin" (client side, the player's own drone)
---   laika       -> a magenta life-support backpack on the player's character (here, seen by everyone)
+--   laika       -> the suit backpack turns magenta (SuitService, seen by everyone)
 --   cheese      -> the science rover gets a cheese-yellow paint job (world, if any present player owns it)
 --   mars_potato -> a team flag on the habitat roof (world, if any present player owns it)
 --   all four    -> the hidden Observatory opens for that player (client side)
+-- Cosmetics (Progress.cosmetics) come from redeem codes (src/server/Codes.luau, server only):
+--   explorer26  -> gold visor and gold suit bands (SuitService)
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local DataStoreService = game:GetService("DataStoreService")
@@ -19,9 +22,11 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local MissionData = require(Shared:WaitForChild("MissionData"))
 local Missions = require(Shared:WaitForChild("Missions"))
-local Theme = require(Shared:WaitForChild("Theme"))
 local Types = require(Shared:WaitForChild("Types"))
+
+local Codes = require(script.Parent:WaitForChild("Codes"))
 
 type Progress = Types.Progress
 
@@ -34,11 +39,13 @@ export type Remotes = {
 type Record = {
 	completed: { [string]: boolean },
 	collectibles: { [string]: boolean },
+	cosmetics: { [string]: boolean },
 	canSave: boolean, -- false until the stored data was read (never overwrite what we could not read)
 	dirty: boolean,
 	saveScheduled: boolean,
 	lastSaveAt: number,
 	lastPickup: { [string]: number }, -- os.clock() of the last pickup per collectible (debounce)
+	lastRedeemAt: number, -- os.clock() of the last redeem attempt (rate limit)
 	connections: { RBXScriptConnection },
 }
 
@@ -52,8 +59,6 @@ local LOAD_RETRY_SECONDS = 2
 local CLOSE_BUDGET_SECONDS = 25 -- BindToClose has about 30 seconds
 local PICKUP_DEBOUNCE_SECONDS = 1
 local PICKUP_EXTRA_RANGE = 8 -- studs beyond the prompt's own range (lag), checked on the server
-local TORSO_WAIT_SECONDS = 10
-local PACK_NAME = "LaikaPack"
 
 local ProgressService = {}
 
@@ -98,7 +103,11 @@ local function union(into: { [string]: boolean }, from: { [string]: boolean })
 end
 
 local function progressOf(record: Record): Progress
-	return { completed = table.clone(record.completed), collectibles = table.clone(record.collectibles) }
+	return {
+		completed = table.clone(record.completed),
+		collectibles = table.clone(record.collectibles),
+		cosmetics = table.clone(record.cosmetics),
+	}
 end
 
 local function ownsAll(record: Record): boolean
@@ -157,15 +166,18 @@ local function save(player: Player, record: Record)
 	savesInFlight += 1
 	local completed = table.clone(record.completed)
 	local collectibles = table.clone(record.collectibles)
+	local cosmetics = table.clone(record.cosmetics)
 	local ok, err = pcall(function()
 		dataStore:UpdateAsync(keyFor(player), function(old: any): any
 			local merged = {
 				v = DATA_VERSION,
 				completed = sanitizeSet(type(old) == "table" and old.completed, isMissionId),
 				collectibles = sanitizeSet(type(old) == "table" and old.collectibles, Missions.isCollectible),
+				cosmetics = sanitizeSet(type(old) == "table" and old.cosmetics, Codes.isCosmetic),
 			}
 			union(merged.completed, completed)
 			union(merged.collectibles, collectibles)
+			union(merged.cosmetics, cosmetics)
 			return merged
 		end)
 	end)
@@ -219,81 +231,6 @@ local function refreshWorldRewards()
 	end
 end
 
-local function packPart(name: string, size: Vector3, color: Color3, material: Enum.Material, parent: Instance): Part
-	local part = Instance.new("Part")
-	part.Name = name
-	part.Size = size
-	part.Color = color
-	part.Material = material
-	part.TopSurface = Enum.SurfaceType.Smooth
-	part.BottomSurface = Enum.SurfaceType.Smooth
-	part.Anchored = false
-	part.CanCollide = false
-	part.CanQuery = false
-	part.CanTouch = false
-	part.Massless = true
-	part.CastShadow = false
-	part.Parent = parent
-	return part
-end
-
-local function weld(a: BasePart, b: BasePart)
-	local constraint = Instance.new("WeldConstraint")
-	constraint.Part0 = a
-	constraint.Part1 = b
-	constraint.Parent = a
-end
-
--- The laika reward: a small magenta life-support pack (oxygen tanks and a cyan status strip),
--- welded to the back of the torso. Built from plain Parts.
-local function attachPack(character: Model)
-	if character:FindFirstChild(PACK_NAME) then
-		return
-	end
-	local found: Instance? = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
-	if found == nil then
-		found = character:WaitForChild("UpperTorso", TORSO_WAIT_SECONDS)
-	end
-	if found == nil or not found:IsA("BasePart") or character.Parent == nil then
-		return
-	end
-	if character:FindFirstChild(PACK_NAME) then
-		return
-	end
-	local torso = found :: BasePart
-	local palette = Theme.PALETTE
-	local model = Instance.new("Model")
-	model.Name = PACK_NAME
-
-	local body = packPart("Body", Vector3.new(1.6, 1.9, 0.7), palette.magenta, Enum.Material.SmoothPlastic, model)
-	local back = torso.CFrame * CFrame.new(0, 0.1, torso.Size.Z / 2 + body.Size.Z / 2)
-	body.CFrame = back
-	model.PrimaryPart = body
-
-	for _, side in { -1, 1 } do
-		local tank = packPart("Tank", Vector3.new(1.7, 0.5, 0.5), palette.cream, Enum.Material.SmoothPlastic, model)
-		tank.Shape = Enum.PartType.Cylinder
-		tank.CFrame = back * CFrame.new(side * 0.45, 0, body.Size.Z / 2 + 0.2) * CFrame.Angles(0, 0, math.rad(90))
-		weld(body, tank)
-	end
-	local strip = packPart("Status", Vector3.new(1.2, 0.18, 0.08), palette.cyan, Enum.Material.Neon, model)
-	strip.CFrame = back * CFrame.new(0, 0.7, body.Size.Z / 2 + 0.45)
-	weld(body, strip)
-	local cap = packPart("Cap", Vector3.new(1.7, 0.25, 0.85), palette.nightLight, Enum.Material.SmoothPlastic, model)
-	cap.CFrame = back * CFrame.new(0, body.Size.Y / 2 + 0.1, 0)
-	weld(body, cap)
-
-	weld(torso, body)
-	model.Parent = character
-end
-
-local function applyPack(player: Player, record: Record)
-	local character = player.Character
-	if record.collectibles.laika and character then
-		task.spawn(attachPack, character)
-	end
-end
-
 ----------------------------------------------------------------------------------------------------
 -- Players
 
@@ -304,22 +241,16 @@ local function addPlayer(player: Player)
 	local record: Record = {
 		completed = {},
 		collectibles = {},
+		cosmetics = {},
 		canSave = false,
 		dirty = false,
 		saveScheduled = false,
 		lastSaveAt = -math.huge,
 		lastPickup = {},
+		lastRedeemAt = -math.huge,
 		connections = {},
 	}
 	records[player] = record
-	table.insert(
-		record.connections,
-		player.CharacterAdded:Connect(function(character: Model)
-			if record.collectibles.laika then
-				attachPack(character)
-			end
-		end)
-	)
 
 	task.spawn(function()
 		local dataStore = store
@@ -334,6 +265,7 @@ local function addPlayer(player: Player)
 					if type(data) == "table" then
 						union(record.completed, sanitizeSet(data.completed, isMissionId))
 						union(record.collectibles, sanitizeSet(data.collectibles, Missions.isCollectible))
+						union(record.cosmetics, sanitizeSet(data.cosmetics, Codes.isCosmetic))
 					end
 					break
 				end
@@ -359,7 +291,6 @@ local function addPlayer(player: Player)
 			end
 		end
 		sendProgress(player, record)
-		applyPack(player, record)
 		refreshWorldRewards()
 		notifyChanged()
 	end)
@@ -553,11 +484,50 @@ function ProgressService.grantCollectible(player: Player, id: string)
 	sendProgress(player, record)
 	requestSave(player, record)
 	sayTo(player, if allFound then "carl.all_secrets" else "carl.secret_found")
-	if id == "laika" then
-		applyPack(player, record)
-	end
 	refreshWorldRewards()
 	notifyChanged()
+end
+
+-- Gives `player` an event cosmetic. Returns false when they already had it.
+function ProgressService.grantCosmetic(player: Player, id: string): boolean
+	local record = records[player]
+	if record == nil or not Codes.isCosmetic(id) or record.cosmetics[id] then
+		return false
+	end
+	record.cosmetics[id] = true
+	sendProgress(player, record)
+	requestSave(player, record)
+	notifyChanged()
+	return true
+end
+
+function ProgressService.hasCosmetic(player: Player, id: string): boolean
+	local record = records[player]
+	return record ~= nil and record.cosmetics[id] == true
+end
+
+-- RedeemCode action: one attempt every CODES.COOLDOWN_SECONDS per player (extra attempts are
+-- ignored). Replies through C.A.R.L.: carl.code_ok, carl.code_used or carl.code_bad.
+function ProgressService.redeemCode(player: Player, code: any)
+	local record = records[player]
+	if record == nil then
+		return
+	end
+	local t = os.clock()
+	if t - record.lastRedeemAt < MissionData.CODES.COOLDOWN_SECONDS then
+		return
+	end
+	record.lastRedeemAt = t
+	local normalized = Codes.normalize(code, MissionData.CODES.MAX_LENGTH)
+	local cosmetic = if normalized then Codes.lookup(normalized) else nil
+	if cosmetic == nil then
+		sayTo(player, "carl.code_bad")
+	elseif record.cosmetics[cosmetic] then
+		sayTo(player, "carl.code_used")
+	else
+		ProgressService.grantCosmetic(player, cosmetic)
+		sayTo(player, "carl.code_ok")
+	end
 end
 
 return ProgressService

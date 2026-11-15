@@ -6,6 +6,7 @@ local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local StarterPlayer = game:GetService("StarterPlayer")
 local Workspace = game:GetService("Workspace")
 
@@ -43,6 +44,14 @@ export type World = {
 	observatoryDoor: BasePart,
 	setRoverPaint: (paint: RoverPaint) -> (),
 	setTeamFlag: (visible: boolean) -> (),
+	-- Stage 5: the water tank beside the processor shows the base's water (0 = empty, 1 = full).
+	setWaterLevel: (fraction: number) -> (),
+	-- Stage 5: the Sun circles the horizon and passes behind the Earth once per circle. The callback
+	-- runs with true when the eclipse starts and false when it ends (also Workspace "SBO_Eclipse").
+	onEclipse: (callback: (active: boolean) -> ()) -> (),
+	isEclipse: () -> boolean,
+	-- Demo helper: moves the Sun to a few seconds before the next eclipse.
+	previewEclipse: () -> (),
 }
 
 type Style = {
@@ -53,8 +62,6 @@ type Style = {
 	collide: boolean?,
 	shadow: boolean?,
 }
-
-type Cap = { a: number, b: number, s: number, c: Color3 }
 
 local WorldBuilder = {}
 
@@ -71,7 +78,36 @@ local ANTENNA_BASE = Vector3.new(-60, 0, 70)
 local GROUND_HALF = 600
 local GROUND_TILE = 150
 local EARTH_DISTANCE = 900
-local EARTH_DIAMETER = 130
+-- Visual sizes (not science numbers): the Earth disc is a little wider than the game's Sun disc
+-- (Sky.SunAngularSize 9 degrees) so it can hide the Sun completely during an eclipse.
+local EARTH_DIAMETER = 150
+local EARTH_GUI_SCALE = 1.3 -- the billboard is larger than the disc to leave room for the halo
+-- Compressed sky clock (GAME pacing, not real): the real Earth turns once in 24 hours and the Sun
+-- circles the lunar south-pole horizon once in about 29.5 days.
+local EARTH_TURN_SECONDS = 240
+local SUN_CIRCLE_SECONDS = 720
+local SKY_UPDATE_SECONDS = 0.1
+local ARRAY_UPDATE_SECONDS = 0.5
+local ARRAY_MIN_TURN = math.rad(0.25)
+-- Eclipse: starts when the Sun centre is within the Earth disc radius plus this margin (~20 s).
+local ECLIPSE_MARGIN = math.rad(0.25)
+local ECLIPSE_FADE_SECONDS = 3
+local ECLIPSE_PREVIEW_LEAD_SECONDS = 6
+-- Earth placement relative to the Sun at start (the antenna aims there), and the sun-circle checks.
+local EARTH_FROM_SUN = math.rad(110)
+local SUN_CIRCLE_MAX_SPREAD = math.rad(4)
+local SUN_CIRCLE_MIN_ELEVATION = math.rad(2)
+local SUN_SAMPLE_STEP_HOURS = 0.05
+-- Lighting levels (normal and full eclipse).
+local LIGHT_BRIGHTNESS = 4.5
+local LIGHT_EXPOSURE = 0.45
+local LIGHT_OUTDOOR_AMBIENT = Color3.fromRGB(118, 118, 132)
+local ECLIPSE_BRIGHTNESS = 0.6
+local ECLIPSE_EXPOSURE = 0.05
+local ECLIPSE_OUTDOOR_AMBIENT = Color3.fromRGB(44, 44, 60)
+-- Earth disc shading (transparency of the dark overlays).
+local EARTH_NIGHT_TRANSPARENCY = 0.1
+local EARTH_TERMINATOR_SOFTNESS = 0.04
 -- Mars is a small red dot in the black sky: the teaser for the next mission.
 local MARS_DISTANCE = 950
 local MARS_DIAMETER = 16
@@ -137,6 +173,8 @@ local CHEESE_PAINT = PALETTE.gold
 local CHEESE_SPOT = PALETTE.gold:Lerp(Color3.fromRGB(150, 100, 20), 0.45)
 local MARS_RED = Color3.fromRGB(214, 86, 48)
 local INTERIOR_LIGHT = Color3.fromRGB(255, 238, 214)
+local WATER_COLOUR = PALETTE.cyan:Lerp(Color3.fromRGB(40, 110, 230), 0.4)
+local WATER_TWEEN = TweenInfo.new(0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 -- Visual tuning for the system animations (not gameplay numbers). Index = brightness step + 1.
 local GROW_BRIGHTNESS = { 0, 1.2, 2.4 }
@@ -165,6 +203,37 @@ local MARKER_NAMES = table.freeze({
 local earthPosition: Vector3? = nil
 local marsPosition: Vector3? = nil
 local partCounter = 0
+
+-- Sky state (Stage 5): the Sun circling the horizon, the turning Earth and the eclipse.
+type EarthGui = {
+	mapA: ImageLabel,
+	mapB: ImageLabel,
+	nightPivot: Frame,
+	nightGradient: UIGradient,
+	halo: Frame,
+	rimStroke: UIStroke,
+	eclipseGlow: Frame,
+	eclipseStroke: UIStroke,
+}
+local earthGui: EarthGui? = nil
+local earthPhaseEdge = math.huge -- last day/night line sent to the Earth disc (forces the first update)
+local EARTH_PHASE_MIN_EDGE = 0.002 -- skip smaller phase changes (not visible, saves replication)
+local EARTH_PHASE_MIN_DEGREES = 0.2
+local sunClockStart = 12 -- ClockTime when the base was built
+local sunClockAtEarth: number? = nil -- ClockTime when the Sun sits right behind the Earth
+local sunCircleEnabled = false
+-- Roblox's Sun model does not keep a constant height at the pole, so the Sun's path around the horizon
+-- is a precomputed track: for each compass degree, the (latitude, clock) pair that puts the Sun there at
+-- the target height. Stepping through it moves the Sun around the horizon like at the real south pole.
+local sunTrackMode = false
+local sunTrack: { { lat: number, clock: number } }? = nil
+local sunTrackAzimuth = 0 -- radians, compass direction of the Sun (atan2(x, z))
+local sunTrackIndex = -1
+local EARTH_TRACK_AZIMUTH_DEG = 20 -- Earth hangs over the crater side, the open part of the sky
+local skyConnection: RBXScriptConnection? = nil
+local eclipseActive = false
+local eclipseAmount = 0
+local eclipseListeners: { (active: boolean) -> () } = {}
 
 ------------------------------------------------------------------------------------------------
 -- Part helpers
@@ -352,10 +421,13 @@ local function sunDirection(): Vector3
 end
 
 local function defaultEarthPosition(): Vector3
-	local sunH = flatUnit(sunDirection(), Vector3.new(0, 0, -1))
+	local sun = sunDirection()
+	local sunH = flatUnit(sun, Vector3.new(0, 0, -1))
 	local sunAngle = math.atan2(sunH.X, sunH.Z)
-	local dir = dirFromAngle(sunAngle + math.rad(110))
-	return dir * EARTH_DISTANCE + Vector3.new(0, EARTH_DISTANCE * math.tan(math.rad(7)), 0)
+	-- Same height above the horizon as the Sun, so the Sun can pass behind the Earth.
+	local elevation = math.asin(math.clamp(sun.Y, -1, 1))
+	local dir = dirFromAngle(sunAngle + EARTH_FROM_SUN) * math.cos(elevation) + Vector3.new(0, math.sin(elevation), 0)
+	return dir * EARTH_DISTANCE
 end
 
 local function defaultMarsPosition(): Vector3
@@ -399,6 +471,166 @@ local function chooseSun(): (number, number)
 	return -89.5, 12
 end
 
+-- Round frame helper for the Earth billboard.
+local function roundFrame(parent: Instance, name: string, scale: number, color: Color3, transparency: number, z: number): Frame
+	local f = Instance.new("Frame")
+	f.Name = name
+	f.AnchorPoint = Vector2.new(0.5, 0.5)
+	f.Position = UDim2.fromScale(0.5, 0.5)
+	f.Size = UDim2.fromScale(scale, scale)
+	f.BackgroundColor3 = color
+	f.BackgroundTransparency = transparency
+	f.BorderSizePixel = 0
+	f.ZIndex = z
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(1, 0)
+	corner.Parent = f
+	f.Parent = parent
+	return f
+end
+
+local function ringStroke(parent: Instance, color: Color3, thickness: number, transparency: number): UIStroke
+	local stroke = Instance.new("UIStroke")
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Color = color
+	stroke.Thickness = thickness
+	stroke.Transparency = transparency
+	stroke.Parent = parent
+	return stroke
+end
+
+-- A dark overlay whose UIGradient fades at both ends (limb darkening, gives the flat map a round look).
+local function limbShade(parent: Instance, rotation: number)
+	local f = Instance.new("Frame")
+	f.Name = "LimbShade"
+	f.Size = UDim2.fromScale(1, 1)
+	f.BackgroundColor3 = Color3.new(0, 0, 0)
+	f.BackgroundTransparency = 0
+	f.BorderSizePixel = 0
+	f.ZIndex = 3
+	local gradient = Instance.new("UIGradient")
+	gradient.Rotation = rotation
+	gradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.3),
+		NumberSequenceKeypoint.new(0.16, 0.72),
+		NumberSequenceKeypoint.new(0.34, 1),
+		NumberSequenceKeypoint.new(0.66, 1),
+		NumberSequenceKeypoint.new(0.84, 0.72),
+		NumberSequenceKeypoint.new(1, 0.3),
+	})
+	gradient.Parent = f
+	f.Parent = parent
+end
+
+-- The Earth: a camera-facing billboard with the NASA Blue Marble map (Icons.earthMap) clipped to a
+-- circle by a CanvasGroup. Two copies of the map scroll side by side so the Earth turns; a dark
+-- overlay with a soft edge shows its phase (the half that faces the Sun is lit). One part, a few
+-- GUI objects and no meshes, so it is cheap to draw.
+local function buildEarth(sky: Instance, position: Vector3)
+	local anchor = Instance.new("Part")
+	anchor.Name = "Earth"
+	anchor.Anchored = true
+	anchor.CanCollide = false
+	anchor.CanQuery = false
+	anchor.CanTouch = false
+	anchor.CastShadow = false
+	anchor.Transparency = 1
+	anchor.Size = Vector3.new(1, 1, 1)
+	anchor.CFrame = CFrame.new(position)
+	anchor.Parent = sky
+
+	local gui = Instance.new("BillboardGui")
+	gui.Name = "EarthGui"
+	gui.Size = UDim2.fromScale(EARTH_DIAMETER * EARTH_GUI_SCALE, EARTH_DIAMETER * EARTH_GUI_SCALE)
+	gui.LightInfluence = 0
+	gui.Brightness = 1.1
+	gui.AlwaysOnTop = false
+	gui.ClipsDescendants = false
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	gui.Adornee = anchor
+	gui.Parent = anchor
+
+	local disc = 1 / EARTH_GUI_SCALE
+	-- Behind the disc: the red-orange eclipse glow (sunlight bent through Earth's air) and the soft
+	-- blue air halo.
+	local eclipseGlow = roundFrame(gui, "EclipseGlow", disc * 1.16, PALETTE.orange, 1, 1)
+	local halo = roundFrame(gui, "AirHalo", disc * 1.07, PALETTE.cyan, 0.82, 2)
+
+	local group = Instance.new("CanvasGroup")
+	group.Name = "Disc"
+	group.AnchorPoint = Vector2.new(0.5, 0.5)
+	group.Position = UDim2.fromScale(0.5, 0.5)
+	group.Size = UDim2.fromScale(disc, disc)
+	group.BackgroundColor3 = PALETTE.night
+	group.BackgroundTransparency = 0
+	group.BorderSizePixel = 0
+	group.ZIndex = 3
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(1, 0)
+	corner.Parent = group
+	group.Parent = gui
+
+	-- The map is 2:1, so one copy is two discs wide: the disc shows half of the globe at a time.
+	local function map(name: string, x: number): ImageLabel
+		local image = Instance.new("ImageLabel")
+		image.Name = name
+		image.Image = Icons.earthMap
+		image.BackgroundTransparency = 1
+		image.BorderSizePixel = 0
+		image.Size = UDim2.fromScale(2, 1)
+		image.Position = UDim2.fromScale(x, 0)
+		image.ScaleType = Enum.ScaleType.Stretch
+		image.ZIndex = 1
+		image.Parent = group
+		return image
+	end
+	local mapA = map("MapA", -2)
+	local mapB = map("MapB", 0)
+
+	limbShade(group, 0)
+	limbShade(group, 90)
+
+	-- Night side: the pivot turns toward the Sun and the gradient moves the day/night line.
+	local nightPivot = Instance.new("Frame")
+	nightPivot.Name = "NightPivot"
+	nightPivot.AnchorPoint = Vector2.new(0.5, 0.5)
+	nightPivot.Position = UDim2.fromScale(0.5, 0.5)
+	nightPivot.Size = UDim2.fromScale(1.5, 1.5)
+	nightPivot.BackgroundTransparency = 1
+	nightPivot.BorderSizePixel = 0
+	nightPivot.ZIndex = 4
+	nightPivot.Parent = group
+	local night = Instance.new("Frame")
+	night.Name = "Night"
+	night.Size = UDim2.fromScale(1, 1)
+	night.BackgroundColor3 = PALETTE.night
+	night.BackgroundTransparency = 0
+	night.BorderSizePixel = 0
+	night.ZIndex = 4
+	night.Parent = nightPivot
+	local nightGradient = Instance.new("UIGradient")
+	nightGradient.Transparency = NumberSequence.new(1)
+	nightGradient.Parent = night
+
+	-- Thin rings on top: the blue edge of the air, and the eclipse ring.
+	local rim = roundFrame(gui, "AirRim", disc, PALETTE.cyan, 1, 5)
+	local rimStroke = ringStroke(rim, PALETTE.cyan, 2, 0.45)
+	local eclipseRing = roundFrame(gui, "EclipseRing", disc * 1.01, PALETTE.orange, 1, 6)
+	local eclipseStroke = ringStroke(eclipseRing, PALETTE.orange:Lerp(PALETTE.red, 0.35), 3, 1)
+
+	earthPhaseEdge = math.huge
+	earthGui = {
+		mapA = mapA,
+		mapB = mapB,
+		nightPivot = nightPivot,
+		nightGradient = nightGradient,
+		halo = halo,
+		rimStroke = rimStroke,
+		eclipseGlow = eclipseGlow,
+		eclipseStroke = eclipseStroke,
+	}
+end
+
 local function buildSkyBodies()
 	local old = Workspace:FindFirstChild("SkyBodies")
 	if old then
@@ -408,44 +640,7 @@ local function buildSkyBodies()
 	sky.Name = "SkyBodies"
 	sky.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
 
-	-- SmoothPlastic, not Neon: Neon plus bloom turned the Earth into a glowing cyan disc.
-	local glow: Style = { color = Color3.fromRGB(38, 92, 196), material = Enum.Material.SmoothPlastic, collide = false, shadow = false }
-	local position = earthPosition or defaultEarthPosition()
-	local centre = position
-	ball(sky, "Earth", EARTH_DIAMETER, centre, glow)
-	ball(sky, "EarthHalo", EARTH_DIAMETER * 1.06, centre, {
-		color = Color3.fromRGB(150, 200, 255),
-		material = Enum.Material.Neon,
-		transparency = 0.93,
-		collide = false,
-		shadow = false,
-	})
-
-	-- Clouds and continents: small spheres poking out of the side that faces the base.
-	local toBase = (Vector3.zero - centre).Unit
-	local right = toBase:Cross(Vector3.yAxis).Unit
-	local up = right:Cross(toBase).Unit
-	local radius = EARTH_DIAMETER / 2
-	local caps: { Cap } = {
-		{ a = 0.15, b = 0.35, s = 0.34, c = Color3.fromRGB(245, 248, 255) },
-		{ a = -0.45, b = 0.1, s = 0.30, c = Color3.fromRGB(240, 245, 255) },
-		{ a = 0.4, b = -0.3, s = 0.28, c = Color3.fromRGB(245, 248, 255) },
-		{ a = -0.1, b = -0.45, s = 0.24, c = Color3.fromRGB(235, 242, 255) },
-		{ a = -0.3, b = 0.45, s = 0.30, c = Color3.fromRGB(110, 150, 90) },
-		{ a = 0.35, b = 0.05, s = 0.32, c = Color3.fromRGB(120, 160, 95) },
-		{ a = -0.05, b = -0.1, s = 0.26, c = Color3.fromRGB(150, 140, 100) },
-	}
-	for i, cap in caps do
-		local dir = (toBase + right * cap.a + up * cap.b).Unit
-		local size = EARTH_DIAMETER * cap.s
-		local capCentre = centre + dir * (radius - size * 0.42)
-		ball(sky, "EarthDetail" .. i, size, capCentre, {
-			color = cap.c,
-			material = Enum.Material.SmoothPlastic,
-			collide = false,
-			shadow = false,
-		})
-	end
+	buildEarth(sky, earthPosition or defaultEarthPosition())
 
 	-- Mars: a small reddish disc, the next destination. The observatory telescope points at it.
 	ball(sky, "Mars", MARS_DIAMETER, marsPosition or defaultMarsPosition(), {
@@ -477,6 +672,129 @@ local function buildSkyBodies()
 	sky.Parent = Workspace
 end
 
+-- At the lunar south pole the Sun does not rise and set: it circles just above the horizon. Changing
+-- ClockTime at latitude -89.5 turns it around the horizon at an almost constant height. This samples
+-- one full circle, checks that the Sun stays low, and puts the Earth on the Sun's path so the Sun
+-- passes behind it once per circle. If the circle is not flat (other latitude), the Sun stays still.
+local function buildSunTrack(elevation: number): boolean
+	local target = math.sin(elevation)
+	local best: { [number]: { lat: number, clock: number, err: number } } = {}
+	local rows = 0
+	local lat = -89.5
+	while lat <= 89.5 do
+		Lighting.GeographicLatitude = lat
+		local clock = 0
+		while clock < 24 do
+			Lighting.ClockTime = clock
+			local d = Lighting:GetSunDirection()
+			local err = math.abs(d.Y - target)
+			if err < 0.02 then
+				local index = math.floor(math.deg(math.atan2(d.X, d.Z)) % 360) + 1
+				local current = best[index]
+				if current == nil or err < current.err then
+					best[index] = { lat = lat, clock = clock, err = err }
+				end
+			end
+			clock += 0.05
+		end
+		lat += 0.5
+		rows += 1
+		if rows % 24 == 0 then
+			task.wait()
+		end
+	end
+	local found = 0
+	for i = 1, 360 do
+		if best[i] then
+			found += 1
+		end
+	end
+	if found < 180 then
+		return false
+	end
+	local track: { { lat: number, clock: number } } = {}
+	for i = 1, 360 do
+		local entry = best[i]
+		local offset = 1
+		while entry == nil and offset < 180 do
+			entry = best[((i - 1 + offset) % 360) + 1] or best[((i - 1 - offset) % 360) + 1]
+			offset += 1
+		end
+		local chosen = entry :: { lat: number, clock: number, err: number }
+		track[i] = { lat = chosen.lat, clock = chosen.clock }
+	end
+	sunTrack = track
+	return true
+end
+
+local function applySunTrack(azimuth: number)
+	local track = sunTrack
+	if not track then
+		return
+	end
+	local index = math.floor(math.deg(azimuth) % 360) + 1
+	if index == sunTrackIndex then
+		return
+	end
+	sunTrackIndex = index
+	Lighting.GeographicLatitude = track[index].lat
+	Lighting.ClockTime = track[index].clock
+end
+
+local function planSunCircle(startClock: number)
+	Lighting.ClockTime = startClock
+	local startSun = sunDirection()
+	local startH = flatUnit(startSun, Vector3.new(0, 0, -1))
+	local target = math.atan2(startH.X, startH.Z) + EARTH_FROM_SUN
+	local minElevation, maxElevation = math.huge, -math.huge
+	local bestClock: number? = nil
+	local bestDir = startSun
+	local bestGap = math.huge
+	local steps = math.floor(24 / SUN_SAMPLE_STEP_HOURS + 0.5)
+	for k = 0, steps - 1 do
+		local clock = k * SUN_SAMPLE_STEP_HOURS
+		Lighting.ClockTime = clock
+		local dir = sunDirection()
+		local elevation = math.asin(math.clamp(dir.Y, -1, 1))
+		minElevation = math.min(minElevation, elevation)
+		maxElevation = math.max(maxElevation, elevation)
+		local h = flatUnit(dir, startH)
+		local gap = math.abs((math.atan2(h.X, h.Z) - target + math.pi) % (2 * math.pi) - math.pi)
+		if gap < bestGap then
+			bestGap = gap
+			bestClock = clock
+			bestDir = dir
+		end
+	end
+	Lighting.ClockTime = startClock
+	sunCircleEnabled = maxElevation - minElevation <= SUN_CIRCLE_MAX_SPREAD and minElevation >= SUN_CIRCLE_MIN_ELEVATION
+	if sunCircleEnabled and bestClock ~= nil then
+		sunClockAtEarth = bestClock
+		earthPosition = bestDir * EARTH_DISTANCE
+	elseif buildSunTrack(SUN_TARGET_ELEVATION) then
+		sunTrackMode = true
+		sunCircleEnabled = true
+		sunClockAtEarth = nil
+		local elevation = SUN_TARGET_ELEVATION
+		local earthAzimuth = math.rad(EARTH_TRACK_AZIMUTH_DEG)
+		earthPosition = Vector3.new(
+			math.sin(earthAzimuth) * math.cos(elevation),
+			math.sin(elevation),
+			math.cos(earthAzimuth) * math.cos(elevation)
+		) * EARTH_DISTANCE
+		-- Start with the Sun opposite the Earth (full Earth); it reaches the Earth half a circle later.
+		sunTrackAzimuth = earthAzimuth + math.pi
+		sunTrackIndex = -1
+		applySunTrack(sunTrackAzimuth)
+	else
+		warn(
+			`[SpaceBaseOdyssey] Sun does not circle the horizon here (elevation {math.deg(minElevation)} to {math.deg(maxElevation)} deg); the Sun stays still`
+		)
+		sunClockAtEarth = nil
+		earthPosition = defaultEarthPosition()
+	end
+end
+
 function WorldBuilder.applyEnvironment(data: any)
 	Workspace.Gravity = data.WORLD.MOON_GRAVITY_STUDS
 	StarterPlayer.CharacterUseJumpPower = true
@@ -505,21 +823,26 @@ function WorldBuilder.applyEnvironment(data: any)
 	sky.SkyboxLf = ""
 	sky.SkyboxRt = ""
 	sky.SkyboxUp = ""
-	sky.StarCount = 5000
+	sky.StarCount = 0 -- stars are Parts in SkyBodies; the built-in field would jump with the Sun track
 	sky.CelestialBodiesShown = true
 	sky.SunAngularSize = 9
 	sky.MoonAngularSize = 0
+	-- A plain near-black skybox: Roblox otherwise paints a blue day sky for some Sun-track positions,
+	-- and the Moon has no air to make the sky blue.
+	for _, face in { "SkyboxBk", "SkyboxDn", "SkyboxFt", "SkyboxLf", "SkyboxRt", "SkyboxUp" } do
+		(sky :: any)[face] = Icons.skyBlack
+	end
 	sky.Parent = Lighting
 
 	local latitude, clock = chooseSun()
 	Lighting.GeographicLatitude = latitude
 	Lighting.ClockTime = clock
-	Lighting.Brightness = 4.5
-	Lighting.ExposureCompensation = 0.45
+	Lighting.Brightness = LIGHT_BRIGHTNESS
+	Lighting.ExposureCompensation = LIGHT_EXPOSURE
 	-- Ambient only lights places the sky cannot see (habitat, shelter), so it brightens the rooms
 	-- without washing out the sunlit ground or the shadowed crater floor (OutdoorAmbient).
 	Lighting.Ambient = Color3.fromRGB(38, 38, 46)
-	Lighting.OutdoorAmbient = Color3.fromRGB(118, 118, 132)
+	Lighting.OutdoorAmbient = LIGHT_OUTDOOR_AMBIENT
 	Lighting.EnvironmentDiffuseScale = 0.3
 	Lighting.EnvironmentSpecularScale = 0.2
 	Lighting.GlobalShadows = true
@@ -568,9 +891,13 @@ function WorldBuilder.applyEnvironment(data: any)
 		correction.Parent = Lighting
 	end
 
-	earthPosition = defaultEarthPosition()
+	sunClockStart = clock
+	planSunCircle(clock)
 	marsPosition = defaultMarsPosition()
 	buildSkyBodies()
+	eclipseActive = false
+	eclipseAmount = 0
+	Workspace:SetAttribute("SBO_Eclipse", false)
 end
 
 local function stormTint(): ColorCorrectionEffect
@@ -975,7 +1302,10 @@ type HabitatRefs = {
 	rackPointLight: PointLight,
 	rackPlants: { Part },
 	processorInlet: Part,
+	waterTank: WaterTankRefs,
 }
+
+type WaterTankRefs = { fill: Part, light: PointLight, gauge: Part, bottomY: number, height: number, centre: Vector3, diameter: number }
 
 type LifeSupportRefs = {
 	window: Part,
@@ -1130,6 +1460,63 @@ local function buildHabitat(base: Instance): HabitatRefs
 	})
 	local processorPrompt = makePrompt(inlet, "prompt.deliver", "Deliver ice", 0.5)
 
+	-- Water tank beside the processor: melted ice is stored here before the air maker splits it.
+	-- Its glass shows how much water the base has (World.setWaterLevel).
+	local tankCentre = v(25, 0, -15)
+	local tankHeight = 7
+	local tankDiameter = 3.6
+	local tankBottom = 1.5
+	vcylinder(hab, "WaterTankBase", 1, tankDiameter + 0.8, tankCentre + Vector3.new(0, 1, 0), {
+		color = DARK_METAL,
+		material = Enum.Material.Metal,
+	})
+	vcylinder(hab, "WaterTankGlass", tankHeight, tankDiameter, tankCentre + Vector3.new(0, tankBottom + tankHeight / 2, 0), {
+		color = Color3.fromRGB(210, 230, 240),
+		material = Enum.Material.Glass,
+		transparency = 0.7,
+		shadow = false,
+	})
+	vcylinder(hab, "WaterTankCap", 0.6, tankDiameter + 0.4, tankCentre + Vector3.new(0, tankBottom + tankHeight + 0.3, 0), {
+		color = METAL,
+		material = Enum.Material.Metal,
+	})
+	local fillDiameter = tankDiameter - 0.4
+	local fillHeight = tankHeight - 0.2
+	local waterFill = vcylinder(hab, "WaterFill", fillHeight, fillDiameter, tankCentre + Vector3.new(0, tankBottom + fillHeight / 2, 0), {
+		color = WATER_COLOUR,
+		material = Enum.Material.SmoothPlastic,
+		transparency = 0.15,
+		collide = false,
+		shadow = false,
+	})
+	local waterLight = pointLight(waterFill, WATER_COLOUR, 9, 0.8, false)
+	-- Pipe from the tank to the processor, and a level light on the front (lime, orange, red).
+	cylinder(hab, "WaterPipe", 3, 0.6, CFrame.new(v(21.9, 7, -15)), { color = METAL, material = Enum.Material.Metal })
+	local gauge = box(hab, "WaterGauge", v(24.3, 2.6, -13.1), v(25.7, 3.4, -12.9), {
+		color = ACCENT_OK,
+		material = Enum.Material.Neon,
+		shadow = false,
+	})
+	-- Water sign on the solid wall above the window band.
+	local sign = box(hab, "WaterSign", v(24, 12, -18), v(26, 14, -17.8), {
+		color = PALETTE.night,
+		material = Enum.Material.SmoothPlastic,
+		shadow = false,
+	})
+	local signGui = Instance.new("SurfaceGui")
+	signGui.Name = "WaterIcon"
+	signGui.Face = Enum.NormalId.Back
+	signGui.LightInfluence = 0
+	signGui.CanvasSize = Vector2.new(64, 64)
+	signGui.Parent = sign
+	local signIcon = Instance.new("ImageLabel")
+	signIcon.BackgroundTransparency = 1
+	signIcon.Size = UDim2.fromScale(0.8, 0.8)
+	signIcon.Position = UDim2.fromScale(0.1, 0.1)
+	signIcon.Image = Icons.drop
+	signIcon.ImageColor3 = PALETTE.cyan
+	signIcon.Parent = signGui
+
 	-- Greenhouse rack under a grow light.
 	box(hab, "PlantRack", v(-7, 0.5, -17.8), v(7, 3, -15), { color = Color3.fromRGB(235, 235, 240), material = Enum.Material.SmoothPlastic })
 	local rackPlants: { Part } = {}
@@ -1224,6 +1611,15 @@ local function buildHabitat(base: Instance): HabitatRefs
 		rackPointLight = growPoint,
 		rackPlants = rackPlants,
 		processorInlet = inlet,
+		waterTank = {
+			fill = waterFill,
+			light = waterLight,
+			gauge = gauge,
+			bottomY = tankCentre.Y + tankBottom,
+			height = fillHeight,
+			centre = tankCentre,
+			diameter = fillDiameter,
+		},
 	}
 end
 
@@ -1550,8 +1946,10 @@ end
 ------------------------------------------------------------------------------------------------
 
 type ArrayVisual = { panel: Part, lines: { Part } }
+-- Each array turns around its mast to follow the Sun as it circles the horizon.
+type ArrayTrack = { panel: BasePart, pivot: Vector3, offset: CFrame, baseAngle: number, yaw: number }
 
-local function buildArrays(base: Instance, data: any): ({ ArrayRef }, { ArrayVisual })
+local function buildArrays(base: Instance, data: any): ({ ArrayRef }, { ArrayVisual }, { ArrayTrack })
 	local arraysFolder = folder(base, "SolarArrays")
 	local sun = sunDirection()
 	local sunH = flatUnit(sun, Vector3.new(0, 0, -1))
@@ -1564,6 +1962,8 @@ local function buildArrays(base: Instance, data: any): ({ ArrayRef }, { ArrayVis
 
 	local refs: { ArrayRef } = {}
 	local visuals: { ArrayVisual } = {}
+	local tracks: { ArrayTrack } = {}
+	local baseAngle = math.atan2(sunH.X, sunH.Z)
 	for i = 1, count do
 		local m = model(arraysFolder, "SolarArray" .. i)
 		local footPos = centre + perp * ((i - (count + 1) / 2) * spacing)
@@ -1572,9 +1972,9 @@ local function buildArrays(base: Instance, data: any): ({ ArrayRef }, { ArrayVis
 			material = Enum.Material.Metal,
 		})
 		local panelCentre = footPos + Vector3.new(0, 6, 0)
-		vcylinder(m, "Mast", 6, 0.7, footPos - sunH * 0.6 + Vector3.new(0, 3, 0), { color = METAL, material = Enum.Material.Metal })
+		local mast = vcylinder(m, "Mast", 6, 0.7, footPos - sunH * 0.6 + Vector3.new(0, 3, 0), { color = METAL, material = Enum.Material.Metal })
 		local panelCf = CFrame.lookAt(panelCentre, panelCentre + face)
-		part(m, "Frame", Vector3.new(12.6, 8.6, 0.3), panelCf * CFrame.new(0, 0, 0.35), { color = METAL, material = Enum.Material.Metal })
+		local frame = part(m, "Frame", Vector3.new(12.6, 8.6, 0.3), panelCf * CFrame.new(0, 0, 0.35), { color = METAL, material = Enum.Material.Metal })
 		local panel = part(m, "Panel", Vector3.new(12, 8, 0.4), panelCf, {
 			color = PANEL_CLEAN,
 			material = Enum.Material.Glass,
@@ -1588,10 +1988,19 @@ local function buildArrays(base: Instance, data: any): ({ ArrayRef }, { ArrayVis
 		attachment.Position = Vector3.new(0, -3.6, -0.4)
 		attachment.Parent = panel
 		local prompt = makePrompt(attachment, "prompt.clean", "Clean panel", 1.5)
+		-- The panel stays the anchored root; mast, frame and grid lines turn with it.
+		weldTo(panel, { mast, frame, lineH, lineV })
 		table.insert(refs, { model = m, panel = panel :: BasePart, prompt = prompt })
 		table.insert(visuals, { panel = panel, lines = { lineH, lineV } })
+		table.insert(tracks, {
+			panel = panel :: BasePart,
+			pivot = panelCentre,
+			offset = CFrame.new(-panelCentre) * panelCf,
+			baseAngle = baseAngle,
+			yaw = 0,
+		})
 	end
-	return refs, visuals
+	return refs, visuals, tracks
 end
 
 type AntennaRefs = {
@@ -2230,11 +2639,200 @@ local function buildCollectible(parent: Instance, id: string, spot: CFrame, phas
 end
 
 ------------------------------------------------------------------------------------------------
+-- Sky clock: the Sun circling the horizon, the turning Earth, its phases and the eclipse
+------------------------------------------------------------------------------------------------
+
+local EARTH_RADIUS_ANGLE = math.atan((EARTH_DIAMETER / 2) / EARTH_DISTANCE)
+local skyElapsed = 0 -- seconds of Sun motion since the base was built
+local earthTurnElapsed = 0 -- seconds of Earth rotation
+
+local function wrapAngle(angle: number): number
+	return (angle + math.pi) % (2 * math.pi) - math.pi
+end
+
+local function lerp(a: number, b: number, t: number): number
+	return a + (b - a) * t
+end
+
+local function sunAngleNow(): number
+	local h = flatUnit(sunDirection(), Vector3.new(0, 0, -1))
+	return math.atan2(h.X, h.Z)
+end
+
+local function setEclipse(active: boolean)
+	if active == eclipseActive then
+		return
+	end
+	eclipseActive = active
+	Workspace:SetAttribute("SBO_Eclipse", active)
+	for _, listener in eclipseListeners do
+		task.spawn(function()
+			local ok, err = pcall(listener, active)
+			if not ok then
+				warn(`[SpaceBaseOdyssey] eclipse listener failed: {err}`)
+			end
+		end)
+	end
+end
+
+-- a = 0 normal light, 1 full eclipse: the base dims and the Earth gets its red-orange ring.
+local function applyEclipseLook(a: number)
+	local t = a * a * (3 - 2 * a)
+	Lighting.Brightness = lerp(LIGHT_BRIGHTNESS, ECLIPSE_BRIGHTNESS, t)
+	Lighting.ExposureCompensation = lerp(LIGHT_EXPOSURE, ECLIPSE_EXPOSURE, t)
+	Lighting.OutdoorAmbient = LIGHT_OUTDOOR_AMBIENT:Lerp(ECLIPSE_OUTDOOR_AMBIENT, t)
+	local g = earthGui
+	if g then
+		local ringColour = PALETTE.cyan:Lerp(PALETTE.orange, t)
+		g.halo.BackgroundColor3 = ringColour
+		g.halo.BackgroundTransparency = lerp(0.82, 0.45, t)
+		g.rimStroke.Color = ringColour
+		g.rimStroke.Transparency = lerp(0.45, 0.1, t)
+		g.eclipseGlow.BackgroundTransparency = lerp(1, 0.7, t)
+		g.eclipseStroke.Transparency = lerp(1, 0, t)
+	end
+end
+
+-- Turns the map and moves the day/night line. Seen from the base, the Earth is full when the Sun is
+-- behind us and new (dark) when the Sun is right behind the Earth.
+local function updateEarthDisc(sun: Vector3, earthDir: Vector3)
+	local g = earthGui
+	if not g then
+		return
+	end
+	local u = (earthTurnElapsed / EARTH_TURN_SECONDS * 2) % 2
+	g.mapA.Position = UDim2.fromScale(u - 2, 0)
+	g.mapB.Position = UDim2.fromScale(u, 0)
+
+	local right = earthDir:Cross(Vector3.yAxis)
+	right = if right.Magnitude < 1e-4 then Vector3.xAxis else right.Unit
+	local up = right:Cross(earthDir).Unit
+	local sx, sy = sun:Dot(right), sun:Dot(up)
+	if sx * sx + sy * sy > 1e-6 then
+		local rotation = math.deg(math.atan2(-sy, sx))
+		-- Replicated property: only send a visible change (the Sun moves about 0.05 deg per update).
+		if math.abs(rotation - g.nightPivot.Rotation) >= EARTH_PHASE_MIN_DEGREES then
+			g.nightPivot.Rotation = rotation
+		end
+	end
+	-- Day/night line across the disc (-1 = far edge, all lit; +1 = Sun side, all dark).
+	local edge = math.clamp(sun:Dot(earthDir), -1, 1)
+	if math.abs(edge - earthPhaseEdge) < EARTH_PHASE_MIN_EDGE then
+		return -- a new NumberSequence would replicate to every client for no visible change
+	end
+	earthPhaseEdge = edge
+	local soft = EARTH_TERMINATOR_SOFTNESS
+	local centre = 0.5 + edge * (1 / 3 + soft)
+	local a = math.clamp(centre - soft, 0.001, 0.997)
+	local b = math.clamp(centre + soft, a + 0.001, 0.998)
+	g.nightGradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, EARTH_NIGHT_TRANSPARENCY),
+		NumberSequenceKeypoint.new(a, EARTH_NIGHT_TRANSPARENCY),
+		NumberSequenceKeypoint.new(b, 1),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+end
+
+local function updateArrays(tracks: { ArrayTrack })
+	local angle = sunAngleNow()
+	for _, track in tracks do
+		local yaw = wrapAngle(angle - track.baseAngle)
+		if math.abs(wrapAngle(yaw - track.yaw)) >= ARRAY_MIN_TURN and track.panel.Parent ~= nil then
+			track.yaw = yaw
+			track.panel.CFrame = CFrame.new(track.pivot) * CFrame.Angles(0, yaw, 0) * track.offset
+		end
+	end
+end
+
+-- One Heartbeat at SKY_UPDATE_SECONDS drives the whole sky, so few properties replicate.
+local function startSky(base: Instance, tracks: { ArrayTrack })
+	if skyConnection then
+		skyConnection:Disconnect()
+		skyConnection = nil
+	end
+	skyElapsed = 0
+	earthTurnElapsed = 0
+	local earthDir = (earthPosition or defaultEarthPosition()).Unit
+	local accumulator = SKY_UPDATE_SECONDS
+	local arrayAccumulator = 0
+	local lookApplied = -1
+	skyConnection = RunService.Heartbeat:Connect(function(rawDt: number)
+		if base.Parent == nil then
+			if skyConnection then
+				skyConnection:Disconnect()
+				skyConnection = nil
+			end
+			return
+		end
+		local dt = math.min(rawDt, 0.25)
+		accumulator += dt
+		if accumulator < SKY_UPDATE_SECONDS then
+			return
+		end
+		local step = accumulator
+		accumulator = 0
+		earthTurnElapsed += step
+		if sunCircleEnabled then
+			skyElapsed += step
+			if sunTrackMode then
+				sunTrackAzimuth += step * 2 * math.pi / SUN_CIRCLE_SECONDS
+				applySunTrack(sunTrackAzimuth)
+			else
+				Lighting.ClockTime = (sunClockStart + skyElapsed * 24 / SUN_CIRCLE_SECONDS) % 24
+			end
+		end
+		local sun = sunDirection()
+		updateEarthDisc(sun, earthDir)
+
+		local separation = math.acos(math.clamp(sun:Dot(earthDir), -1, 1))
+		setEclipse(sunCircleEnabled and separation < EARTH_RADIUS_ANGLE + ECLIPSE_MARGIN)
+		local target = if eclipseActive then 1 else 0
+		if eclipseAmount ~= target then
+			local change = step / ECLIPSE_FADE_SECONDS
+			eclipseAmount = if target > eclipseAmount
+				then math.min(target, eclipseAmount + change)
+				else math.max(target, eclipseAmount - change)
+		end
+		if eclipseAmount ~= lookApplied then
+			lookApplied = eclipseAmount
+			applyEclipseLook(eclipseAmount)
+		end
+
+		arrayAccumulator += step
+		if arrayAccumulator >= ARRAY_UPDATE_SECONDS then
+			arrayAccumulator = 0
+			updateArrays(tracks)
+		end
+	end)
+end
+
+local function previewEclipse()
+	if sunTrackMode then
+		-- Put the Sun a few seconds before the Earth on its track.
+		local secondsPerRadian = SUN_CIRCLE_SECONDS / (2 * math.pi)
+		local lead = EARTH_RADIUS_ANGLE + ECLIPSE_MARGIN + ECLIPSE_PREVIEW_LEAD_SECONDS / secondsPerRadian
+		sunTrackAzimuth = math.rad(EARTH_TRACK_AZIMUTH_DEG) - lead
+		sunTrackIndex = -1
+		applySunTrack(sunTrackAzimuth)
+		return
+	end
+	local atEarth = sunClockAtEarth
+	if not sunCircleEnabled or atEarth == nil then
+		return
+	end
+	local secondsPerRadian = SUN_CIRCLE_SECONDS / (2 * math.pi)
+	local leadSeconds = (EARTH_RADIUS_ANGLE + ECLIPSE_MARGIN) * secondsPerRadian + ECLIPSE_PREVIEW_LEAD_SECONDS
+	local clock = atEarth - leadSeconds * 24 / SUN_CIRCLE_SECONDS
+	skyElapsed = ((clock - sunClockStart) % 24) * SUN_CIRCLE_SECONDS / 24
+end
+
+------------------------------------------------------------------------------------------------
 -- Public build
 ------------------------------------------------------------------------------------------------
 
 function WorldBuilder.build(data: any): World
 	partCounter = 0
+	eclipseListeners = {}
 	local old = Workspace:FindFirstChild("Base")
 	if old then
 		old:Destroy()
@@ -2249,7 +2847,7 @@ function WorldBuilder.build(data: any): World
 	local shelter = buildShelter(base)
 	local _, iceNodes, rampAngle, cheeseSpot = buildCrater(base, rng)
 	buildRidge(base, rng)
-	local arrays, arrayVisuals = buildArrays(base, data)
+	local arrays, arrayVisuals, arrayTracks = buildArrays(base, data)
 	local antenna = buildAntenna(base)
 	buildDecor(base, rng)
 	local greenhouse = buildGreenhouse(base)
@@ -2519,6 +3117,46 @@ function WorldBuilder.build(data: any): World
 		teamFlag.Parent = if visible then base else nil
 	end
 
+	-- Water tank level: the water column grows or shrinks, and the gauge turns orange, then red.
+	local tank = habitat.waterTank
+	local waterFraction = -1
+	local function setWaterLevel(fraction: number)
+		if type(fraction) ~= "number" or fraction ~= fraction then
+			return
+		end
+		local f = math.clamp(fraction, 0, 1)
+		if math.abs(f - waterFraction) < 1e-3 then
+			return
+		end
+		waterFraction = f
+		local height = math.max(0.05, tank.height * f)
+		local centre = Vector3.new(tank.centre.X, tank.bottomY + height / 2, tank.centre.Z)
+		TweenService:Create(tank.fill, WATER_TWEEN, {
+			Size = Vector3.new(height, tank.diameter, tank.diameter),
+			CFrame = CFrame.new(centre) * CFrame.Angles(0, 0, math.rad(90)),
+			Transparency = if f <= 0 then 1 else 0.15,
+		}):Play()
+		tank.light.Enabled = f > 0
+		tank.light.Brightness = 0.3 + 0.6 * f
+		tank.gauge.Color = if f >= 0.5 then ACCENT_OK elseif f >= 0.2 then ACCENT_WARNING else PALETTE.red
+	end
+	local startWater = 1
+	local waterData = if type(data) == "table" then data.WATER else nil
+	if type(waterData) == "table" and type(waterData.START) == "number" and type(waterData.MAX) == "number" and waterData.MAX > 0 then
+		startWater = waterData.START / waterData.MAX
+	end
+	setWaterLevel(startWater)
+
+	local function onEclipse(callback: (active: boolean) -> ())
+		if type(callback) == "function" then
+			table.insert(eclipseListeners, callback)
+		end
+	end
+
+	local function isEclipse(): boolean
+		return eclipseActive
+	end
+
 	-- Collectibles only bob and spin while someone is near, so idle servers replicate nothing.
 	local awake: { boolean } = table.create(#collectibleItems, false)
 	local awakeTimer = COLLECTIBLE_AWAKE_CHECK
@@ -2592,6 +3230,7 @@ function WorldBuilder.build(data: any): World
 
 	refreshPrompts()
 	setSystemVisuals({ LifeSupport = 0, Greenhouse = 0, Science = 0 })
+	startSky(base, arrayTracks)
 
 	return {
 		spawn = habitat.spawn,
@@ -2614,6 +3253,10 @@ function WorldBuilder.build(data: any): World
 		observatoryDoor = observatory.door :: BasePart,
 		setRoverPaint = setRoverPaint,
 		setTeamFlag = setTeamFlag,
+		setWaterLevel = setWaterLevel,
+		onEclipse = onEclipse,
+		isEclipse = isEclipse,
+		previewEclipse = previewEclipse,
 	}
 end
 

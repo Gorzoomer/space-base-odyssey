@@ -8,6 +8,8 @@
 --   3. shift     - real-time play outside this module produces a ShiftResult.
 --   4. endDay    - apply consumption and production, record what happened and why.
 --
+-- While a shift runs, liveMeters shows the day moving toward its end (previewEndDay never mutates).
+--
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 export type SystemId = "LifeSupport" | "Greenhouse" | "Science"
@@ -29,6 +31,7 @@ export type ShiftResult = {
 	leakRepaired: boolean,
 	suitRefills: number, -- full suit refills taken inside the habitat
 	falseAlarm: boolean?, -- the day's flare brought no particle storm (real DONKI example)
+	antennaLinked: boolean?, -- the antenna was linked to Earth during the shift (nil = no)
 }
 
 export type DayRecord = {
@@ -39,7 +42,10 @@ export type DayRecord = {
 	air: number,
 	food: number,
 	dose: number,
-	sciencePoints: number,
+	water: number,
+	sciencePoints: number, -- science sent to Earth so far (counts for stars)
+	pendingScience: number, -- science still waiting for the antenna at the end of the day
+	scienceSent: number, -- science sent to Earth today
 	causeKey: string, -- localization key of the one-line "why" shown in the report
 }
 
@@ -54,7 +60,10 @@ export type MissionState = {
 	air: number,
 	food: number,
 	dose: number,
-	sciencePoints: number,
+	water: number, -- water tank, 0..data.WATER.MAX
+	sciencePoints: number, -- science sent to Earth (counts for stars)
+	pendingScience: number, -- gathered science waiting for an antenna link
+	scienceSent: number, -- science sent on the last day that ended
 	pendingHarvest: number,
 	leakActive: boolean,
 	critical: { air: boolean, food: boolean },
@@ -140,7 +149,10 @@ function Simulation.newMission(data: any, seed: number?, config: MissionConfig?)
 		air = data.METERS.START_AIR,
 		food = data.METERS.START_FOOD,
 		dose = data.METERS.START_DOSE,
+		water = data.WATER.START,
 		sciencePoints = 0,
+		pendingScience = 0,
+		scienceSent = 0,
 		pendingHarvest = data.METERS.FOOD_PER_GREENHOUSE_CELL, -- crops planted before the crew arrived
 		leakActive = false,
 		critical = { air = false, food = false },
@@ -184,7 +196,9 @@ function Simulation.setAllocation(state: MissionState, data: any, system: System
 	return true, nil
 end
 
-local function pickCause(state: MissionState, data: any, result: ShiftResult, before: { air: number, food: number }): string
+type DayFacts = { air: number, food: number, waterShort: boolean }
+
+local function pickCause(state: MissionState, data: any, result: ShiftResult, before: DayFacts): string
 	if state.outcome == "EarlyReturnDose" then
 		return "cause.dose_limit"
 	elseif state.outcome == "EarlyReturnAir" then
@@ -201,11 +215,17 @@ local function pickCause(state: MissionState, data: any, result: ShiftResult, be
 	if state.leakActive then
 		return "cause.leak_unrepaired"
 	end
+	if before.waterShort and state.air < before.air then
+		return "cause.no_water"
+	end
 	if state.cleanArrays < data.POWER.ARRAYS then
 		return "cause.dusty_panels"
 	end
 	if state.allocation.Greenhouse == 0 then
 		return "cause.no_greenhouse"
+	end
+	if state.pendingScience > 0 then
+		return "cause.data_waiting"
 	end
 	if state.air < before.air and state.allocation.LifeSupport < 2 then
 		return "cause.air_falling"
@@ -222,7 +242,7 @@ end
 function Simulation.endDay(state: MissionState, data: any, result: ShiftResult)
 	assert(state.outcome == "InProgress", "mission already finished")
 	local meters = data.METERS
-	local before = { air = state.air, food = state.food }
+	local before: DayFacts = { air = state.air, food = state.food, waterShort = false }
 
 	-- Repairs and cleaning done during the shift.
 	if result.leakRepaired then
@@ -230,9 +250,22 @@ function Simulation.endDay(state: MissionState, data: any, result: ShiftResult)
 	end
 	state.cleanArrays = math.min(data.POWER.ARRAYS, state.cleanArrays + math.max(0, result.arraysCleaned))
 
-	-- Air: electrolysis needs power; ice adds water to split; breathing, leaks and suit refills use it.
-	local airChange = state.allocation.LifeSupport * meters.AIR_PER_LIFE_SUPPORT_CELL
-		+ result.iceCores * meters.AIR_PER_ICE_CORE
+	-- Water: ice cores melt into the tank. The powered air maker uses some every day.
+	local iceCores = math.max(0, result.iceCores)
+	local lifeSupport = state.allocation.LifeSupport
+	state.water = clamp(state.water + iceCores * data.WATER.PER_ICE_CORE, 0, data.WATER.MAX)
+	local waterShare = 1
+	if lifeSupport > 0 and data.WATER.USE_PER_DAY > 0 then
+		local used = math.min(state.water, data.WATER.USE_PER_DAY)
+		state.water -= used
+		waterShare = used / data.WATER.USE_PER_DAY
+	end
+	before.waterShort = lifeSupport > 0 and waterShare < 1
+
+	-- Air: the air maker splits water into oxygen with power (less water, less air); breathing,
+	-- leaks and suit refills use it.
+	local airChange = lifeSupport * meters.AIR_PER_LIFE_SUPPORT_CELL * waterShare
+		+ (if lifeSupport > 0 then iceCores * meters.AIR_PER_ICE_CORE else 0)
 		- meters.AIR_USE_PER_DAY
 		- (if state.leakActive then meters.AIR_LEAK_PER_DAY else 0)
 		- result.suitRefills * meters.SUIT_REFILL_AIR_COST
@@ -250,9 +283,15 @@ function Simulation.endDay(state: MissionState, data: any, result: ShiftResult)
 	end
 	state.dose = math.min(meters.DOSE_LIMIT, state.dose + doseGain)
 
-	-- Science.
-	state.sciencePoints += state.allocation.Science * data.SCIENCE.POINTS_PER_SCIENCE_CELL
-		+ result.iceCores * data.SCIENCE.POINTS_PER_ICE_CORE
+	-- Science: gathered data waits until the antenna links the base with Earth, then all of it is sent.
+	state.pendingScience += state.allocation.Science * data.SCIENCE.POINTS_PER_SCIENCE_CELL
+		+ iceCores * data.SCIENCE.POINTS_PER_ICE_CORE
+	state.scienceSent = 0
+	if result.antennaLinked then
+		state.scienceSent = state.pendingScience
+		state.sciencePoints += state.pendingScience
+		state.pendingScience = 0
+	end
 
 	-- End conditions. Air and food get one day of grace at zero; dose does not.
 	if state.dose >= meters.DOSE_LIMIT then
@@ -282,7 +321,10 @@ function Simulation.endDay(state: MissionState, data: any, result: ShiftResult)
 		air = state.air,
 		food = state.food,
 		dose = state.dose,
+		water = state.water,
 		sciencePoints = state.sciencePoints,
+		pendingScience = state.pendingScience,
+		scienceSent = state.scienceSent,
 		causeKey = pickCause(state, data, result, before),
 	})
 end
@@ -296,6 +338,76 @@ function Simulation.stars(state: MissionState, data: any): number
 		return 2
 	end
 	return 1
+end
+
+local function deepCopy(value: any): any
+	if type(value) ~= "table" then
+		return value
+	end
+	local result = {}
+	for key, item in value do
+		result[key] = deepCopy(item)
+	end
+	return result
+end
+
+-- The state the day would end with if the shift ended now with `result`. Works on a copy: `state`
+-- is never changed.
+function Simulation.previewEndDay(state: MissionState, data: any, result: ShiftResult): MissionState
+	local copy: MissionState = deepCopy(state)
+	if copy.outcome == "InProgress" then
+		Simulation.endDay(copy, data, result)
+	end
+	return copy
+end
+
+export type LiveMeters = {
+	air: number,
+	food: number,
+	dose: number,
+	water: number,
+	pendingScience: number,
+	sciencePoints: number,
+}
+
+-- What the HUD shows while a shift runs. `progress` (0..1) is how much of the shift has passed.
+-- The steady part of the day (breathing, eating, the air maker, a leak) moves smoothly from the
+-- start-of-day value toward the end-of-day value; what the crew did (ice delivered, suit refills,
+-- time caught outside in a storm) shows at once. At progress 1 this equals endDay with `result`.
+function Simulation.liveMeters(state: MissionState, data: any, result: ShiftResult, progress: number): LiveMeters
+	local p = clamp(progress, 0, 1)
+	-- Science is previewed unsent; a linked antenna then sends everything waiting.
+	local idle: ShiftResult = {
+		playerCount = result.playerCount,
+		iceCores = 0,
+		arraysCleaned = result.arraysCleaned,
+		exposedAstronauts = 0,
+		leakRepaired = result.leakRepaired,
+		suitRefills = 0,
+		falseAlarm = result.falseAlarm,
+		antennaLinked = false,
+	}
+	local worked: ShiftResult = table.clone(result)
+	worked.antennaLinked = false
+	local baseline = Simulation.previewEndDay(state, data, idle)
+	local full = Simulation.previewEndDay(state, data, worked)
+	local function blend(start: number, base: number, final: number): number
+		return start + (base - start) * p + (final - base)
+	end
+	local live: LiveMeters = {
+		air = clamp(blend(state.air, baseline.air, full.air), 0, 100),
+		food = clamp(blend(state.food, baseline.food, full.food), 0, 100),
+		-- Dose never goes down.
+		dose = clamp(blend(state.dose, baseline.dose, full.dose), state.dose, data.METERS.DOSE_LIMIT),
+		water = clamp(blend(state.water, baseline.water, full.water), 0, data.WATER.MAX),
+		pendingScience = math.max(0, blend(state.pendingScience, baseline.pendingScience, full.pendingScience)),
+		sciencePoints = state.sciencePoints,
+	}
+	if result.antennaLinked then
+		live.sciencePoints += live.pendingScience
+		live.pendingScience = 0
+	end
+	return live
 end
 
 function Simulation.meterZone(value: number, meter: MeterId, data: any): "green" | "yellow" | "red"

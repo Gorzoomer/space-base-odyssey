@@ -1,5 +1,6 @@
 --!strict
--- Space Base Odyssey - server entry point: builds the Moon base, starts services, spawns players.
+-- Space Base Odyssey - server entry point: builds the Moon base, starts services, spawns players in
+-- the astronaut suit.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -14,6 +15,7 @@ local CrewService = require(script.Parent:WaitForChild("CrewService"))
 local MissionService = require(script.Parent:WaitForChild("MissionService"))
 local ProgressService = require(script.Parent:WaitForChild("ProgressService"))
 local SpaceWeatherService = require(script.Parent:WaitForChild("SpaceWeatherService"))
+local SuitService = require(script.Parent:WaitForChild("SuitService"))
 
 local RESPAWN_DELAY_SECONDS = 3
 
@@ -47,13 +49,25 @@ CrewService.start(world, { playerStats = remotes.playerStats, message = remotes.
 -- mission select screen knows what is unlocked.
 ProgressService.start(world, { progress = remotes.progress, collected = remotes.collected, message = remotes.message })
 MissionService.start(world, CrewService, ProgressService)
+-- Every character wears the same suit; rewards and event codes recolour parts of it.
+SuitService.start(ProgressService)
+
+-- When the Earth hides the Sun (an eclipse seen from the Moon), C.A.R.L. explains it.
+local onEclipse = (world :: any).onEclipse
+if type(onEclipse) == "function" then
+	onEclipse(function(active: boolean)
+		MissionService.announce(if active then "carl.eclipse_start" else "carl.eclipse_end")
+	end)
+else
+	warn("[SpaceBaseOdyssey] world has no onEclipse; eclipse lines are off")
+end
 
 local function loadCharacter(player: Player)
 	if player.Parent == nil then
 		return
 	end
 	local ok, err = pcall(function()
-		player:LoadCharacter()
+		SuitService.loadCharacter(player)
 	end)
 	if not ok then
 		warn(`[SpaceBaseOdyssey] could not load character for {player.Name}: {err}`)

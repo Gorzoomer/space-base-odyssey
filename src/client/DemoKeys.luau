@@ -36,6 +36,9 @@ function DemoKeys.start()
 			Store.send({ type = "DebugForceEvent", event = "SolarStorm" })
 		elseif input.KeyCode == Enum.KeyCode.F9 then
 			Store.send({ type = "DebugEndShift" })
+		elseif input.KeyCode == Enum.KeyCode.F10 then
+			local action: any = { type = "DebugEclipse" }
+			Store.send(action)
 		elseif input.KeyCode == Enum.KeyCode.F6 then
 			local action: any = { type = "DebugUnlockAll" }
 			Store.send(action)

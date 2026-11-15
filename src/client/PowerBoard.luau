@@ -76,10 +76,10 @@ end
 -- `addSourcesButton` comes from Sources: it places the "Real NASA data" button on this screen.
 --
 -- Screen layout (fractions of the screen):
---   y 0.02-0.13  day label 0.22-0.46, event 0.48-0.79, language button 0.815-0.985 (Main)
+--   y 0.02-0.13  day label 0.22-0.46, event 0.48-0.79, settings button 0.815-0.985 (Settings)
 --   y 0.10-0.28  objectives panel 0.01-0.21 (Objectives.luau, during a mission)
---   y 0.115-0.185 sources button 0.815-0.985 (right edge, under the language button)
---   y 0.15-0.26  meters 0.23-0.80
+--   y 0.115-0.185 sources button 0.815-0.985 (right edge, under the settings button)
+--   y 0.15-0.26  meters 0.23-0.80 (air, food, radiation, water)
 --   y 0.29-0.77  three system rows 0.05-0.95
 --   y 0.80-0.95  power left 0.05-0.30 | C.A.R.L. bubble 0.315-0.585 (Messages) | Start 0.60-0.95
 function PowerBoard.new(

@@ -204,6 +204,7 @@ for _, mission in Missions.LIST do
 			exposedAstronauts = 0,
 			leakRepaired = state.leakActive,
 			suitRefills = 2,
+			antennaLinked = true,
 		})
 	end
 	check(state.outcome == "Completed", `play {mission.id}: careful crew outcome {state.outcome}`)
@@ -230,10 +231,15 @@ for _, mission in Missions.LIST do
 			exposedAstronauts = 1,
 			leakRepaired = false,
 			suitRefills = 4,
+			antennaLinked = false,
 		})
 		check(worst.outcome == "Completed", `tutorial {mission.id}: worst day still completes ({worst.outcome})`)
 		check(worst.air > 0 and worst.food > 0, `tutorial {mission.id}: air {worst.air} and food {worst.food} stay above zero`)
 		check(worst.dose < MissionData.METERS.DOSE_LIMIT, `tutorial {mission.id}: dose {worst.dose} stays under the limit`)
+		-- The live HUD of a training shift never shows a meter in the red (MissionService also clamps).
+		local red = MissionData.METERS.RED_ZONE
+		check(worst.air > red and worst.food > red, `tutorial {mission.id}: worst day stays out of the red zone`)
+		check(100 - worst.dose > red, `tutorial {mission.id}: worst dose stays out of the red zone`)
 	end
 end
 

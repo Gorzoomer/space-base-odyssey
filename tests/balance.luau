@@ -5,7 +5,10 @@
 --   B. no fixed allocation without reacting to events earns 3 stars;
 --   C. a player who reacts (shelter, clean, repair, fetch ice) can earn 3 stars;
 --   D. cutting the greenhouse shows up as less food on a LATER day;
---   E. skipping life support ends the mission early, after one day of grace.
+--   E. skipping life support ends the mission early, after one day of grace;
+--   G. skipping ice makes air fall faster than fetching ice (the air maker needs water);
+--   H. never linking the antenna earns 1 star: science waits and is sent on the next linked day;
+--   I. live meters during a shift never change the state and end exactly at the endDay values.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local MissionData = require("../src/shared/MissionData")
@@ -68,6 +71,7 @@ local function idleShift(exposed: boolean): (state: MissionState) -> ShiftResult
 			exposedAstronauts = if exposed and state.todayEvent == "SolarStorm" then 1 else 0,
 			leakRepaired = false,
 			suitRefills = 0,
+			antennaLinked = false,
 		}
 	end
 end
@@ -80,21 +84,28 @@ for _, seed in SEEDS do
 	check(Simulation.stars(state, MissionData) == 1, `A seed {seed}: passive player earned {Simulation.stars(state, MissionData)} stars (needs 1)`)
 end
 
--- B. Every fixed allocation, sheltering perfectly but doing no tasks, earns at most 2 stars.
+-- B. Every fixed allocation, sheltering perfectly but doing no tasks, earns at most 2 stars, even
+-- when the antenna is linked every day (so science really reaches Earth).
 local bestStatic = 0
 for ls = 0, 2 do
 	for gh = 0, 2 do
 		for sc = 0, 2 do
 			for _, seed in SEEDS do
-				local state = run({
-					plan = function(s)
-						place(s, { LifeSupport = ls, Greenhouse = gh, Science = sc })
-					end,
-					shift = idleShift(false),
-				}, seed)
-				local stars = Simulation.stars(state, MissionData)
-				bestStatic = math.max(bestStatic, stars)
-				check(stars <= 2, `B seed {seed}: static {ls}/{gh}/{sc} earned {stars} stars (needs <= 2)`)
+				for _, linked in { false, true } do
+					local state = run({
+						plan = function(s)
+							place(s, { LifeSupport = ls, Greenhouse = gh, Science = sc })
+						end,
+						shift = function(s)
+							local result = idleShift(false)(s)
+							result.antennaLinked = linked
+							return result
+						end,
+					}, seed)
+					local stars = Simulation.stars(state, MissionData)
+					bestStatic = math.max(bestStatic, stars)
+					check(stars <= 2, `B seed {seed}: static {ls}/{gh}/{sc} (antenna {linked}) earned {stars} stars (needs <= 2)`)
+				end
 			end
 		end
 	end
@@ -115,6 +126,7 @@ local reactive: Policy = {
 			exposedAstronauts = 0,
 			leakRepaired = state.leakActive,
 			suitRefills = 2,
+			antennaLinked = true,
 		}
 	end,
 }
@@ -195,6 +207,163 @@ do
 	end
 	check(state.outcome == "Completed" and #state.history == 3, `F: 3-day mission ends Completed after 3 days ({state.outcome}, {#state.history})`)
 	check(events[1] == "EquipmentFailure" and events[2] == "SolarStorm" and events[3] == "Dust", "F: days follow the custom schedule")
+end
+
+-- Same careful crew as C, with one thing changed in every shift.
+local function reactiveWith(change: (state: MissionState, result: ShiftResult) -> ()): Policy
+	return {
+		plan = reactive.plan,
+		shift = function(state)
+			local result = reactive.shift(state)
+			change(state, result)
+			return result
+		end,
+	}
+end
+
+local function airTrack(state: MissionState): { number }
+	local track = {}
+	for _, record in state.history do
+		table.insert(track, record.air)
+	end
+	return track
+end
+
+-- G. Skipping ice: the water tank runs dry, the air maker slows and air falls faster.
+for _, seed in SEEDS do
+	local withIce = run(reactive, seed)
+	local noIce = run(
+		reactiveWith(function(_, result)
+			result.iceCores = 0
+		end),
+		seed
+	)
+	local iceAir, dryAir = airTrack(withIce), airTrack(noIce)
+	local never = true
+	local lower = false
+	for day, air in dryAir do
+		never = never and air <= iceAir[day]
+		lower = lower or air < iceAir[day]
+	end
+	check(never and lower, `G seed {seed}: air without ice should stay below air with ice`)
+	local dry = false
+	for _, record in noIce.history do
+		dry = dry or record.causeKey == "cause.no_water"
+	end
+	check(dry, `G seed {seed}: the report says the tank ran dry (cause.no_water)`)
+	check(noIce.water == 0, `G seed {seed}: water tank empty without ice ({noIce.water})`)
+	check(withIce.water > 0, `G seed {seed}: water left with ice ({withIce.water})`)
+	local days = math.min(#iceAir, #dryAir)
+	local function drop(track: { number }): number
+		return (MissionData.METERS.START_AIR - track[days]) / days
+	end
+	check(drop(dryAir) > drop(iceAir), `G seed {seed}: air falls faster without ice`)
+end
+
+-- H. Antenna: never linked = every science point waits = 1 star. Linked only on the last day sends
+-- everything that waited, so the stars come back.
+for _, seed in SEEDS do
+	local never = run(
+		reactiveWith(function(_, result)
+			result.antennaLinked = false
+		end),
+		seed
+	)
+	check(never.outcome == "Completed", `H seed {seed}: no-antenna crew still completes ({never.outcome})`)
+	check(
+		never.sciencePoints == 0 and never.pendingScience > 0,
+		`H seed {seed}: science waits (sent {never.sciencePoints}, waiting {never.pendingScience})`
+	)
+	check(
+		Simulation.stars(never, MissionData) == 1,
+		`H seed {seed}: never linking the antenna earned {Simulation.stars(never, MissionData)} stars (needs 1)`
+	)
+	local waiting = false
+	for _, record in never.history do
+		waiting = waiting or record.causeKey == "cause.data_waiting"
+	end
+	check(waiting, `H seed {seed}: the report says data is waiting (cause.data_waiting)`)
+
+	local always = run(reactive, seed)
+	local lastOnly = run(
+		reactiveWith(function(state, result)
+			result.antennaLinked = state.day == state.totalDays
+		end),
+		seed
+	)
+	check(
+		lastOnly.sciencePoints == always.sciencePoints,
+		`H seed {seed}: waiting science is sent later ({lastOnly.sciencePoints} vs {always.sciencePoints})`
+	)
+	check(lastOnly.pendingScience == 0, `H seed {seed}: nothing left waiting after the last link`)
+	local lastRecord = lastOnly.history[#lastOnly.history]
+	check(lastRecord.scienceSent == lastOnly.sciencePoints, `H seed {seed}: the last day sent all of it ({lastRecord.scienceSent})`)
+end
+
+-- I. Live meters: pure, start at the start-of-day values, end at the endDay values.
+do
+	local state = Simulation.newMission(MissionData, 3)
+	Simulation.beginDay(state, MissionData)
+	place(state, { LifeSupport = 1, Greenhouse = 1, Science = 2 })
+	state.leakActive = true
+	state.todayEvent = "SolarStorm"
+	local result: ShiftResult = {
+		playerCount = 2,
+		iceCores = 1,
+		arraysCleaned = 0,
+		exposedAstronauts = 1,
+		leakRepaired = false,
+		suitRefills = 3,
+		antennaLinked = true,
+	}
+	local before = { air = state.air, water = state.water, points = state.sciencePoints, days = #state.history }
+	local preview = Simulation.previewEndDay(state, MissionData, result)
+	check(
+		state.air == before.air and state.water == before.water and #state.history == before.days and state.day == 1,
+		"I: previewEndDay does not change the state"
+	)
+	check(#preview.history == before.days + 1, "I: previewEndDay returns the ended day")
+
+	local idle: ShiftResult = table.clone(result)
+	idle.iceCores, idle.suitRefills, idle.exposedAstronauts, idle.antennaLinked = 0, 0, 0, false
+	local start = Simulation.liveMeters(state, MissionData, idle, 0)
+	check(math.abs(start.air - state.air) < 1e-9 and math.abs(start.food - state.food) < 1e-9, "I: a shift starts at the start-of-day meters")
+	check(start.water == state.water and start.dose == state.dose, "I: a shift starts at the start-of-day water and dose")
+
+	local early = Simulation.liveMeters(state, MissionData, result, 0.1)
+	check(early.water > state.water, "I: ice delivered raises water at once")
+	check(early.dose > state.dose, "I: storm exposure raises the dose at once")
+	check(early.pendingScience == 0, "I: a linked antenna sends the waiting science")
+
+	local mid = Simulation.liveMeters(state, MissionData, idle, 0.5)
+	local later = Simulation.liveMeters(state, MissionData, idle, 0.9)
+	check(mid.air < state.air and later.air < mid.air, `I: a leak drains air steadily ({state.air} > {mid.air} > {later.air})`)
+	local finalLive = Simulation.liveMeters(state, MissionData, result, 1)
+	Simulation.endDay(state, MissionData, result)
+	for _, key in { "air", "food", "dose", "water", "pendingScience", "sciencePoints" } do
+		local a, b = (finalLive :: any)[key] :: number, (state :: any)[key] :: number
+		check(math.abs(a - b) < 1e-6, `I: live {key} at the end ({a}) equals endDay ({b})`)
+	end
+	check(state.sciencePoints > before.points, "I: endDay sent the science")
+end
+
+-- J. Water rules: ice fills the tank (up to MAX), the air maker uses it, no power uses none.
+do
+	local state = Simulation.newMission(MissionData, 1)
+	check(state.water == MissionData.WATER.START, "J: tank starts at WATER.START")
+	Simulation.beginDay(state, MissionData)
+	place(state, { LifeSupport = 0, Greenhouse = 2, Science = 2 })
+	Simulation.endDay(state, MissionData, idleShift(false)(state))
+	check(state.water == MissionData.WATER.START, "J: no air maker, no water used")
+	Simulation.beginDay(state, MissionData)
+	place(state, { LifeSupport = 1, Greenhouse = 1, Science = 1 })
+	local result = idleShift(false)(state)
+	result.iceCores = 20
+	Simulation.endDay(state, MissionData, result)
+	check(
+		state.water == MissionData.WATER.MAX - MissionData.WATER.USE_PER_DAY,
+		`J: tank capped at MAX before the day's use ({state.water})`
+	)
 end
 
 print(`balance: {passes} passed, {failures} failed; best static allocation earned {bestStatic} stars`)

@@ -1,6 +1,6 @@
 --!strict
--- Space Base Odyssey - client state: latest Snapshot, PlayerStats and Progress (missions and hidden
--- collectibles), chosen language and the Action sender.
+-- Space Base Odyssey - client state: latest Snapshot, PlayerStats and Progress (missions, hidden
+-- collectibles and event cosmetics), chosen language, local settings and the Action sender.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -15,7 +15,7 @@ export type TextRef = Types.TextRef
 export type Action = Types.Action
 export type LiveWeather = Types.LiveWeather
 export type Language = "en" | "es"
-export type ChangeKind = "snapshot" | "stats" | "language" | "progress"
+export type ChangeKind = "snapshot" | "stats" | "language" | "progress" | "settings"
 export type StormStage = "none" | "warning" | "storm"
 
 -- Stage 4 parts of the Snapshot (see Types.luau). Read through the helpers below.
@@ -37,9 +37,26 @@ Store.COLLECTIBLE_ICONS = table.freeze({
 	mars_potato = "potato",
 } :: { [string]: string })
 
+-- Local player settings (Settings panel). Kept on this client and mirrored as attributes of the
+-- local player (Store.SETTING_ATTRIBUTES) so other client scripts can read them.
+export type SettingName = "musicVolume" | "effectsVolume" | "funFacts" | "guidance"
+Store.SETTING_ATTRIBUTES = table.freeze({
+	musicVolume = "SBO_MusicVolume",
+	effectsVolume = "SBO_EffectsVolume",
+	funFacts = "SBO_FunFacts",
+	guidance = "SBO_Guidance",
+} :: { [string]: string })
+-- UI defaults (not gameplay numbers): volumes 0..1, C.A.R.L. features on.
+local settings: { [string]: number | boolean } = {
+	musicVolume = 0.6,
+	effectsVolume = 0.8,
+	funFacts = true,
+	guidance = true,
+}
+
 local snapshot: Snapshot? = nil
 local stats: PlayerStats? = nil
-local progress: Progress = { completed = {}, collectibles = {} }
+local progress: Progress = { completed = {}, collectibles = {}, cosmetics = {} }
 local language: Language = "en"
 local actionRemote: RemoteEvent? = nil
 local listeners: { (kind: ChangeKind) -> () } = {}
@@ -147,6 +164,15 @@ end
 function Store.setProgress(value: Progress)
 	local completed: { [string]: boolean } = {}
 	local collectibles: { [string]: boolean } = {}
+	local cosmetics: { [string]: boolean } = {}
+	local raw: any = value
+	if type(raw.cosmetics) == "table" then
+		for id, owned in raw.cosmetics do
+			if type(id) == "string" and owned == true then
+				cosmetics[id] = true
+			end
+		end
+	end
 	if type(value.completed) == "table" then
 		for id, done in value.completed do
 			if type(id) == "string" and done == true then
@@ -161,8 +187,85 @@ function Store.setProgress(value: Progress)
 			end
 		end
 	end
-	progress = { completed = completed, collectibles = collectibles }
+	progress = { completed = completed, collectibles = collectibles, cosmetics = cosmetics }
 	emit("progress")
+end
+
+-- Event cosmetics unlocked with a code (e.g. "explorer26"), from the saved Progress.
+function Store.hasCosmetic(id: string): boolean
+	local cosmetics: any = (progress :: any).cosmetics
+	return type(cosmetics) == "table" and cosmetics[id] == true
+end
+
+function Store.cosmeticIds(): { string }
+	local ids: { string } = {}
+	local cosmetics: any = (progress :: any).cosmetics
+	if type(cosmetics) == "table" then
+		for id, owned in cosmetics do
+			if type(id) == "string" and owned == true then
+				table.insert(ids, id)
+			end
+		end
+	end
+	table.sort(ids)
+	return ids
+end
+
+-- Local settings ------------------------------------------------------------------------------
+
+function Store.getSetting(name: SettingName): number | boolean
+	return settings[name]
+end
+
+function Store.settingOn(name: SettingName): boolean
+	return settings[name] == true
+end
+
+function Store.settingNumber(name: SettingName): number
+	local value = settings[name]
+	return if type(value) == "number" then value else 0
+end
+
+function Store.setSetting(name: SettingName, value: number | boolean)
+	if settings[name] == value then
+		return
+	end
+	settings[name] = value
+	local attribute = Store.SETTING_ATTRIBUTES[name]
+	local player = game:GetService("Players").LocalPlayer
+	if attribute and player then
+		player:SetAttribute(attribute, value)
+	end
+	emit("settings")
+end
+
+-- Read settings back from the local player's attributes (they survive a client script restart).
+function Store.loadSettings()
+	local player = game:GetService("Players").LocalPlayer
+	if not player then
+		return
+	end
+	for name, attribute in Store.SETTING_ATTRIBUTES do
+		local value = player:GetAttribute(attribute)
+		if type(value) == type(settings[name]) then
+			settings[name] = value
+		else
+			player:SetAttribute(attribute, settings[name])
+		end
+	end
+end
+
+-- Water and data waiting (Stage 5 Snapshot fields; 0 with an older server).
+function Store.water(): (number, number)
+	local snap: any = snapshot
+	local water = if snap and type(snap.water) == "number" then snap.water else 0
+	local waterMax = if snap and type(snap.waterMax) == "number" and snap.waterMax > 0 then snap.waterMax else 0
+	return water, waterMax
+end
+
+function Store.pendingScience(): number
+	local snap: any = snapshot
+	return if snap and type(snap.pendingScience) == "number" then snap.pendingScience else 0
 end
 
 function Store.hasCollectible(id: string): boolean

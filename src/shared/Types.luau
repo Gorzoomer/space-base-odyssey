@@ -15,6 +15,7 @@ export type Outcome = Simulation.Outcome
 export type Allocation = Simulation.Allocation
 export type DayRecord = Simulation.DayRecord
 export type ShiftResult = Simulation.ShiftResult
+export type LiveMeters = Simulation.LiveMeters
 export type MissionKind = Missions.MissionKind
 export type ObjectiveId = Missions.ObjectiveId
 
@@ -104,10 +105,16 @@ export type Snapshot = {
 	todayEvent: EventId,
 	allocation: Allocation,
 	cellsAvailable: number,
+	-- During a Shift air, food, dose, water, pendingScience and sciencePoints are LIVE values: the day
+	-- moving toward its end, plus task effects at once (Simulation.liveMeters). Sent at most about
+	-- four times per second while they change. Meters are rounded to 0.1, science to whole points.
 	air: number,
 	food: number,
 	dose: number,
-	sciencePoints: number,
+	water: number, -- water tank, 0..waterMax (the air maker needs it)
+	waterMax: number,
+	sciencePoints: number, -- science sent to Earth (counts for stars)
+	pendingScience: number, -- science waiting for the antenna to send it
 	stars: number,
 	outcome: Outcome,
 	history: { DayRecord },
@@ -123,6 +130,7 @@ export type Snapshot = {
 export type Progress = {
 	completed: { [string]: boolean }, -- mission ids
 	collectibles: { [string]: boolean }, -- "mini_earth" | "laika" | "cheese" | "mars_potato"
+	cosmetics: { [string]: boolean }, -- event cosmetics from redeem codes: "explorer26"
 }
 
 -- Sent to one player right after a collectible pickup (Remotes.COLLECTED).
@@ -148,11 +156,15 @@ export type Action =
 	| { type: "StartShift" }
 	| { type: "Restart" } -- Report -> Briefing (mission select)
 	| { type: "SetLanguage", language: "en" | "es" }
+	-- Settings panel: at most 24 characters, trimmed, any case. The server replies through C.A.R.L.
+	-- (carl.code_ok, carl.code_used, carl.code_bad); one attempt every 2 seconds per player.
+	| { type: "RedeemCode", code: string }
 	-- Owner-only, Studio or the place owner: deterministic testing and video recording.
 	| { type: "DebugForceEvent", event: EventId }
 	| { type: "DebugSkipToDay", day: number }
 	| { type: "DebugSeed", seed: number }
 	| { type: "DebugEndShift" }
+	| { type: "DebugEclipse" }
 	| { type: "DebugUnlockAll" } -- every mission unlocked for this server session (not saved)
 	| { type: "DebugGrantCollectible", id: string }
 

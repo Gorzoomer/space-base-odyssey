@@ -4,6 +4,8 @@
 -- the event schedule, which storms bring particles and the objectives counted here. Tutorials end as
 -- soon as their objectives are done and never fail; story chapters and free play are scored when the
 -- last day ends.
+-- During a shift the snapshot carries live meters (Simulation.liveMeters): the day moving toward its
+-- end-of-day values plus task effects at once, pushed at most about four times per second.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -55,6 +57,7 @@ export type Crew = {
 	isCarrying: (player: Player) -> boolean,
 	setCarrying: (player: Player, carrying: boolean) -> (),
 	takeRefillCount: () -> number,
+	peekRefillCount: () -> number,
 	onZoneChanged: (
 		listener: (player: Player, inside: boolean, sheltered: boolean, wasInside: boolean, wasSheltered: boolean) -> ()
 	) -> (),
@@ -66,6 +69,8 @@ export type ProgressApi = {
 	markCompleted: (players: { Player }, missionId: string) -> (),
 	grantCollectible: (player: Player, id: string) -> (),
 	onChanged: (listener: () -> ()) -> (),
+	-- Validates and redeems a code (RedeemCode action); replies to the player through C.A.R.L.
+	redeemCode: (player: Player, code: any) -> (),
 }
 
 type StormStage = "quiet" | "warning" | "storm" | "over"
@@ -81,7 +86,10 @@ type ShiftData = {
 	flare: ArchivedFlare?,
 	stage: StormStage,
 	falseAlarm: boolean,
+	progress: number, -- 0..1, how much of the shift has passed (never goes back when a tutorial extends)
 }
+
+type LiveMeters = Simulation.LiveMeters
 
 local TICK_SECONDS = 0.25
 local HINT_DELAY_SECONDS = 5 -- second C.A.R.L. line after the first one has been read
@@ -122,7 +130,8 @@ local shiftToken = 0
 local dusty: { boolean } = {}
 local iceUsed: { boolean } = {}
 local iceTransparency: { number } = {}
-local applied: { dusty: { [number]: boolean }, leak: boolean?, linked: boolean?, storm: string? } = { dusty = {} }
+local applied: { dusty: { [number]: boolean }, leak: boolean?, linked: boolean?, storm: string?, water: number? } =
+	{ dusty = {} }
 local appliedAllocation: Simulation.Allocation? = nil -- last plan shown on the base (setSystemVisuals)
 
 local actionWindows: { [Player]: { start: number, count: number } } = {}
@@ -137,6 +146,8 @@ local pendingFirstEvent: EventId? = nil -- DebugForceEvent in Briefing, applied 
 local finishing = false -- inside finishShift: auto-complete waits for the day to close
 local autoCompleteQueued = false
 local broadcastQueued = false
+local lastLive: LiveMeters? = nil -- live meters in the last snapshot sent during a shift
+local lastLivePushAt = -math.huge
 
 ----------------------------------------------------------------------------------------------------
 -- Helpers
@@ -177,11 +188,11 @@ local function sayTo(player: Player?, key: string, params: Params?)
 end
 
 -- Sends a message after a short delay, unless the phase changed meanwhile.
-local function sayLater(key: string)
+local function sayLater(key: string, params: Params?)
 	local serial = phaseSerial
 	task.delay(HINT_DELAY_SECONDS, function()
 		if phaseSerial == serial then
-			say(key)
+			say(key, params)
 		end
 	end)
 end
@@ -361,6 +372,78 @@ local function buildMissionCards(): { Types.MissionCard }
 end
 
 ----------------------------------------------------------------------------------------------------
+-- Live meters
+
+local function countExposed(data: ShiftData): number
+	local count = 0
+	for player in data.exposed do
+		if player.Parent ~= nil then
+			count += 1
+		end
+	end
+	return count
+end
+
+-- What the running shift has done so far. `refills`: suit refills counted (peek while running, take
+-- at the end). Training counts at most TUTORIAL_MAX_REFILLS, so a training day never empties a meter.
+local function shiftResultNow(currentShift: ShiftState, data: ShiftData, refills: number): ShiftResult
+	return {
+		playerCount = countPlayers(),
+		iceCores = currentShift.iceCoresDelivered,
+		arraysCleaned = data.arraysCleaned,
+		exposedAstronauts = countExposed(data),
+		leakRepaired = data.leakRepaired,
+		suitRefills = if isTutorial() then math.min(refills, TUTORIAL_MAX_REFILLS) else refills,
+		falseAlarm = if data.falseAlarm then true else nil,
+		antennaLinked = currentShift.antennaLinked,
+	}
+end
+
+local function roundTo(value: number, step: number): number
+	return math.floor(value / step + 0.5) * step
+end
+
+-- Live HUD values while a shift runs (nil otherwise).
+local function computeLive(): LiveMeters?
+	local currentShift, data = shift, shiftData
+	if phase ~= "Shift" or currentShift == nil or data == nil or state.outcome ~= "InProgress" then
+		return nil
+	end
+	local length = currentShift.endsAt - data.startedAt
+	local p = if length > 0 then math.clamp((now() - data.startedAt) / length, 0, 1) else 1
+	data.progress = math.max(data.progress, p)
+	local result = shiftResultNow(currentShift, data, crew.peekRefillCount())
+	local live = Simulation.liveMeters(state, MissionData, result, data.progress)
+	local step = MissionData.LIVE.METER_STEP
+	live.air = roundTo(live.air, step)
+	live.food = roundTo(live.food, step)
+	live.dose = roundTo(live.dose, step)
+	live.water = roundTo(live.water, step)
+	live.pendingScience = math.floor(live.pendingScience + 0.5)
+	live.sciencePoints = math.floor(live.sciencePoints + 0.5)
+	if isTutorial() then
+		-- Training meters may move but never show the red zone.
+		local red = MissionData.METERS.RED_ZONE
+		live.air = math.max(live.air, math.min(state.air, red + 1))
+		live.food = math.max(live.food, math.min(state.food, red + 1))
+		live.dose = math.min(live.dose, math.max(state.dose, 100 - red - 1))
+	end
+	return live
+end
+
+local function sameLive(a: LiveMeters?, b: LiveMeters?): boolean
+	if a == nil or b == nil then
+		return a == b
+	end
+	return a.air == b.air
+		and a.food == b.food
+		and a.dose == b.dose
+		and a.water == b.water
+		and a.pendingScience == b.pendingScience
+		and a.sciencePoints == b.sciencePoints
+end
+
+----------------------------------------------------------------------------------------------------
 -- Snapshot
 
 local function buildSnapshot(): Snapshot
@@ -372,6 +455,7 @@ local function buildSnapshot(): Snapshot
 	if spaceWeather then
 		weatherCopy = table.clone(spaceWeather)
 	end
+	local live = computeLive()
 	return {
 		phase = phase,
 		day = state.day,
@@ -379,10 +463,13 @@ local function buildSnapshot(): Snapshot
 		todayEvent = state.todayEvent,
 		allocation = table.clone(state.allocation),
 		cellsAvailable = state.cellsAvailable,
-		air = state.air,
-		food = state.food,
-		dose = state.dose,
-		sciencePoints = state.sciencePoints,
+		air = if live then live.air else state.air,
+		food = if live then live.food else state.food,
+		dose = if live then live.dose else state.dose,
+		water = if live then live.water else state.water,
+		waterMax = MissionData.WATER.MAX,
+		sciencePoints = if live then live.sciencePoints else state.sciencePoints,
+		pendingScience = if live then live.pendingScience else state.pendingScience,
 		stars = Simulation.stars(state, MissionData),
 		outcome = state.outcome,
 		history = deepCopy(state.history),
@@ -397,7 +484,35 @@ end
 
 local function broadcast()
 	if remotes then
-		remotes.snapshot:FireAllClients(buildSnapshot())
+		local snapshot = buildSnapshot()
+		remotes.snapshot:FireAllClients(snapshot)
+		-- The water tank beside the processor shows the same level as the HUD.
+		local fraction = math.clamp(snapshot.water / snapshot.waterMax, 0, 1)
+		if applied.water == nil or math.abs((applied.water :: number) - fraction) >= 0.01 then
+			applied.water = fraction
+			worldCall("setWaterLevel", fraction)
+		end
+		lastLive = if phase == "Shift" and shift ~= nil
+			then {
+				air = snapshot.air,
+				food = snapshot.food,
+				dose = snapshot.dose,
+				water = snapshot.water,
+				pendingScience = snapshot.pendingScience,
+				sciencePoints = snapshot.sciencePoints,
+			}
+			else nil
+		lastLivePushAt = os.clock()
+	end
+end
+
+-- Shift tick: pushes a snapshot when the live meters moved, at most every LIVE.PUSH_SECONDS.
+local function pushLiveIfChanged()
+	if os.clock() - lastLivePushAt < MissionData.LIVE.PUSH_SECONDS * 0.9 then
+		return
+	end
+	if not sameLive(computeLive(), lastLive) then
+		broadcast()
 	end
 end
 
@@ -581,6 +696,8 @@ local function planningHintKey(): string
 		return "carl.dust"
 	elseif state.todayEvent == "EquipmentFailure" then
 		return "carl.leak"
+	elseif state.water < MissionData.WATER.USE_PER_DAY then
+		return "carl.no_water" -- the air maker will run short: fetch ice
 	end
 	return "carl.plan_hint"
 end
@@ -669,27 +786,9 @@ local function finishShift(forceComplete: boolean?)
 	local data = shiftData :: ShiftData
 	shiftToken += 1
 
-	local exposedCount = 0
-	for player in data.exposed do
-		if player.Parent ~= nil then
-			exposedCount += 1
-		end
-	end
-	local refills = crew.takeRefillCount()
+	-- The real end of the day replaces the live preview (same rules, so the values match).
+	local result = shiftResultNow(currentShift, data, crew.takeRefillCount())
 	crew.setShiftActive(false)
-	if isTutorial() then
-		refills = math.min(refills, TUTORIAL_MAX_REFILLS) -- training never empties a meter
-	end
-
-	local result: ShiftResult = {
-		playerCount = countPlayers(),
-		iceCores = currentShift.iceCoresDelivered,
-		arraysCleaned = data.arraysCleaned,
-		exposedAstronauts = exposedCount,
-		leakRepaired = data.leakRepaired,
-		suitRefills = refills,
-		falseAlarm = if data.falseAlarm then true else nil,
-	}
 	Simulation.endDay(state, MissionData, result)
 
 	finishing = true
@@ -849,8 +948,10 @@ local function shiftTick()
 			broadcast()
 		else
 			finishShift()
+			return
 		end
 	end
+	pushLiveIfChanged()
 end
 
 local function startShift()
@@ -882,6 +983,7 @@ local function startShift()
 		flare = nil,
 		stage = "quiet",
 		falseAlarm = false,
+		progress = 0,
 	}
 	spaceWeather = nil
 	setPhase("Shift")
@@ -1094,10 +1196,16 @@ local function onAntennaAligned()
 	if phase ~= "Shift" or shift == nil or shift.antennaLinked then
 		return
 	end
+	-- The science waiting on the HUD right now is sent to Earth (it counts for stars).
+	local before = computeLive()
+	local waiting = if before then before.pendingScience else state.pendingScience
 	shift.antennaLinked = true
 	say("carl.antenna_linked")
+	if waiting > 0 then
+		say("carl.data_sent", { n = waiting })
+	end
 	addProgress("align_antenna")
-	say("carl.earth_delay", {
+	sayLater("carl.earth_delay", {
 		moon = MissionData.REAL.MOON_EARTH_LIGHT_TIME_S,
 		mars = MissionData.REAL.MARS_LIGHT_TIME_MAX_MIN,
 	})
@@ -1160,6 +1268,7 @@ local function assistedResult(): ShiftResult
 		leakRepaired = true,
 		suitRefills = 0,
 		falseAlarm = nil,
+		antennaLinked = true,
 	}
 end
 
@@ -1300,6 +1409,11 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 		if player and (language == "en" or language == "es") then
 			player:SetAttribute("Language", language)
 		end
+	elseif kind == "RedeemCode" then
+		local api = progress
+		if player and api then
+			api.redeemCode(player, action.code)
+		end
 	elseif kind == "DebugForceEvent" then
 		if isDebugAllowed(player, trusted) and table.find(EVENTS, action.event) ~= nil then
 			debugForceEvent(action.event :: EventId)
@@ -1317,6 +1431,11 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 	elseif kind == "DebugEndShift" then
 		if isDebugAllowed(player, trusted) and phase == "Shift" then
 			finishShift()
+		end
+	elseif kind == "DebugEclipse" then
+		local w: any = world
+		if isDebugAllowed(player, trusted) and w and w.previewEclipse then
+			pcall(w.previewEclipse)
 		end
 	elseif kind == "DebugUnlockAll" then
 		if isDebugAllowed(player, trusted) then
@@ -1448,6 +1567,11 @@ end
 
 function MissionService.getPhase(): Phase
 	return phase
+end
+
+-- A C.A.R.L. line for everyone, from other services (for example the eclipse, in Main).
+function MissionService.announce(key: string, params: Params?)
+	say(key, params)
 end
 
 return MissionService

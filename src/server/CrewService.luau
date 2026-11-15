@@ -360,6 +360,11 @@ function CrewService.takeRefillCount(): number
 	return count
 end
 
+-- The suit refills counted so far this shift, without resetting (live meters).
+function CrewService.peekRefillCount(): number
+	return refillCount
+end
+
 function CrewService.getStats(player: Player): PlayerStats?
 	local crew = crews[player]
 	if crew == nil then

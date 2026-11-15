@@ -68,7 +68,7 @@ MissionData.METERS = table.freeze({
 	AIR_USE_PER_DAY = 20, -- crew breathing
 	FOOD_USE_PER_DAY = 15, -- crew eating
 	AIR_PER_LIFE_SUPPORT_CELL = 15, -- electrolysis turns water into oxygen with power
-	AIR_PER_ICE_CORE = 10, -- ice melted into water, then split into oxygen
+	AIR_PER_ICE_CORE = 10, -- fresh ice water split into oxygen right away (needs the air maker powered)
 	FOOD_PER_GREENHOUSE_CELL = 12, -- harvested the NEXT day: plants take time to grow
 	DOSE_BACKGROUND_PER_DAY = 3, -- galactic cosmic rays never stop
 	DOSE_PER_EXPOSED_ASTRONAUT = 18, -- caught outside the shelter during a particle storm
@@ -77,12 +77,36 @@ MissionData.METERS = table.freeze({
 	SUIT_REFILL_AIR_COST = 2, -- refilling suits inside the habitat uses base air
 })
 
--- Science score (GAME).
+-- Water tank (GAME units, not litres). Real science (DATA_SOURCES.md, Life support row 9): the air
+-- maker splits water into oxygen with electricity, so without water it cannot make air. Ice cores
+-- from the crater melt into the tank.
+MissionData.WATER = table.freeze({
+	MAX = 10,
+	START = 6,
+	USE_PER_DAY = 2, -- the air maker uses this much each day it has power
+	PER_ICE_CORE = 2,
+	-- Without enough water the air maker makes only its share: 1 of 2 units = half the air.
+})
+
+-- Live meters during a shift (GAME). The HUD shows the day moving toward its end-of-day values.
+MissionData.LIVE = table.freeze({
+	PUSH_SECONDS = 0.25, -- at most four snapshots per second while meters move
+	METER_STEP = 0.1, -- meters are sent rounded to this step
+})
+
+-- Science score (GAME). Science only counts once it is sent to Earth: on a day the antenna is
+-- linked (real: rover data reaches scientists only through a radio link). Until then it waits.
 MissionData.SCIENCE = table.freeze({
 	POINTS_PER_SCIENCE_CELL = 1,
 	POINTS_PER_ICE_CORE = 2,
 	TWO_STARS = 10,
 	THREE_STARS = 18,
+})
+
+-- Redeem codes (GAME). The codes themselves live only on the server (src/server/Codes.luau).
+MissionData.CODES = table.freeze({
+	MAX_LENGTH = 24,
+	COOLDOWN_SECONDS = 2, -- one attempt every 2 seconds per player
 })
 
 -- Personal suit oxygen while outside (GAME).

@@ -1,6 +1,14 @@
 --!strict
 -- Space Base Odyssey - Shift HUD: meters, shift timer, event banner, storm countdown (with the flare's
 -- data source), Earth-link indicator, suit oxygen and ice.
+-- Screen layout during a shift (fractions of the screen):
+--   top centre   y 0.02-0.09  shift timer 0.25-0.49 | today's event 0.51-0.75
+--   top right    y 0.02-0.10  settings button (Settings.luau); y 0.115-0.18 Earth link
+--   left column  x 0.01-0.21  objectives (Objectives.luau, from y 0.12), then the meters panel
+--                             right under it (air, food, radiation, water, data waiting)
+--   centre       y 0.10-0.25  C.A.R.L. bubble (Messages.luau, x 0.29-0.71)
+--                y 0.27-0.48  storm countdown and flare source (x 0.22-0.78)
+--   bottom       y 0.76-0.84  carrying ice; y 0.86-0.96 suit air
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -25,25 +33,38 @@ local function shortDate(value: string): string
 	return value
 end
 
+-- Left column: the meters sit this far under the objectives panel (fractions of the screen).
+local COLUMN_X = 0.01
+local COLUMN_WIDTH = 0.2
+local COLUMN_TOP = 0.12 -- when no objectives panel is shown
+local COLUMN_GAP = 0.012
+local METERS_HEIGHT = 0.19
+
+export type Deps = {
+	-- Bottom edge (screen fraction) of the objectives panel, or nil while it is hidden.
+	columnTop: (() -> number?)?,
+}
+
 export type HudView = {
 	setVisible: (visible: boolean) -> (),
 	render: () -> (),
 	tick: () -> (), -- call often (timers and storm countdown use server time)
 }
 
-function Hud.new(root: Frame): HudView
+function Hud.new(root: Frame, deps: Deps?): HudView
 	local suitMax: number = MissionData.SUIT.MAX
 
 	local screen = Ui.frame(root, { name = "Hud", zindex = 5, visible = false })
 
 	local meters = Meters.new(screen, {
-		size = UDim2.fromScale(0.56, 0.1),
-		position = UDim2.fromScale(0.22, 0.02),
-	})
+		name = "Meters",
+		size = UDim2.fromScale(COLUMN_WIDTH, METERS_HEIGHT),
+		position = UDim2.fromScale(COLUMN_X, COLUMN_TOP),
+	}, "column")
 	local timer = Ui.iconText(screen, {
 		name = "Timer",
-		size = UDim2.fromScale(0.27, 0.07),
-		position = UDim2.fromScale(0.22, 0.13),
+		size = UDim2.fromScale(0.24, 0.07),
+		position = UDim2.fromScale(0.25, 0.02),
 		color = Ui.COLORS.panel,
 		transparency = 0.1,
 		stroke = 2,
@@ -53,8 +74,8 @@ function Hud.new(root: Frame): HudView
 	})
 	local eventBanner = Ui.iconText(screen, {
 		name = "Event",
-		size = UDim2.fromScale(0.27, 0.07),
-		position = UDim2.fromScale(0.51, 0.13),
+		size = UDim2.fromScale(0.24, 0.07),
+		position = UDim2.fromScale(0.51, 0.02),
 		color = Ui.COLORS.panelLight,
 		transparency = 0.1,
 		stroke = 2,
@@ -64,8 +85,8 @@ function Hud.new(root: Frame): HudView
 	-- Storm warning (countdown) and "storm now" share the centre of the screen.
 	local countdown = Ui.iconText(screen, {
 		name = "StormCountdown",
-		size = UDim2.fromScale(0.62, 0.17),
-		position = UDim2.fromScale(0.5, 0.26),
+		size = UDim2.fromScale(0.56, 0.15),
+		position = UDim2.fromScale(0.5, 0.27),
 		anchor = Vector2.new(0.5, 0),
 		color = Ui.COLORS.warning,
 		stroke = 5,
@@ -76,11 +97,11 @@ function Hud.new(root: Frame): HudView
 		visible = false,
 	})
 	-- Under the countdown: says honestly whether the flare is live NASA data or an archive replay.
-	-- Ends at y 0.49, above the C.A.R.L. bubble (y 0.5) and clear of the Run button (x >= 0.77).
+	-- Ends at y 0.48, clear of the Run button (x >= 0.77) and of the left column (x <= 0.21).
 	local flareSource = Ui.iconText(screen, {
 		name = "FlareSource",
 		size = UDim2.fromScale(0.44, 0.05),
-		position = UDim2.fromScale(0.5, 0.44),
+		position = UDim2.fromScale(0.5, 0.43),
 		anchor = Vector2.new(0.5, 0),
 		color = Ui.COLORS.panel,
 		transparency = 0.1,
@@ -96,7 +117,7 @@ function Hud.new(root: Frame): HudView
 	flareSource.label.Size = UDim2.fromScale(0.88, 0.86)
 	flareSource.label.Position = UDim2.fromScale(0.11, 0.5)
 
-	-- Right edge, under the language button and clear of the meters (which end at x 0.78).
+	-- Right edge, under the settings button.
 	local earthLink = Ui.iconText(screen, {
 		name = "EarthLink",
 		size = UDim2.fromScale(0.17, 0.065),
@@ -113,7 +134,7 @@ function Hud.new(root: Frame): HudView
 	local stormNow = Ui.iconText(screen, {
 		name = "StormNow",
 		size = UDim2.fromScale(0.5, 0.14),
-		position = UDim2.fromScale(0.5, 0.26),
+		position = UDim2.fromScale(0.5, 0.27),
 		anchor = Vector2.new(0.5, 0),
 		color = Ui.COLORS.storm,
 		stroke = 5,
@@ -169,10 +190,23 @@ function Hud.new(root: Frame): HudView
 	})
 
 	local visible = false
+	local columnTop = COLUMN_TOP
+
+	-- Keep the meters panel right under the objectives panel (its height changes with the mission).
+	local function placeColumn()
+		local bottom = if deps and deps.columnTop then deps.columnTop() else nil
+		local top = if bottom then bottom + COLUMN_GAP else COLUMN_TOP
+		if math.abs(top - columnTop) > 0.0005 then
+			columnTop = top
+			meters.frame.Position = UDim2.fromScale(COLUMN_X, top)
+		end
+	end
+	meters.frame.Position = UDim2.fromScale(COLUMN_X, COLUMN_TOP)
 
 	local function render()
 		local snap = Store.getSnapshot()
 		local stats = Store.getStats()
+		placeColumn()
 		meters.render()
 		suitName.Text = Store.t("ui.meter.suit")
 		if snap then
@@ -214,6 +248,7 @@ function Hud.new(root: Frame): HudView
 		if not visible then
 			return
 		end
+		placeColumn()
 		local snap = Store.getSnapshot()
 		local shift = if snap then snap.shift else nil
 		if not snap or not shift then

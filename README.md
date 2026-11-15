@@ -49,6 +49,7 @@ Every number and its source is listed in [DATA_SOURCES.md](DATA_SOURCES.md).
 - [x] Stage 2: live NASA data, real-data screen, Earth link
 - [x] Stage 3: base reacts to decisions, guided first days, task markers, C.A.R.L. drone
 - [x] Stage 4: training and story missions, hidden secrets, visual identity with icons
+- [x] Stage 5: live meters, water and antenna consequences, real rotating Earth with eclipses, astronaut suit, C.A.R.L. guidance and fun facts, settings and codes
 - [ ] Playtests with people outside the team
 - [ ] Public release
 

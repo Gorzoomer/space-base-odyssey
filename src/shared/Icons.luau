@@ -54,6 +54,9 @@ local Icons = {
 -- Earth map: NASA Visible Earth "Blue Marble" (public domain, NASA Goddard), 1024x512 equirectangular.
 Icons.earthMap = "rbxassetid://108242726596736"
 
+-- Near-black 64x64 skybox face made by the team (no external source).
+Icons.skyBlack = "rbxassetid://116532295206191"
+
 -- Aliases share an image.
 Icons.lifesupport = Icons.air
 Icons.repair = Icons.failure
