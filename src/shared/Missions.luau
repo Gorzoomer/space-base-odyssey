@@ -6,6 +6,9 @@
 -- Texts are localization keys built from the ids:
 --   "mission.<id>.title", "mission.<id>.intro", "mission.<id>.outro", objective texts "obj.<ObjectiveId>".
 -- Numbers here are GAME values (mission length, timings), chosen for playability.
+-- Stage 6: the base starts almost empty. A mission can need builds (`needs`: build id -> minimum
+-- level, the ids of MissionData.BASE.BUILDS) and the training missions teach building with the
+-- build_* objectives (done once that structure stands in the server).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 -- Same values as Simulation.EventId (duplicated so this module needs no require).
@@ -29,6 +32,10 @@ export type ObjectiveId =
 	| "complete_days"
 	| "deliver_ice_total"
 	| "stars_at_least"
+	| "build_solar"
+	| "build_greenhouse"
+	| "build_antenna"
+	| "build_shelter"
 
 export type Objective = { id: ObjectiveId, target: number }
 
@@ -44,6 +51,9 @@ export type Mission = {
 	shiftSeconds: number?, -- shift length (default MissionData)
 	objectives: { Objective },
 	requires: { string }, -- mission ids that must be completed first
+	-- Builds that must stand in the server to start (build id -> minimum level; nil = none). The
+	-- training missions build what they teach, so they need only what earlier missions built.
+	needs: { [string]: number }?,
 	autoComplete: boolean, -- true = the mission ends as soon as every objective is done
 }
 
@@ -63,7 +73,23 @@ local OBJECTIVE_IDS: { ObjectiveId } = {
 	"complete_days",
 	"deliver_ice_total",
 	"stars_at_least",
+	"build_solar",
+	"build_greenhouse",
+	"build_antenna",
+	"build_shelter",
 }
+
+-- build_* objectives and the build each one waits for (progress 1 once its level is at least 1).
+local BUILD_OBJECTIVES: { [string]: string } = {
+	build_solar = "solar",
+	build_greenhouse = "greenhouse",
+	build_antenna = "antenna",
+	build_shelter = "shelter",
+}
+
+-- Stable order for "build this first" (same order as MissionData.BASE.BUILDS; duplicated so this
+-- module needs no require). Unknown ids come after these, sorted by name.
+local BUILD_ORDER: { string } = { "solar", "greenhouse", "antenna", "shelter", "drill_1", "drill_2", "drill_3", "cargo_bot" }
 
 -- Objective texts that show the target as {n} ("Finish {n} days").
 local COUNTED_OBJECTIVES: { [string]: boolean } = {
@@ -88,8 +114,10 @@ local LIST: { Mission } = {
 		icon = "home",
 		days = 1,
 		schedule = { "None" },
-		objectives = { obj("go_outside", 1), obj("return_inside", 1) },
+		-- Go out, build the first solar array on its glowing pad, come back in.
+		objectives = { obj("go_outside", 1), obj("build_solar", 1), obj("return_inside", 1) },
 		requires = {},
+		needs = nil,
 		autoComplete = true,
 	},
 	{
@@ -100,8 +128,9 @@ local LIST: { Mission } = {
 		days = 1,
 		schedule = { "None" },
 		shiftSeconds = 45, -- GAME: a short first shift
-		objectives = { obj("set_power", 1), obj("start_shift", 1), obj("finish_day", 1) },
+		objectives = { obj("build_greenhouse", 1), obj("set_power", 1), obj("start_shift", 1), obj("finish_day", 1) },
 		requires = { "t1_steps" },
+		needs = { solar = 1 },
 		autoComplete = true,
 	},
 	{
@@ -111,8 +140,15 @@ local LIST: { Mission } = {
 		icon = "target",
 		days = 1,
 		schedule = { "Dust" },
-		objectives = { obj("align_antenna", 1), obj("clean_panel", 1), obj("drill_ice", 1), obj("deliver_ice", 1) },
+		objectives = {
+			obj("build_antenna", 1),
+			obj("align_antenna", 1),
+			obj("clean_panel", 1),
+			obj("drill_ice", 1),
+			obj("deliver_ice", 1),
+		},
 		requires = { "t2_power" },
+		needs = { solar = 1, greenhouse = 1 },
 		autoComplete = true,
 	},
 	{
@@ -124,8 +160,9 @@ local LIST: { Mission } = {
 		schedule = { "SolarStorm" },
 		stormParticles = { true },
 		flareAtSeconds = 12, -- GAME: the warning comes quickly in training
-		objectives = { obj("reach_shelter", 1), obj("survive_storm", 1) },
+		objectives = { obj("build_shelter", 1), obj("reach_shelter", 1), obj("survive_storm", 1) },
 		requires = { "t3_tasks" },
+		needs = { solar = 1, greenhouse = 1, antenna = 1 },
 		autoComplete = true,
 	},
 	-- Story: three chapters, ending with a partial ending (Mars is next, secrets remain).
@@ -138,6 +175,7 @@ local LIST: { Mission } = {
 		schedule = { "None", "Dust", "None" },
 		objectives = { obj("complete_days", 3), obj("deliver_ice_total", 2) },
 		requires = { "t4_storm" },
+		needs = { solar = 2, greenhouse = 1, antenna = 1, shelter = 1 }, -- more panels, more power
 		autoComplete = false,
 	},
 	{
@@ -150,6 +188,7 @@ local LIST: { Mission } = {
 		stormParticles = { true },
 		objectives = { obj("complete_days", 3), obj("survive_storm", 1) },
 		requires = { "c1_arrival" },
+		needs = { solar = 3, greenhouse = 1, antenna = 1, shelter = 1 }, -- the full base
 		autoComplete = false,
 	},
 	{
@@ -163,6 +202,7 @@ local LIST: { Mission } = {
 		stormParticles = { true, false },
 		objectives = { obj("complete_days", 4), obj("repair_leak", 1), obj("stars_at_least", 2) },
 		requires = { "c2_storm" },
+		needs = { solar = 3, greenhouse = 1, antenna = 1, shelter = 1 },
 		autoComplete = false,
 	},
 	-- Free play: the original random week, unlocked after the story.
@@ -175,6 +215,7 @@ local LIST: { Mission } = {
 		schedule = nil,
 		objectives = { obj("complete_days", 7) },
 		requires = { "c3_failure" },
+		needs = { solar = 3, greenhouse = 1, antenna = 1, shelter = 1 },
 		autoComplete = false,
 	},
 }
@@ -186,6 +227,9 @@ for _, mission in LIST do
 		table.freeze(objective)
 	end
 	table.freeze(mission.requires)
+	if mission.needs then
+		table.freeze(mission.needs)
+	end
 	if mission.schedule then
 		table.freeze(mission.schedule)
 	end
@@ -201,6 +245,7 @@ local Missions = {}
 Missions.LIST = table.freeze(LIST)
 Missions.OBJECTIVE_IDS = table.freeze(OBJECTIVE_IDS)
 Missions.COLLECTIBLES = table.freeze(COLLECTIBLES)
+Missions.BUILD_ORDER = table.freeze(BUILD_ORDER)
 
 function Missions.get(id: string): Mission?
 	return byId[id]
@@ -235,14 +280,69 @@ function Missions.isCollectible(id: any): boolean
 	return type(id) == "string" and table.find(COLLECTIBLES, id) ~= nil
 end
 
--- A mission is unlocked when every mission it requires is in `completed`.
-function Missions.isUnlocked(mission: Mission, completed: { [string]: boolean }): boolean
+local function buildLevel(builds: { [string]: number }, id: string): number
+	local value = builds[id]
+	return if type(value) == "number" then value else 0
+end
+
+-- The build a build_* objective waits for ("build_solar" -> "solar"), or nil for other objectives.
+function Missions.buildForObjective(id: string): string?
+	return BUILD_OBJECTIVES[id]
+end
+
+-- True when every build the mission needs stands (same rule as BaseBuild.meetsNeeds).
+function Missions.meetsNeeds(mission: Mission, builds: { [string]: number }): boolean
+	local needs = mission.needs
+	if needs == nil then
+		return true
+	end
+	for id, level in needs do
+		if buildLevel(builds, id) < level then
+			return false
+		end
+	end
+	return true
+end
+
+-- The first build (in BUILD_ORDER) the mission needs that does not stand yet, or nil.
+function Missions.missingBuild(mission: Mission, builds: { [string]: number }): string?
+	local needs = mission.needs
+	if needs == nil then
+		return nil
+	end
+	for _, id in BUILD_ORDER do
+		local level = needs[id]
+		if level ~= nil and buildLevel(builds, id) < level then
+			return id
+		end
+	end
+	local others: { string } = {}
+	for id, level in needs do
+		if table.find(BUILD_ORDER, id) == nil and buildLevel(builds, id) < level then
+			table.insert(others, id)
+		end
+	end
+	table.sort(others)
+	return others[1]
+end
+
+-- True when every mission it requires is in `completed`, ignoring builds.
+function Missions.requiresDone(mission: Mission, completed: { [string]: boolean }): boolean
 	for _, required in mission.requires do
 		if not completed[required] then
 			return false
 		end
 	end
 	return true
+end
+
+-- A mission is unlocked when every mission it requires is in `completed` and, when `builds` (the
+-- effective builds standing in the server) is given, every build it needs stands.
+function Missions.isUnlocked(mission: Mission, completed: { [string]: boolean }, builds: { [string]: number }?): boolean
+	if not Missions.requiresDone(mission, completed) then
+		return false
+	end
+	return builds == nil or Missions.meetsNeeds(mission, builds)
 end
 
 -- How many SolarStorm days come before or on `day` (1-based index into stormParticles).

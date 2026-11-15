@@ -96,6 +96,9 @@ export type MissionCard = {
 	icon: string, -- key in Icons
 	unlocked: boolean,
 	completed: boolean,
+	-- Stage 6: set when every required mission is done but a build it needs does not stand yet
+	-- (a build id such as "solar"; lock text "ui.needs_build" with {name}). nil otherwise.
+	missingBuild: string?,
 }
 
 export type Snapshot = {
@@ -146,6 +149,35 @@ export type PlayerStats = {
 	inside: boolean, -- inside a pressurized module
 	sheltered: boolean, -- inside the regolith shelter
 	carryingIce: boolean,
+	suitMax: number, -- SUIT.MAX plus the "tank" skill (Stage 6)
+}
+
+-- Stage 6: what a player wears and shows. Values: helmet "standard" | "explorer26" (event code);
+-- backpack "standard" | "laika" (collectible); carl "classic" | "earth" (mini Earth collectible);
+-- pet "none" | "laika" | "cheese" | "rabbit" | "monkey". The server checks ownership on Equip.
+export type Equipped = {
+	helmet: string,
+	backpack: string,
+	carl: string,
+	pet: string,
+}
+
+-- Stage 6: build-and-grow state, sent only to that player (Remotes.BASE_STATE) on join and change.
+export type BaseState = {
+	credits: number,
+	xp: number,
+	level: number,
+	levelXp: number, -- total XP where this level started
+	nextLevelXp: number?, -- total XP for the next level (nil at the top level)
+	skillPoints: number,
+	builds: { [string]: number }, -- EFFECTIVE builds standing in this server (highest of all players)
+	ownBuilds: { [string]: number }, -- this player's saved builds
+	skills: { [string]: number },
+	pets: { [string]: boolean }, -- owned pets (bought + from collectibles)
+	equipped: Equipped,
+	siloIce: number, -- ice waiting in the silo (shared by the server)
+	siloMax: number,
+	icePerMinute: number, -- from every automatic drill standing
 }
 
 -- Client -> server requests.
@@ -159,6 +191,14 @@ export type Action =
 	-- Settings panel: at most 24 characters, trimmed, any case. The server replies through C.A.R.L.
 	-- (carl.code_ok, carl.code_used, carl.code_bad); one attempt every 2 seconds per player.
 	| { type: "RedeemCode", code: string }
+	-- Stage 6 (BaseService validates: level, credits, requirements, ownership, distance for prompts).
+	| { type: "Build", id: string } -- build or upgrade to the next level (also from the world prompt)
+	| { type: "LearnSkill", id: string }
+	| { type: "Equip", slot: "helmet" | "backpack" | "carl" | "pet", value: string }
+	| { type: "BuyPet", id: string }
+	| { type: "ClaimSilo" } -- also from the silo prompt
+	| { type: "DebugGrantCredits", amount: number } -- Studio / place owner only; also grants XP = amount
+	| { type: "DebugResetBase" } -- Studio / place owner only: this player's builds, skills, credits, XP back to the start
 	-- Owner-only, Studio or the place owner: deterministic testing and video recording.
 	| { type: "DebugForceEvent", event: EventId }
 	| { type: "DebugSkipToDay", day: number }
@@ -177,6 +217,7 @@ local Remotes = table.freeze({
 	ACTION = "Action", -- client -> server: Action
 	PROGRESS = "Progress", -- server -> one client: Progress (on join and on change)
 	COLLECTED = "Collected", -- server -> one client: Collected (right after a pickup)
+	BASE_STATE = "BaseState", -- server -> one client: BaseState (Stage 6)
 })
 
 return table.freeze({

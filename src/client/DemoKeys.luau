@@ -4,7 +4,10 @@
 --   F9: end the current shift now.
 --   F6: unlock every mission (DebugUnlockAll).
 --   F7: grant the next hidden collectible this player does not own yet (DebugGrantCollectible).
--- No UI. The server validates both debug actions again (Studio or place owner only).
+--   F10: start an eclipse now (DebugEclipse).
+--   F4: grant 100 credits (and the same XP) for testing the base (DebugGrantCredits).
+--   F3: reset this player's base: builds, skills, credits and XP back to the start (DebugResetBase).
+-- No UI. The server validates every debug action again (Studio or place owner only).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -42,6 +45,10 @@ function DemoKeys.start()
 		elseif input.KeyCode == Enum.KeyCode.F6 then
 			local action: any = { type = "DebugUnlockAll" }
 			Store.send(action)
+		elseif input.KeyCode == Enum.KeyCode.F4 then
+			Store.send({ type = "DebugGrantCredits", amount = 100 })
+		elseif input.KeyCode == Enum.KeyCode.F3 then
+			Store.send({ type = "DebugResetBase" })
 		elseif input.KeyCode == Enum.KeyCode.F7 then
 			for _, id in Store.COLLECTIBLES do
 				if not Store.hasCollectible(id) then

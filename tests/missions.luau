@@ -3,9 +3,12 @@
 -- Checks every mission in src/shared/Missions.luau: ids unique, requires valid, schedule length equals
 -- days, one stormParticles entry per SolarStorm day, objectives valid, icons exist. Then plays each
 -- mission with the pure simulation: a careful crew can finish every story chapter, and a training
--- day can never empty a meter.
+-- day can never empty a meter. Stage 6: every build a mission needs is a real build that can be
+-- built in order, training builds what later missions need, a new player can pay for it all from
+-- mission rewards alone, and each mission is played with only the solar arrays it needs.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
+local BaseBuild = require("../src/shared/BaseBuild")
 local Icons = require("../src/shared/Icons")
 local Localization = require("../src/shared/Localization")
 local MissionData = require("../src/shared/MissionData")
@@ -131,6 +134,28 @@ for index, mission in Missions.LIST do
 			check(mission.schedule ~= nil and table.find(mission.schedule, "Dust") ~= nil, `mission {id}: clean_panel needs a dust day`)
 		end
 	end
+	-- Needs (Stage 6): real build ids and levels; build_* objectives teach a build the mission does
+	-- not already need, and that build can be built once the needs stand.
+	local needs = mission.needs or {}
+	for buildId, level in needs do
+		local def = BaseBuild.buildDef(MissionData, buildId)
+		check(def ~= nil, `mission {id}: needs "{buildId}" is a build in MissionData.BASE.BUILDS`)
+		if def then
+			check(isWhole(level, 1) and level <= def.maxLevel, `mission {id}: needs {buildId} level {level} is 1..{def.maxLevel}`)
+		end
+		check(table.find(Missions.BUILD_ORDER, buildId) ~= nil, `mission {id}: needs "{buildId}" is in BUILD_ORDER`)
+	end
+	for _, objective in mission.objectives do
+		local buildId = Missions.buildForObjective(objective.id)
+		if buildId then
+			check(objective.target == 1, `mission {id}: "{objective.id}" target is 1`)
+			check(BaseBuild.buildDef(MissionData, buildId) ~= nil, `mission {id}: "{objective.id}" names a real build`)
+			check((needs[buildId] or 0) < 1, `mission {id}: "{objective.id}" is not already needed`)
+			local ok, reason = BaseBuild.canBuild(MissionData, needs, 1, math.huge, buildId)
+			check(ok, `mission {id}: "{objective.id}" can be built by a level 1 player once the needs stand ({reason})`)
+			check(mission.kind == "Tutorial", `mission {id}: only training teaches building`)
+		end
+	end
 	if mission.kind == "Tutorial" then
 		check(mission.autoComplete, `mission {id}: tutorials end as soon as objectives are done`)
 		check(mission.days == 1, `mission {id}: tutorials last one day`)
@@ -150,6 +175,95 @@ do
 	end
 	check(Missions.isUnlocked(Missions.LIST[1], {}), "first mission is unlocked from the start")
 	check(not Missions.isUnlocked(Missions.get("c1_arrival") :: Mission, {}), "story is locked at the start")
+	check(Missions.isUnlocked(Missions.LIST[1], {}, {}), "first mission is unlocked with an empty base")
+end
+
+-- Needs: a completed chain is still locked while a needed build is missing, and missingBuild names
+-- the first missing build in BUILD_ORDER.
+do
+	local allDone: { [string]: boolean } = {}
+	for _, mission in Missions.LIST do
+		allDone[mission.id] = true
+	end
+	local c1 = Missions.get("c1_arrival") :: Mission
+	local c2 = Missions.get("c2_storm") :: Mission
+	local t2 = Missions.get("t2_power") :: Mission
+	check(not Missions.isUnlocked(t2, allDone, {}), "t2 needs the solar panels")
+	check(Missions.isUnlocked(t2, allDone, { solar = 1 }), "t2 opens once solar stands")
+	check(Missions.isUnlocked(t2, allDone), "no builds given: needs are not checked")
+	check(Missions.missingBuild(t2, {}) == "solar", "t2 is missing solar")
+	check(Missions.missingBuild(t2, { solar = 1 }) == nil, "t2 is missing nothing")
+	local fullBase = { solar = 3, greenhouse = 1, antenna = 1, shelter = 1 }
+	local twoArrays = { solar = 2, greenhouse = 1, antenna = 1, shelter = 1 }
+	check(Missions.isUnlocked(c2, allDone, fullBase), "c2 opens with the full base")
+	check(not Missions.isUnlocked(c2, allDone, twoArrays), "c2 needs three solar arrays")
+	check(Missions.missingBuild(c2, twoArrays) == "solar", "c2 is missing solar")
+	check(Missions.missingBuild(c1, { solar = 2, greenhouse = 1 }) == "antenna", "c1 without antenna is missing antenna")
+	check(Missions.missingBuild(c1, { solar = 1, antenna = 1 }) == "solar", "missingBuild follows BUILD_ORDER")
+	check(Missions.meetsNeeds(Missions.LIST[1], {}), "the first mission needs nothing")
+	for _, mission in Missions.LIST do
+		-- Same answer as BaseBuild.meetsNeeds (Missions duplicates it to stay require-free).
+		for _, builds in { {}, { solar = 1 }, twoArrays, fullBase } :: { { [string]: number } } do
+			check(
+				Missions.meetsNeeds(mission, builds) == BaseBuild.meetsNeeds(builds, mission.needs),
+				`mission {mission.id}: meetsNeeds matches BaseBuild`
+			)
+		end
+	end
+	check(Missions.buildForObjective("build_solar") == "solar", "build_solar waits for solar")
+	check(Missions.buildForObjective("drill_ice") == nil, "drill_ice is not a build objective")
+end
+
+-- Economy walk (Stage 6): a brand-new player plays the missions in order and earns only the smallest
+-- rewards (first completion, one star, each day finished) plus build XP. Training builds what it
+-- teaches; the rest of each mission's needs is bought before it starts. Credits never go below zero
+-- and the player level is always high enough.
+do
+	local base = MissionData.BASE
+	local credits = base.START_CREDITS
+	local xp = 0
+	local builds: { [string]: number } = {}
+	local function earn(kind: string, count: number)
+		local reward = (base.REWARDS :: any)[kind]
+		credits += reward.credits * count
+		xp += reward.xp * count
+	end
+	local function build(buildId: string, label: string)
+		local level = BaseBuild.levelForXp(MissionData, xp)
+		local cost = BaseBuild.nextCost(MissionData, builds, buildId)
+		local ok, reason = BaseBuild.canBuild(MissionData, builds, level, credits, buildId)
+		check(ok, `economy {label}: can build {buildId} (level {level}, {credits} credits, cost {cost}, {reason})`)
+		if ok and cost then
+			credits -= cost
+			xp += BaseBuild.buildXp(MissionData, cost)
+			builds[buildId] = (builds[buildId] or 0) + 1
+		end
+	end
+	for _, mission in Missions.LIST do
+		local needs = mission.needs or {}
+		for _, buildId in Missions.BUILD_ORDER do
+			local guard = 0
+			while (builds[buildId] or 0) < (needs[buildId] or 0) and guard < 5 do
+				build(buildId, `before {mission.id}`)
+				guard += 1
+			end
+		end
+		check(Missions.meetsNeeds(mission, builds), `economy: {mission.id} needs met before it starts`)
+		local hasShift = false
+		for _, objective in mission.objectives do
+			local buildId = Missions.buildForObjective(objective.id)
+			if buildId and (builds[buildId] or 0) < 1 then
+				build(buildId, `during {mission.id}`)
+			end
+			hasShift = hasShift or not (objective.id == "go_outside" or objective.id == "return_inside" or buildId ~= nil)
+		end
+		-- First steps never starts a work shift, so it finishes no day.
+		earn("day_finished", if hasShift then mission.days else 0)
+		earn("star", 1)
+		earn("mission_first", 1)
+		check(credits >= 0, `economy after {mission.id}: credits {credits} >= 0`)
+	end
+	print(`economy walk: {credits} credits and {xp} XP left (level {BaseBuild.levelForXp(MissionData, xp)})`)
 end
 
 -- Collectibles.
@@ -183,8 +297,14 @@ local function place(state: MissionState, wanted: { LifeSupport: number, Greenho
 	end
 end
 
+-- Played with only the solar arrays the mission needs (at least one): the fewest a crew can have.
+local function arraysOf(mission: Mission): number
+	local needs = mission.needs
+	return math.max(1, if needs and needs.solar then needs.solar else 1)
+end
+
 local function configOf(mission: Mission): Simulation.MissionConfig
-	return { totalDays = mission.days, schedule = mission.schedule }
+	return { totalDays = mission.days, schedule = mission.schedule, arrays = arraysOf(mission) }
 end
 
 for _, mission in Missions.LIST do
@@ -200,7 +320,7 @@ for _, mission in Missions.LIST do
 		Simulation.endDay(state, MissionData, {
 			playerCount = 1,
 			iceCores = 1,
-			arraysCleaned = MissionData.POWER.ARRAYS - state.cleanArrays,
+			arraysCleaned = state.arrays - state.cleanArrays,
 			exposedAstronauts = 0,
 			leakRepaired = state.leakActive,
 			suitRefills = 2,

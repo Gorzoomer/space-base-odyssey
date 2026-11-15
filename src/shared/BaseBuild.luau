@@ -1,0 +1,265 @@
+--!strict
+-- Space Base Odyssey - rules for building and growing the base (Stage 6): credits, experience and
+-- player level, builds and upgrades, skills, pets. Pure functions over MissionData.BASE (passed in as
+-- `data`, the whole MissionData table) and plain tables: no Roblox instances, so it runs in Lune
+-- (tests/base.luau) as well as on the server (BaseService) and the client (panels).
+-- Builds are shared by everyone in a server: a structure stands at the HIGHEST level any present
+-- player has built ("effective" builds). Credits, XP, skills and pets belong to each player.
+-- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
+
+export type Levels = { [string]: number } -- build or skill id -> level (missing = 0)
+
+-- Why a build, upgrade, skill or pet is not available right now. Localization: "base.why.<reason>".
+export type Reason = "unknown" | "max" | "requires" | "level" | "credits" | "points" | "owned" | "collectible"
+
+export type BuildDef = {
+	id: string,
+	icon: string,
+	maxLevel: number,
+	costs: { number },
+	minLevel: { number },
+	requires: { [string]: number },
+}
+
+export type SkillDef = {
+	id: string,
+	icon: string,
+	maxLevel: number,
+	minLevel: { number },
+}
+
+export type PetDef = {
+	id: string,
+	collectible: string?,
+	cost: number?,
+	minLevel: number?,
+}
+
+local BaseBuild = {}
+
+local function levelOf(levels: Levels?, id: string): number
+	if levels == nil then
+		return 0
+	end
+	local value = levels[id]
+	return if type(value) == "number" then value else 0
+end
+BaseBuild.levelOf = levelOf
+
+function BaseBuild.buildDef(data: any, id: string): BuildDef?
+	for _, def in data.BASE.BUILDS do
+		if def.id == id then
+			return def
+		end
+	end
+	return nil
+end
+
+function BaseBuild.skillDef(data: any, id: string): SkillDef?
+	for _, def in data.BASE.SKILLS do
+		if def.id == id then
+			return def
+		end
+	end
+	return nil
+end
+
+function BaseBuild.petDef(data: any, id: string): PetDef?
+	for _, def in data.BASE.PETS do
+		if def.id == id then
+			return def
+		end
+	end
+	return nil
+end
+
+-- Player level (1..#LEVEL_XP) for a total XP.
+function BaseBuild.levelForXp(data: any, xp: number): number
+	local level = 1
+	for i, need in data.BASE.LEVEL_XP do
+		if xp >= need then
+			level = i
+		end
+	end
+	return level
+end
+
+-- Total XP needed to reach `level` (nil above the top level).
+function BaseBuild.xpForLevel(data: any, level: number): number?
+	return data.BASE.LEVEL_XP[level]
+end
+
+function BaseBuild.maxPlayerLevel(data: any): number
+	return #data.BASE.LEVEL_XP
+end
+
+-- Skill points earned by a level (one per level above 1) minus the ones already spent.
+function BaseBuild.skillPoints(level: number, skills: Levels?): number
+	local spent = 0
+	if skills then
+		for _, value in skills do
+			if type(value) == "number" then
+				spent += value
+			end
+		end
+	end
+	return math.max(0, (level - 1) - spent)
+end
+
+-- The highest level of each build across several players' saved builds.
+function BaseBuild.effective(list: { Levels }): Levels
+	local result: Levels = {}
+	for _, builds in list do
+		for id, value in builds do
+			if type(value) == "number" and value > (result[id] or 0) then
+				result[id] = value
+			end
+		end
+	end
+	return result
+end
+
+-- Credits for the NEXT level of a build given the effective builds (nil when maxed or unknown).
+function BaseBuild.nextCost(data: any, effective: Levels, id: string): number?
+	local def = BaseBuild.buildDef(data, id)
+	if def == nil then
+		return nil
+	end
+	local nextLevel = levelOf(effective, id) + 1
+	if nextLevel > def.maxLevel then
+		return nil
+	end
+	return def.costs[nextLevel]
+end
+
+-- Can this player build (or upgrade) `id` to its next level? effective = builds standing in the server.
+function BaseBuild.canBuild(data: any, effective: Levels, playerLevel: number, credits: number, id: string): (boolean, Reason?)
+	local def = BaseBuild.buildDef(data, id)
+	if def == nil then
+		return false, "unknown"
+	end
+	local nextLevel = levelOf(effective, id) + 1
+	if nextLevel > def.maxLevel then
+		return false, "max"
+	end
+	for needId, needLevel in def.requires do
+		if levelOf(effective, needId) < needLevel then
+			return false, "requires"
+		end
+	end
+	if playerLevel < def.minLevel[nextLevel] then
+		return false, "level"
+	end
+	if credits < def.costs[nextLevel] then
+		return false, "credits"
+	end
+	return true, nil
+end
+
+-- XP for building or upgrading something that cost `cost` credits.
+function BaseBuild.buildXp(data: any, cost: number): number
+	return data.BASE.BUILD_XP_BASE + math.floor(cost * data.BASE.BUILD_XP_PER_CREDIT)
+end
+
+function BaseBuild.canLearn(data: any, skills: Levels, playerLevel: number, id: string): (boolean, Reason?)
+	local def = BaseBuild.skillDef(data, id)
+	if def == nil then
+		return false, "unknown"
+	end
+	local nextLevel = levelOf(skills, id) + 1
+	if nextLevel > def.maxLevel then
+		return false, "max"
+	end
+	if playerLevel < def.minLevel[nextLevel] then
+		return false, "level"
+	end
+	if BaseBuild.skillPoints(playerLevel, skills) < 1 then
+		return false, "points"
+	end
+	return true, nil
+end
+
+-- Pets this player owns: bought ones plus the ones their collectibles give.
+function BaseBuild.ownedPets(data: any, bought: { [string]: boolean }?, collectibles: { [string]: boolean }?): { [string]: boolean }
+	local owned: { [string]: boolean } = {}
+	for _, def in data.BASE.PETS do
+		if def.collectible then
+			if collectibles and collectibles[def.collectible] then
+				owned[def.id] = true
+			end
+		elseif bought and bought[def.id] then
+			owned[def.id] = true
+		end
+	end
+	return owned
+end
+
+function BaseBuild.canBuyPet(data: any, owned: { [string]: boolean }, playerLevel: number, credits: number, id: string): (boolean, Reason?)
+	local def = BaseBuild.petDef(data, id)
+	if def == nil then
+		return false, "unknown"
+	end
+	if owned[id] then
+		return false, "owned"
+	end
+	if def.collectible or def.cost == nil then
+		return false, "collectible" -- found, never bought
+	end
+	if playerLevel < (def.minLevel or 1) then
+		return false, "level"
+	end
+	if credits < def.cost then
+		return false, "credits"
+	end
+	return true, nil
+end
+
+-- Ice per minute from all automatic drills standing.
+function BaseBuild.icePerMinute(data: any, effective: Levels): number
+	local total = 0
+	for _, id in { "drill_1", "drill_2", "drill_3" } do
+		local level = levelOf(effective, id)
+		if level > 0 then
+			total += data.BASE.DRILL_ICE_PER_MINUTE[level]
+		end
+	end
+	return total
+end
+
+-- Skill effects (all numbers from MissionData.BASE).
+function BaseBuild.speedBonus(data: any, skills: Levels?): number
+	return levelOf(skills, "speed") * data.BASE.SPEED_BONUS_PER_LEVEL
+end
+
+function BaseBuild.suitMax(data: any, skills: Levels?): number
+	return data.SUIT.MAX + levelOf(skills, "tank") * data.BASE.TANK_BONUS_PER_LEVEL
+end
+
+function BaseBuild.jumpPower(data: any, skills: Levels?): number
+	local level = levelOf(skills, "jump")
+	return data.WORLD.JUMP_POWER + (if level > 0 then data.BASE.JUMP_POWER_BONUS[level] else 0)
+end
+
+function BaseBuild.hasDoubleJump(skills: Levels?): boolean
+	return levelOf(skills, "jump") >= 1
+end
+
+function BaseBuild.drillHoldFactor(data: any, skills: Levels?): number
+	local level = levelOf(skills, "drill")
+	return if level > 0 then data.BASE.DRILL_HOLD_FACTOR[level] else 1
+end
+
+-- True when every build a mission needs is standing (needs: build id -> minimum level).
+function BaseBuild.meetsNeeds(effective: Levels, needs: { [string]: number }?): boolean
+	if needs == nil then
+		return true
+	end
+	for id, level in needs do
+		if levelOf(effective, id) < level then
+			return false
+		end
+	end
+	return true
+end
+
+return table.freeze(BaseBuild)

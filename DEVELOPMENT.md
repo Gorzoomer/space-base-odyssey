@@ -168,6 +168,46 @@ Tested in Studio:
 - Real Earth with continents and phase shading.
 - Eclipse triggered with F10.
 
+**About 21:00 – Team playtest feedback, round 2.** The team asked for:
+- Start with an almost empty base: install the antenna and solar panels yourself, then grow the base with ice like a Roblox tycoon (manual ice first, then automatic production lines, upgrades, a currency, experience and skills such as a double jump).
+- Keep the player's own avatar. Kids pay for skins, so the suit should only add a detailed helmet and backpack, not replace the avatar.
+- A place to see and change what you wear, including turning off rewards you do not like.
+- C.A.R.L. should not fly with propellers: there is no air on the Moon.
+- No outline around the Earth, and remove the unexplained pink dot near the antenna (it was a secret-entrance hint pebble).
+- Use what fits from team member Santiago's prototype pack (tycoon pads, pets, tools).
+
+**Santiago's pack, evaluated.** A complete tycoon prototype: credit pads with hologram previews, seven modules, ranks, four pets, three tools, a suit.
+- Kept: the four pet models (converted to data in `src/shared/PetModels.luau`, credited to him) and these ideas: build pads with a hologram of the building, buildings rising from the ground, ranks by experience, the antenna's laser-link upgrade.
+- Not kept: the code itself. It duplicated working systems, used emoji, and some lines broke the science rules (C.A.R.L. "scrubbing" radiation from the suit, invented temperatures).
+
+**23:00 – Stage 6: build and grow.**
+- **Build your base:** only the habitat and water tank stand at the start. Solar panels (free), greenhouse, antenna and shelter are built on glowing pads that show a hologram first. The training missions ask for each build before using it.
+- **Tycoon loop:**
+  - Credits come from useful work: ice, repairs, finished days, stars and missions.
+  - Experience raises the player level from 1 to 10. Each level unlocks bigger builds and gives a skill point.
+  - Up to three automatic ice drills on the dark crater floor fill a silo, and a cargo robot empties it for you.
+  - Each drill needs one more solar array, because machines need electricity.
+  - The arrays standing are the power cells in missions.
+  - The antenna upgrades to a bigger dish, then a laser link.
+- **Skills:** faster walking, a bigger air tank, a double jump (a gas puff from the backpack) and faster drilling.
+- **Pets:** four pets based on Santiago's models follow you. Laika and the cheese come from the secrets; the moon rabbit and the space chimp (Ham was a chimpanzee) are bought with credits.
+- **Suit:** the avatar is never changed. Only a CSG-built helmet (white shell, dark reflective visor, neck ring, lamps) and a backpack with hoses are added. The event code gives a gold visor and trim.
+- **Wardrobe:** pick the helmet, backpack, C.A.R.L. skin and pet, or switch rewards off.
+- **C.A.R.L.:** now a small tracked rover. It drives beside you and hops with gas thrusters when you jump (thrusters work in a vacuum; propellers need air). In base mode it points to the next build you can afford.
+- **Base mode:** the mission screen can be closed to explore, build and collect ice between missions.
+- **New verified facts:** propellers and thrusters, laser communication, the moon rabbit legends, Ham, Laika, lunar drills and building with Moon dust. They are listed in `DATA_SOURCES.md`.
+
+Tested in Studio (assistant-driven, real remote actions):
+- New player sees only the habitat with holograms.
+- Building every structure from the pads' action path.
+- The silo filling from drills.
+- Buying and equipping a pet that then follows the player.
+- Helmet on an R15 avatar.
+- The base and wardrobe panels.
+- Training 1 starting with the solar build already counted.
+
+Fixed after that playtest: the visor rendered pale grey (now dark and reflective), the helmet was too large, a tab label wrapped mid-word, and the drills were invisible from the rim (beacon masts added).
+
 ## Decisions
 
 | Decision | Who decided | Why |
@@ -187,13 +227,18 @@ Tested in Studio:
 | Real NASA Earth map with eclipses | Team | Gives the base lighting a reason and teaches lunar eclipses. |
 | Same astronaut suit for every avatar | Team | Consistent look whatever the player's skin. |
 | No Space Apps or NASA shirt as the event reward | Team, on AI recommendation | NASA insignia is not allowed; an original Explorer 2026 look instead. |
+| Start with an almost empty base, grow it tycoon-style | Team | More dynamic and attractive for kids; teaches what each system is for. |
+| Keep the player's avatar; only a helmet and backpack | Team | Kids paid for their skins. |
+| C.A.R.L. as a tracked rover with gas-thruster hops | Team, on AI recommendation | Propellers need air; thrusters work in a vacuum. |
+| Space chimp instead of space monkey | AI recommendation, team to confirm | Ham, who flew in 1961, was a chimpanzee. |
 | Roblox Studio as the engine | Team | Team skills; Roblox was used in earlier Space Apps editions. |
 
 ## Testing evidence
 
 | What | How | Result |
 | :--- | :--- | :--- |
-| Mission balance | `lune run tests/balance` | 252 checks pass. |
+| Mission balance | `lune run tests/balance` | 643 checks pass. |
+| Missions and the build-and-grow rules | `lune run tests/missions`, `lune run tests/base` | 609 and 307 checks pass. |
 | Text length and translations | `lune run tests/localization` | All keys in en and es, at most 8 words. |
 | Full mission in Roblox | Studio playtest driven by the assistant | 7 days, report reached, no script errors. |
 | Live NASA data | Studio playtest | 13 flares fetched; fetch time shown. |

@@ -1,8 +1,12 @@
 --!strict
 -- Space Base Odyssey - Mission Select (the Briefing phase): game title, a "Training" row (t1..t4), a
--- "Story" row (c1..c3), the "Free play" card, the Collection button and the "Real NASA data" button.
+-- "Story" row (c1..c3), the "Free play" card, the "Explore the base" button, the Collection button
+-- and the "Real NASA data" button.
 -- Cards come from snapshot.missions (server decides what is unlocked). Tapping an unlocked card
 -- opens its intro card (title + intro text + Start) which sends Action StartMission{missionId}.
+-- Stage 6: the screen can be closed ("Explore the base", base mode) and reopened with the Missions
+-- top button; Main.client decides when it is open. A card locked by a missing build
+-- (MissionCard.missingBuild) says which build it needs.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local RunService = game:GetService("RunService")
@@ -23,7 +27,8 @@ local PULSE_SPEED = 4
 --   y 0.03-0.12 title, y 0.12-0.17 subtitle (x 0.2-0.8; language button at top right)
 --   y 0.20-0.25 "Training" header, y 0.26-0.47 four training cards (x 0.06-0.94)
 --   y 0.50-0.55 "Story" and "Free play" headers, y 0.56-0.77 three story cards + free play card
---   y 0.81-0.94 Collection 0.32-0.60 | Real NASA data 0.63-0.92 (C.A.R.L. bubble: x 0.02-0.28)
+--   y 0.81-0.94 Explore the base 0.30-0.485 | Collection 0.50-0.685 | Real NASA data 0.70-0.96
+--               (C.A.R.L. bubble: x 0.02-0.28)
 local ROW_X = 0.06
 local CARD_WIDTH = 0.205
 local CARD_GAP = 0.02
@@ -42,6 +47,8 @@ export type Deps = {
 	showMessage: (ref: TextRef) -> (),
 	addSourcesButton: (parent: Instance, props: Ui.Props) -> TextButton,
 	openCollection: () -> (),
+	-- Stage 6: "Explore the base" pressed (Main.client closes the screen). nil = no close button.
+	onClose: (() -> ())?,
 }
 
 type CardView = {
@@ -50,6 +57,7 @@ type CardView = {
 	stroke: UIStroke,
 	icon: ImageLabel,
 	title: TextLabel,
+	reason: TextLabel,
 	number: TextLabel,
 	status: Frame,
 	statusIcon: ImageLabel,
@@ -58,6 +66,20 @@ type CardView = {
 
 local function kindColor(kind: string): Color3
 	return (Ui.KIND_COLORS :: any)[kind] or ROLE.accent
+end
+
+-- The build a locked card waits for (Stage 6 MissionCard.missingBuild), or nil.
+local function missingBuild(card: MissionCard): string?
+	local value: any = (card :: any).missingBuild
+	return if type(value) == "string" and value ~= "" then value else nil
+end
+
+local function lockRef(card: MissionCard): TextRef
+	local build = missingBuild(card)
+	if build then
+		return { key = "ui.needs_build", params = { name = Store.t(`build.{build}.name`) } }
+	end
+	return { key = "ui.locked" }
 end
 
 local function kindLabelKey(kind: string): string
@@ -364,7 +386,7 @@ function MissionSelect.new(root: Frame, deps: Deps): MissionSelectView
 				openIntro(id)
 			else
 				shake(view)
-				deps.showMessage({ key = "ui.locked" })
+				deps.showMessage(lockRef(current))
 			end
 		end)
 		button.AutoButtonColor = true
@@ -385,6 +407,19 @@ function MissionSelect.new(root: Frame, deps: Deps): MissionSelectView
 			anchor = Vector2.new(0.5, 0),
 			maxText = 22,
 			zindex = 13,
+		})
+		-- Locked by a missing build: what to build, under the title.
+		local reasonLabel = Ui.label(button, {
+			name = "LockReason",
+			size = UDim2.fromScale(0.9, 0.2),
+			position = UDim2.fromScale(0.5, 0.76),
+			anchor = Vector2.new(0.5, 0),
+			textColor = ROLE.warning,
+			font = Ui.BODY_FONT,
+			maxText = 16,
+			minText = 7,
+			zindex = 13,
+			visible = false,
 		})
 		local numberLabel = Ui.label(button, {
 			name = "Number",
@@ -421,6 +456,7 @@ function MissionSelect.new(root: Frame, deps: Deps): MissionSelectView
 			stroke = stroke,
 			icon = icon,
 			title = titleLabel,
+			reason = reasonLabel,
 			number = numberLabel,
 			status = status,
 			statusIcon = statusIcon,
@@ -488,6 +524,17 @@ function MissionSelect.new(root: Frame, deps: Deps): MissionSelectView
 			view.icon.ImageTransparency = if unlocked then 0 else 0.55
 			view.title.Text = Store.t(card.titleKey)
 			view.title.TextColor3 = if unlocked then ROLE.text else ROLE.textDim
+			local build = if unlocked then nil else missingBuild(card)
+			view.reason.Visible = build ~= nil
+			if build then
+				local ref = lockRef(card)
+				view.reason.Text = Store.t(ref.key, ref.params)
+				view.title.Position = UDim2.fromScale(0.5, 0.54)
+				view.title.Size = UDim2.fromScale(0.9, 0.22)
+			else
+				view.title.Position = UDim2.fromScale(0.5, 0.58)
+				view.title.Size = UDim2.fromScale(0.9, 0.34)
+			end
 			view.number.BackgroundColor3 = if unlocked then color else ROLE.stroke
 			view.number.TextColor3 = if unlocked then ROLE.primaryButtonText else ROLE.textDim
 			if card.completed then
@@ -507,11 +554,26 @@ function MissionSelect.new(root: Frame, deps: Deps): MissionSelectView
 		freeHeader.frame.Visible = hasCards
 	end
 
-	-- Bottom bar: Collection (magenta = secrets and rewards) and the Real NASA data button.
+	-- Bottom bar: Explore the base (lime = go), Collection (magenta = secrets and rewards) and the
+	-- Real NASA data button.
+	local explore = Ui.button(screen, {
+		name = "ExploreBase",
+		size = UDim2.fromScale(0.185, 0.12),
+		position = UDim2.fromScale(0.3, 0.815),
+		icon = Ui.ICONS.home,
+		maxText = 30,
+		zindex = 12,
+		visible = deps.onClose ~= nil,
+	}, function()
+		local onClose = deps.onClose
+		if onClose and not intro.Visible then
+			onClose()
+		end
+	end)
 	local collection = Ui.button(screen, {
 		name = "Collection",
-		size = UDim2.fromScale(0.28, 0.12),
-		position = UDim2.fromScale(0.32, 0.815),
+		size = UDim2.fromScale(0.185, 0.12),
+		position = UDim2.fromScale(0.5, 0.815),
 		color = ROLE.reward,
 		icon = Ui.ICONS.gift,
 		maxText = 32,
@@ -536,8 +598,8 @@ function MissionSelect.new(root: Frame, deps: Deps): MissionSelectView
 	})
 
 	deps.addSourcesButton(screen, {
-		size = UDim2.fromScale(0.29, 0.12),
-		position = UDim2.fromScale(0.63, 0.815),
+		size = UDim2.fromScale(0.26, 0.12),
+		position = UDim2.fromScale(0.7, 0.815),
 		zindex = 12,
 	})
 
@@ -559,6 +621,7 @@ function MissionSelect.new(root: Frame, deps: Deps): MissionSelectView
 		freeHeader.label.Text = Store.t("ui.free_play")
 		Ui.setButton(legacyStart, Store.t("ui.start_mission"))
 		Ui.setButton(collection, Store.t("ui.collection_button"))
+		Ui.setButton(explore, Store.t("ui.explore_base"))
 		collectionCount.Text = `{Store.collectibleCount()}/{#Store.COLLECTIBLES}`
 		renderCards()
 		if intro.Visible then

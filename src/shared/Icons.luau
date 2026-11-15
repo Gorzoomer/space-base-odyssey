@@ -49,6 +49,17 @@ local Icons = {
 	target = "rbxassetid://115948676619886", -- target-arrow
 	home = "rbxassetid://112913752621612", -- home
 	play = "rbxassetid://98866873797236", -- player-play (filled)
+	-- Stage 6: build and grow the base.
+	coin = "rbxassetid://134004009168001", -- coin (filled): credits
+	xp = "rbxassetid://94002559377957", -- sparkles: experience
+	drill = "rbxassetid://125137741032326", -- pick
+	build = "rbxassetid://80278935277688", -- hammer
+	upgrade = "rbxassetid://84032123245462", -- arrow-big-up-lines
+	wardrobe = "rbxassetid://82541976645370", -- hanger
+	helmet = "rbxassetid://83651822396222", -- helmet
+	backpack = "rbxassetid://74585032502388", -- backpack
+	silo = "rbxassetid://111195560556445", -- building-warehouse
+	skills = "rbxassetid://124370977697332", -- trending-up
 }
 
 -- Earth map: NASA Visible Earth "Blue Marble" (public domain, NASA Goddard), 1024x512 equirectangular.
@@ -61,6 +72,9 @@ Icons.skyBlack = "rbxassetid://116532295206191"
 Icons.lifesupport = Icons.air
 Icons.repair = Icons.failure
 Icons.earth = Icons.language
+Icons.solar = Icons.panel
+Icons.plant = Icons.greenhouse
+Icons.lungs = Icons.suit
 
 export type IconName = string
 

@@ -8,6 +8,12 @@
 --   Tutorial t3_tasks, Shift: tasks have markers, the antenna gives early warnings, ice is in the crater.
 --   Free play day 1 and day 2: the original guided days (power board, tasks, then the Greenhouse).
 --   Safety, any mission (once each): follow C.A.R.L.'s light to the shelter; low suit air, go inside.
+-- Stage 6, the new start (the base begins almost empty):
+--   Base mode (Briefing, mission select closed), once per visit: build the solar panels first and
+--   follow C.A.R.L.; then bring ice to earn coins, until the four main builds stand.
+--   Any mission with an open build objective (build_solar, build_greenhouse, build_antenna,
+--   build_shelter): one tip that says what to build, in Planning and in the shift.
+--   The "jump" skill learned: how to double jump.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -29,6 +35,14 @@ local GUIDED_SYSTEMS: { string } = { "LifeSupport", "Greenhouse", "Science" }
 local SUIT_LOW = MissionData.METERS.YELLOW_ZONE * MissionData.SUIT.MAX / 100
 local GUIDED_DAYS: number = MissionData.MISSION.GUIDED_DAYS
 local CHECK_SECONDS = 0.5 -- storm stage follows server time
+
+-- Tip for each open build objective (keys quoted in full so the localization test checks them).
+local BUILD_TIPS: { [string]: string } = {
+	build_solar = "tip.build_solar",
+	build_greenhouse = "tip.build_greenhouse",
+	build_antenna = "tip.build_antenna",
+	build_shelter = "tip.build_shelter",
+}
 
 export type Deps = {
 	show: (ref: TextRef) -> (), -- urgent: shown before queued tips
@@ -67,6 +81,8 @@ function Onboarding.start(deps: Deps)
 	started = true
 
 	local shown: { [string]: boolean } = {}
+	-- Base mode tips: once per visit to base mode (cleared when a mission starts).
+	local baseShown: { [string]: boolean } = {}
 	local lastDay = 0
 	local lastMissionId: string? = nil
 	local lastGuideKey = ""
@@ -128,6 +144,28 @@ function Onboarding.start(deps: Deps)
 		local day = snap.day
 		local mode = guideMode(day)
 		local allocation = snap.allocation
+
+		-- Base mode: the new start. C.A.R.L. points at the next build (CarlDrone); these tips say why.
+		if phase ~= "Briefing" then
+			table.clear(baseShown)
+		elseif Store.isBaseMode() and Store.getBase() ~= nil and not Store.coreBuilt() then
+			local key = if Store.buildLevel("solar") < 1 then "tip.base_start" else "tip.base_ice"
+			if not baseShown[key] then
+				baseShown[key] = true
+				deps.showTip({ key = key }, "Briefing")
+			end
+		end
+
+		-- A mission that starts with building something: say what to build (once per mission).
+		if mission and (phase == "Planning" or phase == "Shift") then
+			for _, objective in mission.objectives do
+				local key = BUILD_TIPS[objective.id]
+				if key and not objective.done then
+					tip(key, phase)
+					break -- one build at a time
+				end
+			end
+		end
 
 		-- The plan carries over between days and a new mission already starts with cells in every
 		-- system, so "has no cell" says nothing. A guided row pulses until the player changes it
@@ -209,6 +247,24 @@ function Onboarding.start(deps: Deps)
 		if kind ~= "language" then
 			evaluate()
 		end
+	end)
+
+	-- The "jump" skill: explain the double jump right after it is learned (not on every join: the
+	-- first BaseState only records the level).
+	local knownJump: number? = nil
+	Store.onChanged(function(kind: Store.ChangeKind)
+		if kind ~= "base" then
+			return
+		end
+		local state = Store.getBase()
+		if state == nil then
+			return
+		end
+		local level = state.skills.jump or 0
+		if knownJump ~= nil and (knownJump :: number) < 1 and level >= 1 then
+			deps.showTip({ key = "tip.double_jump" })
+		end
+		knownJump = level
 	end)
 
 	local sinceCheck = 0

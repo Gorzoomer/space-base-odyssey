@@ -25,6 +25,8 @@ A mission lasts 7 days. Each day has three phases:
 
 Nobody dies. If a meter runs out, the crew returns home early, and the report explains what to try next time.
 
+Between missions, the base is yours to grow. You start with only the habitat and build the solar panels, greenhouse, antenna and shelter yourself. Ice and good work earn credits and experience. Spend them on automatic ice drills, a cargo robot, upgrades, skills (like a double jump from a backpack gas puff) and pets.
+
 ## NASA data
 
 - **Live space weather:** at server start the game asks NASA's DONKI database (CCMC) for the last 30 days of solar flares and particle events.
@@ -39,7 +41,9 @@ Every number and its source is listed in [DATA_SOURCES.md](DATA_SOURCES.md).
 | :--- | :--- | :--- |
 | Move | WASD | Thumbstick |
 | Run (uses suit air twice as fast) | LeftShift | Run button |
-| Use a task | Hold E | Tap the prompt |
+| Use a task, build, collect ice | Hold E | Tap the prompt |
+| Double jump (after learning the skill) | Space twice | Jump button twice |
+| Base, wardrobe, missions | Buttons at the top right | Same |
 | Language | EN/ES button | EN/ES button |
 
 ## Status
@@ -50,6 +54,7 @@ Every number and its source is listed in [DATA_SOURCES.md](DATA_SOURCES.md).
 - [x] Stage 3: base reacts to decisions, guided first days, task markers, C.A.R.L. drone
 - [x] Stage 4: training and story missions, hidden secrets, visual identity with icons
 - [x] Stage 5: live meters, water and antenna consequences, real rotating Earth with eclipses, astronaut suit, C.A.R.L. guidance and fun facts, settings and codes
+- [x] Stage 6: build and grow the base (tycoon loop with credits, levels, skills, automatic ice drills), pets, wardrobe, helmet that keeps the player's avatar, C.A.R.L. as a tracked rover
 - [ ] Playtests with people outside the team
 - [ ] Public release
 

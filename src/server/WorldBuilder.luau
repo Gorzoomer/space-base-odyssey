@@ -6,6 +6,7 @@ local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local ServerStorage = game:GetService("ServerStorage")
 local TweenService = game:GetService("TweenService")
 local StarterPlayer = game:GetService("StarterPlayer")
 local Workspace = game:GetService("Workspace")
@@ -52,6 +53,21 @@ export type World = {
 	isEclipse: () -> boolean,
 	-- Demo helper: moves the Sun to a few seconds before the next eclipse.
 	previewEclipse: () -> (),
+	-- Stage 6: build and grow the base. Build ids come from MissionData.BASE.BUILDS. Level 0 shows only a
+	-- cyan hologram (blueprint) of the structure; level >= 1 shows the real one (solar: that many arrays;
+	-- antenna 2 = bigger dish, 3 = laser link; drills 2 and 3 = taller rig, more lights, a second bit).
+	-- An unbuilt structure waits in ServerStorage, so its prompts cannot be used.
+	setBuildLevel: (id: string, level: number, animate: boolean) -> (),
+	isBuilt: (id: string) -> boolean,
+	buildLevel: (id: string) -> number,
+	-- Workspace.Base.BuildPads.<id> (attribute BuildId), each with one ProximityPrompt "BuildPrompt".
+	buildPads: { [string]: BasePart },
+	buildPrompts: { [string]: ProximityPrompt },
+	-- The ice silo behind the habitat (filled by the automatic drills), its claim prompt "SiloPrompt".
+	siloPrompt: ProximityPrompt,
+	setSilo: (ice: number, max: number) -> (),
+	-- The cargo robot drives between the drills' conveyor and the silo while active (cosmetic).
+	setCargoActive: (active: boolean) -> (),
 }
 
 type Style = {
@@ -81,7 +97,7 @@ local EARTH_DISTANCE = 900
 -- Visual sizes (not science numbers): the Earth disc is a little wider than the game's Sun disc
 -- (Sky.SunAngularSize 9 degrees) so it can hide the Sun completely during an eclipse.
 local EARTH_DIAMETER = 150
-local EARTH_GUI_SCALE = 1.3 -- the billboard is larger than the disc to leave room for the halo
+local EARTH_GUI_SCALE = 1.3 -- the billboard is larger than the disc to leave room for the eclipse glow
 -- Compressed sky clock (GAME pacing, not real): the real Earth turns once in 24 hours and the Sun
 -- circles the lunar south-pole horizon once in about 29.5 days.
 local EARTH_TURN_SECONDS = 240
@@ -186,6 +202,37 @@ local ROVER_LOOP_RADIUS = 11
 local ROVER_RIM_RADIUS = 85 -- middle of the flat rim band (70 to 100)
 local PULSE_UPDATE_SECONDS = 0.05
 
+-- Stage 6 build-and-grow layout and animation (visual tuning, not gameplay numbers; the gameplay
+-- numbers live in MissionData.BASE).
+local SILO_CENTRE = Vector3.new(22, 0, -29) -- behind the habitat, right outside the water tank's corner
+local SILO_GLASS_HEIGHT = 11
+local SILO_GLASS_DIAMETER = 6
+local CARGO_DOCK = Vector3.new(12, 0, -35)
+local CARGO_RIDE_HEIGHT = 1.3
+local CARGO_SPEED = 9 -- studs per second
+local CARGO_WAIT_SECONDS = 2 -- loading or unloading at each end
+local DRILL_FLOOR_RADIUS = 56 -- drills stand on the crater floor near the rim wall (floor ends at 70)
+local DRILL_SPREAD = 0.3 -- radians between neighbouring drills
+local DRILL_PAD_RADIUS = 84 -- their build pads are on the rim above them
+local HOPPER_RADIUS = 73 -- the rim hopper where the three lift belts meet
+local CONVEYOR_FOOT_RADIUS = 117.5 -- just past the bottom of the rim's outer slope (r = 116)
+local DRILL_SPIN_RAD = { 3, 5, 8 } -- bit spin by drill level
+local DRILL_AWAKE_RANGE = 220 -- drills spin and ice cubes move only while someone is this close
+local ICE_CUBE_COUNT = 5
+local ICE_CUBE_SPEED = 5
+local SPIN_UPDATE_SECONDS = 1 / 15
+local RISE_SECONDS = 1.2
+local RISE_DROP = 6 -- a new structure rises this far out of the ground
+local UPGRADE_DROP = 3
+local HOLOGRAM_TRANSPARENCY = 0.45
+local HOLOGRAM_MIN_PART = 0.8 -- tiny parts are left out of blueprints
+local PAD_DIAMETER = 6.4
+local PAD_HEIGHT = 0.3
+local PAD_RING_DIAMETER = 7.2
+local PAD_MAXED_DIAMETER = 2.6
+local BUILD_PROMPT_HOLD = 0.6
+local SILO_TWEEN = TweenInfo.new(0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
 -- Invisible guidance points in Workspace.Base.Markers (client contract).
 local MARKER_NAMES = table.freeze({
 	"ShelterDoor",
@@ -197,6 +244,7 @@ local MARKER_NAMES = table.freeze({
 	"Leak",
 	"Greenhouse",
 	"Arrays",
+	"Silo", -- Stage 6: the ice silo's claim side (C.A.R.L. guides here when it is full)
 })
 
 -- Module state shared between applyEnvironment and build.
@@ -210,8 +258,6 @@ type EarthGui = {
 	mapB: ImageLabel,
 	nightPivot: Frame,
 	nightGradient: UIGradient,
-	halo: Frame,
-	rimStroke: UIStroke,
 	eclipseGlow: Frame,
 	eclipseStroke: UIStroke,
 }
@@ -234,6 +280,11 @@ local skyConnection: RBXScriptConnection? = nil
 local eclipseActive = false
 local eclipseAmount = 0
 local eclipseListeners: { (active: boolean) -> () } = {}
+
+-- Stage 6: parts that are rising into place right now (the sun tracker, drill bits and the cargo
+-- robot leave them alone until they arrive), and extra no-boulder circles around the new structures.
+local risingParts: { [BasePart]: boolean } = {}
+local extraKeepouts: { { x: number, z: number, r: number } } = {}
 
 ------------------------------------------------------------------------------------------------
 -- Part helpers
@@ -395,6 +446,40 @@ local function markerPart(parent: Instance, name: string, position: Vector3): Pa
 	return p
 end
 
+-- Stage 6 build levels. A part tagged with upgrade(p, level) only shows from that build level on
+-- (lights inside it switch on with it); SBO_NoRise parts are moved by their own code, not by the
+-- rise-in animation.
+local UPGRADE_ATTRIBUTE = "SBO_Upgrade"
+local ALPHA_ATTRIBUTE = "SBO_Alpha"
+local NO_RISE_ATTRIBUTE = "SBO_NoRise"
+
+local function upgrade(p: BasePart, level: number)
+	p:SetAttribute(UPGRADE_ATTRIBUTE, level)
+	p:SetAttribute(ALPHA_ATTRIBUTE, p.Transparency)
+	p.Transparency = 1
+	p.CanCollide = false
+	p.CanQuery = false
+	for _, item in p:GetDescendants() do
+		if item:IsA("Light") then
+			item.Enabled = false
+		elseif item:IsA("Beam") then
+			item.Enabled = false
+		end
+	end
+end
+
+-- A flat belt (or beam) from a to b: width across, thickness up, length along a -> b.
+local function belt(parent: Instance, name: string, a: Vector3, b: Vector3, width: number, thickness: number, style: Style): Part
+	local length = (b - a).Magnitude
+	return part(parent, name, Vector3.new(width, thickness, length), CFrame.lookAt((a + b) / 2, b), style)
+end
+
+-- A cylinder from a to b.
+local function pipe(parent: Instance, name: string, a: Vector3, b: Vector3, diameter: number, style: Style): Part
+	local length = (b - a).Magnitude
+	return cylinder(parent, name, length, diameter, CFrame.lookAt((a + b) / 2, b) * CFrame.Angles(0, math.rad(90), 0), style)
+end
+
 local function dirFromAngle(angle: number): Vector3
 	return Vector3.new(math.sin(angle), 0, math.cos(angle))
 end
@@ -551,10 +636,9 @@ local function buildEarth(sky: Instance, position: Vector3)
 	gui.Parent = anchor
 
 	local disc = 1 / EARTH_GUI_SCALE
-	-- Behind the disc: the red-orange eclipse glow (sunlight bent through Earth's air) and the soft
-	-- blue air halo.
+	-- Behind the disc: the red-orange eclipse glow (sunlight bent through Earth's air). It only shows
+	-- during an eclipse; the rest of the time the Earth has no outline (team feedback, Stage 6).
 	local eclipseGlow = roundFrame(gui, "EclipseGlow", disc * 1.16, PALETTE.orange, 1, 1)
-	local halo = roundFrame(gui, "AirHalo", disc * 1.07, PALETTE.cyan, 0.82, 2)
 
 	local group = Instance.new("CanvasGroup")
 	group.Name = "Disc"
@@ -612,9 +696,7 @@ local function buildEarth(sky: Instance, position: Vector3)
 	nightGradient.Transparency = NumberSequence.new(1)
 	nightGradient.Parent = night
 
-	-- Thin rings on top: the blue edge of the air, and the eclipse ring.
-	local rim = roundFrame(gui, "AirRim", disc, PALETTE.cyan, 1, 5)
-	local rimStroke = ringStroke(rim, PALETTE.cyan, 2, 0.45)
+	-- Thin ring on top that lights up only during an eclipse.
 	local eclipseRing = roundFrame(gui, "EclipseRing", disc * 1.01, PALETTE.orange, 1, 6)
 	local eclipseStroke = ringStroke(eclipseRing, PALETTE.orange:Lerp(PALETTE.red, 0.35), 3, 1)
 
@@ -624,8 +706,6 @@ local function buildEarth(sky: Instance, position: Vector3)
 		mapB = mapB,
 		nightPivot = nightPivot,
 		nightGradient = nightGradient,
-		halo = halo,
-		rimStroke = rimStroke,
 		eclipseGlow = eclipseGlow,
 		eclipseStroke = eclipseStroke,
 	}
@@ -1181,6 +1261,13 @@ local function isClear(x: number, z: number, margin: number): boolean
 			return false
 		end
 	end
+	for _, k in extraKeepouts do
+		local dx = x - k.x
+		local dz = z - k.z
+		if dx * dx + dz * dz < (k.r + margin) * (k.r + margin) then
+			return false
+		end
+	end
 	return true
 end
 
@@ -1627,7 +1714,7 @@ end
 -- Greenhouse module (glass, attached to the habitat's west wall)
 ------------------------------------------------------------------------------------------------
 
-type GreenhouseRefs = { strips: { Part }, stripLights: { PointLight }, plants: { Part }, centre: Vector3 }
+type GreenhouseRefs = { model: Model, strips: { Part }, stripLights: { PointLight }, plants: { Part }, centre: Vector3 }
 
 local GREENHOUSE_GLASS: Style = {
 	color = Color3.fromRGB(205, 236, 232),
@@ -1739,7 +1826,7 @@ local function buildGreenhouse(base: Instance): GreenhouseRefs
 		end
 	end
 
-	return { strips = strips, stripLights = stripLights, plants = plants, centre = v(ridgeX, 3, 0) }
+	return { model = gh, strips = strips, stripLights = stripLights, plants = plants, centre = v(ridgeX, 3, 0) }
 end
 
 ------------------------------------------------------------------------------------------------
@@ -1771,12 +1858,16 @@ local function roverPose(centre: Vector3, angle: number): CFrame
 	return CFrame.lookAt(position, position + tangent)
 end
 
+-- The rover's loop sits on the flat rim band, on the base's side of the crater, away from the ramp so
+-- it never sits on the way down to the ice. Returns its angle around the crater.
+local function roverSideAngle(rampAngle: number): number
+	local sideA, sideB = math.pi - 0.6, math.pi + 0.6
+	return if angleGap(sideA, rampAngle) >= angleGap(sideB, rampAngle) then sideA else sideB
+end
+
 local function buildRover(base: Instance, rampAngle: number): RoverRefs
 	local rover = model(base, "ScienceRover")
-	-- On the flat rim band, on the base's side of the crater, away from the ramp so it never sits
-	-- on the way down to the ice.
-	local sideA, sideB = math.pi - 0.6, math.pi + 0.6
-	local side = if angleGap(sideA, rampAngle) >= angleGap(sideB, rampAngle) then sideA else sideB
+	local side = roverSideAngle(rampAngle)
 	local centre = CRATER_CENTRE + dirFromAngle(side) * ROVER_RIM_RADIUS + Vector3.new(0, CRATER_RIM_Y + ROVER_RIDE_HEIGHT, 0)
 	local startAngle = side -- the point of the loop nearest the crater's outer edge
 	local cf = roverPose(centre, startAngle)
@@ -1849,7 +1940,7 @@ end
 -- Regolith shelter
 ------------------------------------------------------------------------------------------------
 
-type ShelterRefs = { zone: Part, lamp: Part, lampLight: PointLight }
+type ShelterRefs = { model: Model, zone: Part, lamp: Part, lampLight: PointLight }
 
 local function buildShelter(base: Instance): ShelterRefs
 	local shelter = model(base, "Shelter")
@@ -1938,7 +2029,7 @@ local function buildShelter(base: Instance): ShelterRefs
 	end
 
 	local zonePart = zone(base, "ShelterZone", v(-9, 0.4, -7), v(9, 10, 7))
-	return { zone = zonePart, lamp = lamp, lampLight = lampLight }
+	return { model = shelter, zone = zonePart, lamp = lamp, lampLight = lampLight }
 end
 
 ------------------------------------------------------------------------------------------------
@@ -2012,6 +2103,7 @@ type AntennaRefs = {
 	pointLights: { PointLight },
 	hubPosition: Vector3,
 	misaligned: CFrame,
+	laserBeam: Beam,
 }
 
 local function buildAntenna(base: Instance): AntennaRefs
@@ -2052,7 +2144,65 @@ local function buildAntenna(base: Instance): AntennaRefs
 	})
 	cylinder(dishModel, "FeedStrut", 5, 0.35, misaligned * CFrame.new(0, 0, -2.9) * axis, dark)
 	ball(dishModel, "Feed", 1.2, (misaligned * CFrame.new(0, 0, -5.6)).Position, dark)
+	-- Level 2: a bigger dish behind the first one (a wider dish catches a weaker signal).
+	upgrade(cylinder(dishModel, "DishBig", 0.5, 17.5, misaligned * CFrame.new(0, 0, 0.6) * axis, white), 2)
+	upgrade(cylinder(dishModel, "DishBigBack", 1.2, 7.5, misaligned * CFrame.new(0, 0, 1.7) * axis, dark), 2)
 	dishModel.WorldPivot = misaligned
+	-- The dish has its own animation (setAntennaLinked); the rise-in animation moves it as one piece.
+	for _, item in dishModel:GetDescendants() do
+		if item:IsA("BasePart") then
+			item:SetAttribute(NO_RISE_ATTRIBUTE, true)
+		end
+	end
+
+	-- Level 3: a laser link terminal on the platform that always points at the Earth. Real laser links
+	-- use invisible infrared light; the game draws the beam so players can see the link.
+	local laserPos = o + Vector3.new(-2.4, 32.9, -2.4)
+	local laserLook = CFrame.lookAt(laserPos, earth)
+	upgrade(box(antenna, "LaserBase", o + Vector3.new(-3.1, 30.6, -3.1), o + Vector3.new(-1.7, 31.4, -1.7), dark), 3)
+	upgrade(box(antenna, "LaserGimbal", o + Vector3.new(-2.6, 31.4, -2.6), o + Vector3.new(-2.2, 32.6, -2.2), metal), 3)
+	upgrade(cylinder(antenna, "LaserHead", 1.6, 1, laserLook * axis, {
+		color = WHITE_HULL,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+	}), 3)
+	local lens = cylinder(antenna, "LaserLens", 0.15, 0.8, laserLook * CFrame.new(0, 0, -0.85) * axis, {
+		color = ACCENT_SYSTEM,
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	local beamStart = Instance.new("Attachment")
+	beamStart.Name = "LaserStart"
+	beamStart.Parent = lens
+	upgrade(lens, 3)
+	local beamTarget = part(antenna, "LaserTarget", Vector3.one, laserLook * CFrame.new(0, 0, -400), {
+		color = ACCENT_SYSTEM,
+		transparency = 1,
+		collide = false,
+		shadow = false,
+	})
+	local beamEnd = Instance.new("Attachment")
+	beamEnd.Name = "LaserEnd"
+	beamEnd.Parent = beamTarget
+	local laserBeam = Instance.new("Beam")
+	laserBeam.Name = "LaserBeam"
+	laserBeam.Attachment0 = beamStart
+	laserBeam.Attachment1 = beamEnd
+	laserBeam.Color = ColorSequence.new(ACCENT_SYSTEM)
+	laserBeam.LightEmission = 1
+	laserBeam.LightInfluence = 0
+	laserBeam.Width0 = 0.25
+	laserBeam.Width1 = 0.25
+	laserBeam.FaceCamera = true
+	laserBeam.Segments = 1
+	laserBeam.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.1),
+		NumberSequenceKeypoint.new(0.6, 0.6),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	laserBeam.Enabled = false
+	laserBeam.Parent = beamTarget
 
 	local towerLight = ball(antenna, "LinkLight", 1.4, o + Vector3.new(3, 31.4, 3), {
 		color = LINK_RED,
@@ -2082,7 +2232,649 @@ local function buildAntenna(base: Instance): AntennaRefs
 		pointLights = { towerPoint, controlPoint },
 		hubPosition = hubPosition,
 		misaligned = misaligned,
+		laserBeam = laserBeam,
 	}
+end
+
+------------------------------------------------------------------------------------------------
+-- Stage 6: automatic ice drills, conveyor, ice silo, cargo robot, build pads and blueprints
+------------------------------------------------------------------------------------------------
+
+local DRILL_WARM = PALETTE.gold:Lerp(PALETTE.orange, 0.35) -- warm work lights on the drills
+local ICE_LOAD = Color3.fromRGB(205, 236, 250)
+local HIDDEN_FOLDER = "SBO_HiddenBuilds"
+
+type Keepout6 = { x: number, z: number, r: number }
+
+-- A point around the crater: angle (see dirFromAngle), distance from its centre, height.
+local function craterPoint(angle: number, radius: number, y: number): Vector3
+	return CRATER_CENTRE + dirFromAngle(angle) * radius + Vector3.new(0, y, 0)
+end
+
+-- Angle of the rim segment that hides the cheese niche (same rule as buildCrater: 36 segments).
+local function nicheAngle(rampAngle: number): number
+	local step = math.rad(10)
+	return (math.floor((rampAngle + CHEESE_NICHE_OFFSET) / step + 0.5) % 36) * step
+end
+
+-- The drills stand on the base's side of the crater, clear of the ramp, the cheese niche and the
+-- science rover's loop. Returns the angle of the middle drill.
+local function chooseDrillAngle(rampAngle: number): number
+	local rover = roverSideAngle(rampAngle)
+	local niche = nicheAngle(rampAngle)
+	local sign = if rover > math.pi then -1 else 1 -- try the side away from the rover first
+	for _, offset in { 0, 0.55, -0.55, 0.9, -0.9, 1.25, -1.25 } do
+		local angle = math.pi + offset * sign
+		if angleGap(angle, rampAngle) >= 0.6 and angleGap(angle, niche) >= 0.6 and angleGap(angle, rover) >= 0.75 then
+			return angle
+		end
+	end
+	return math.pi + 1.25 * sign
+end
+
+-- Build pad spots: near each structure, beside (not on) the paths and doors.
+local function padSpots(drillAngle: number): { [string]: Vector3 }
+	return {
+		solar = Vector3.new(RIDGE_CENTRE.X + 29, RIDGE_TOP_Y, RIDGE_CENTRE.Z + 11), -- ridge top, beside the ramp
+		greenhouse = HABITAT_CENTRE + Vector3.new(-37, 0, 18), -- in front of the greenhouse module
+		antenna = ANTENNA_BASE + Vector3.new(11, 0, -10), -- between the path and the tower
+		shelter = SHELTER_CENTRE + Vector3.new(13, 0, 35), -- beside the tunnel mouth
+		drill_1 = craterPoint(drillAngle - DRILL_SPREAD, DRILL_PAD_RADIUS, CRATER_RIM_Y), -- rim, above each drill
+		drill_2 = craterPoint(drillAngle + 0.09, DRILL_PAD_RADIUS, CRATER_RIM_Y), -- (next to the rim belt)
+		drill_3 = craterPoint(drillAngle + DRILL_SPREAD, DRILL_PAD_RADIUS, CRATER_RIM_Y),
+		cargo_bot = SILO_CENTRE + Vector3.new(-14, 0, 2), -- beside the silo and the robot's dock
+	}
+end
+
+-- The cargo robot's route from its dock by the silo to the conveyor's foot at the crater: behind the
+-- habitat, past the greenhouse, out to the crater, then around it on flat ground (r = 140).
+local function cargoRoutePoints(drillAngle: number): { Vector3 }
+	local y = CARGO_RIDE_HEIGHT
+	local points: { Vector3 } = {
+		Vector3.new(CARGO_DOCK.X, y, CARGO_DOCK.Z),
+		Vector3.new(-48, y, -35),
+		Vector3.new(-50, y, 26),
+	}
+	local arcRadius = 140
+	local steps = math.ceil(math.abs(drillAngle - math.pi) / 0.2)
+	for k = 0, steps do
+		local angle = if steps > 0 then math.pi + (drillAngle - math.pi) * k / steps else math.pi
+		table.insert(points, craterPoint(angle, arcRadius, y))
+	end
+	local outward = dirFromAngle(drillAngle)
+	local side = Vector3.new(-outward.Z, 0, outward.X)
+	table.insert(points, craterPoint(drillAngle, CONVEYOR_FOOT_RADIUS + 4.5, y) + side * 3.5)
+	return points
+end
+
+local function keepoutsAlong(points: { Vector3 }, radius: number, spacing: number, into: { Keepout6 })
+	for i = 1, #points - 1 do
+		local a, b = points[i], points[i + 1]
+		local n = math.max(1, math.ceil((b - a).Magnitude / spacing))
+		for k = 0, n do
+			local p = a:Lerp(b, k / n)
+			table.insert(into, { x = p.X, z = p.Z, r = radius })
+		end
+	end
+end
+
+-- A path made of straight pieces, walked by distance.
+type Polyline = { points: { Vector3 }, lengths: { number }, total: number }
+
+local function polyline(points: { Vector3 }): Polyline
+	local lengths: { number } = {}
+	local total = 0
+	for i = 1, #points - 1 do
+		local length = (points[i + 1] - points[i]).Magnitude
+		lengths[i] = length
+		total += length
+	end
+	return { points = points, lengths = lengths, total = total }
+end
+
+-- Position and unit direction at `distance` along the path.
+local function alongPolyline(line: Polyline, distance: number): (Vector3, Vector3)
+	local d = math.clamp(distance, 0, line.total)
+	for i, length in line.lengths do
+		if d <= length or i == #line.lengths then
+			local a, b = line.points[i], line.points[i + 1]
+			local t = if length > 0 then math.clamp(d / length, 0, 1) else 0
+			local dir = if length > 0 then (b - a) / length else Vector3.zAxis
+			return a:Lerp(b, t), dir
+		end
+		d -= length
+	end
+	return line.points[1], Vector3.zAxis
+end
+
+type DrillBit = { root: BasePart, base: CFrame, level: number }
+type DrillRefs = { model: Model, bits: { DrillBit } }
+
+-- One automatic ice drill on the crater floor. Its lift belt carries the ice up the rim wall to
+-- `beltEnd`. Level 2 adds a taller rig and a second light, level 3 a second bit and a power pack.
+local function buildDrill(parent: Instance, index: number, angle: number, beltEnd: Vector3): DrillRefs
+	local m = model(parent, "IceDrill" .. index)
+	local floorPos = craterPoint(angle, DRILL_FLOOR_RADIUS, CRATER_FLOOR_Y)
+	local cf = CFrame.lookAt(floorPos, floorPos + dirFromAngle(angle)) -- local -Z faces the rim wall
+	local function at(x: number, y: number, z: number): CFrame
+		return cf * CFrame.new(x, y, z)
+	end
+	local metal: Style = { color = METAL, material = Enum.Material.Metal }
+	local dark: Style = { color = DARK_METAL, material = Enum.Material.Metal }
+	local hull: Style = { color = WHITE_HULL, material = Enum.Material.SmoothPlastic }
+	local trim: Style = { color = HULL_TRIM, material = Enum.Material.SmoothPlastic, collide = false }
+	local lampStyle: Style = { color = DRILL_WARM, material = Enum.Material.Neon, collide = false, shadow = false }
+	local bitStyle: Style = { color = METAL, material = Enum.Material.Metal, collide = false, shadow = false }
+	local fluteStyle: Style = { color = DARK_METAL, material = Enum.Material.Metal, collide = false, shadow = false }
+
+	part(m, "Skid", Vector3.new(7, 1, 7), at(0, 0.5, 0), dark)
+	part(m, "Deck", Vector3.new(6.2, 0.3, 6.2), at(0, 1.15, 0), { color = METAL, material = Enum.Material.DiamondPlate })
+	for _, x in { -2.4, 2.4 } do
+		part(m, "Post", Vector3.new(0.7, 9, 0.7), at(x, 5.8, 0), metal)
+	end
+	part(m, "Beam", Vector3.new(5.5, 0.7, 0.9), at(0, 10.65, 0), metal)
+	part(m, "Motor", Vector3.new(2.2, 2, 2.2), at(0, 9.2, 0), hull)
+	part(m, "MotorTrim", Vector3.new(2.3, 0.35, 2.3), at(0, 8.35, 0), trim)
+	local lamp = part(m, "WorkLamp", Vector3.new(1.2, 0.5, 0.8), at(0, 11.25, 0.6), lampStyle)
+	pointLight(lamp, DRILL_WARM, 26, 2, false)
+	-- Beacon mast: the drill sits on the dark crater floor (ice hides in shadow), so playtesters could
+	-- not see it from the rim. A thin mast with a warm light pokes up above the rim.
+	local mastTop = 40 -- studs above the crater floor; the rim is about 32 above it
+	vcylinder(m, "BeaconMast", mastTop - 11, 0.35, at(2.4, 11 + (mastTop - 11) / 2, 0).Position, metal)
+	local beacon = ball(m, "Beacon", 1.1, at(2.4, mastTop + 0.4, 0).Position, lampStyle)
+	pointLight(beacon, DRILL_WARM, 16, 1.5, false)
+	part(m, "Hopper", Vector3.new(2.6, 2.2, 2.6), at(0, 2.4, -3.2), dark)
+	part(m, "HopperIce", Vector3.new(2.2, 0.3, 2.2), at(0, 3.55, -3.2), {
+		color = ICE_GLOW,
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	part(m, "Chute", Vector3.new(0.8, 0.25, 2.4), at(0, 3.1, -1.6) * CFrame.Angles(math.rad(-15), 0, 0), {
+		color = DARK_METAL,
+		material = Enum.Material.Metal,
+		collide = false,
+	})
+
+	-- Drill bits: an anchored shaft with two welded flutes, spun around the world Y axis.
+	local bits: { DrillBit } = {}
+	local function addBit(name: string, z: number, length: number, diameter: number, level: number)
+		local centre = at(0, 0.3 + length / 2, z).Position
+		local bitCf = CFrame.new(centre) * CFrame.Angles(0, 0, math.rad(90))
+		local root = cylinder(m, name, length, diameter, bitCf, bitStyle)
+		local fluteA = part(m, name .. "Flute", Vector3.new(0.2, length - 1.6, diameter + 0.7), CFrame.new(centre), fluteStyle)
+		local fluteB = part(m, name .. "Flute", Vector3.new(diameter + 0.7, length - 1.6, 0.2), CFrame.new(centre), fluteStyle)
+		if level > 1 then
+			upgrade(root, level)
+			upgrade(fluteA, level)
+			upgrade(fluteB, level)
+		end
+		weldTo(root, { fluteA, fluteB })
+		table.insert(bits, { root = root :: BasePart, base = bitCf, level = level })
+	end
+	addBit("Bit", 0, 8.4, 0.9, 1)
+
+	-- Level 2: a taller rig with a second work light.
+	for _, x in { -2.4, 2.4 } do
+		upgrade(part(m, "PostTop", Vector3.new(0.7, 4, 0.7), at(x, 13, 0), metal), 2)
+	end
+	upgrade(part(m, "BeamTop", Vector3.new(5.5, 0.7, 0.9), at(0, 15.35, 0), metal), 2)
+	local lampTop = part(m, "WorkLampTop", Vector3.new(1.2, 0.5, 0.8), at(0, 15.95, 0.6), lampStyle)
+	pointLight(lampTop, DRILL_WARM, 18, 1, false)
+	upgrade(lampTop, 2)
+
+	-- Level 3: a second, smaller bit with its own motor, and a power pack.
+	addBit("Bit2", 2.3, 6, 0.7, 3)
+	upgrade(part(m, "Motor2", Vector3.new(1.6, 1.4, 1.6), at(0, 7.4, 2.3), hull), 3)
+	upgrade(part(m, "PowerPack", Vector3.new(1.4, 2.6, 2.4), at(3.6, 2.6, 0), dark), 3)
+	upgrade(part(m, "PowerStripe", Vector3.new(1.5, 0.35, 2.5), at(3.6, 3.4, 0), trim), 3)
+
+	-- Lift belt up the rim wall, with one strut down to the floor.
+	local beltStart = at(0, 3.75, -3.2).Position
+	belt(m, "LiftBelt", beltStart, beltEnd, 1.6, 0.35, { color = DARK_METAL, material = Enum.Material.Metal, collide = false })
+	local mid = beltStart:Lerp(beltEnd, 0.4)
+	local strutHeight = mid.Y - CRATER_FLOOR_Y
+	vcylinder(m, "LiftStrut", strutHeight, 0.5, Vector3.new(mid.X, CRATER_FLOOR_Y + strutHeight / 2, mid.Z), metal)
+
+	return { model = m, bits = bits }
+end
+
+type ConveyorRefs = { model: Model, cubes: { BasePart }, cubeLine: Polyline, pipeEnd: Vector3 }
+
+-- The rim hopper, the open belt over the rim and down its outer slope, and the half-buried ice pipe
+-- from there to the silo behind the habitat (it runs under the habitat floor).
+local function buildConveyor(base: Instance, angle: number): ConveyorRefs
+	local m = model(base, "IceConveyor")
+	local outward = dirFromAngle(angle)
+	local dark: Style = { color = DARK_METAL, material = Enum.Material.Metal }
+	local beltStyle: Style = { color = DARK_METAL, material = Enum.Material.Metal, collide = false }
+	local stripe: Style = { color = ACCENT_SYSTEM, material = Enum.Material.Neon, collide = false, shadow = false }
+
+	local hopperPos = craterPoint(angle, HOPPER_RADIUS, CRATER_RIM_Y + 1.3)
+	part(m, "RimHopper", Vector3.new(3.4, 2.6, 3.4), CFrame.lookAt(hopperPos, hopperPos + outward), dark)
+	local trimPos = hopperPos + Vector3.new(0, 0.95, 0)
+	part(m, "RimHopperTrim", Vector3.new(3.5, 0.35, 3.5), CFrame.lookAt(trimPos, trimPos + outward), stripe)
+
+	local a = craterPoint(angle, HOPPER_RADIUS + 1.7, CRATER_RIM_Y + 0.2)
+	local b = craterPoint(angle, 100, CRATER_RIM_Y + 0.2)
+	local c = craterPoint(angle, 116.5, 0.2)
+	local up = Vector3.new(0, 0.22, 0)
+	belt(m, "RimBelt", a, b, 2, 0.4, beltStyle)
+	belt(m, "SlopeBelt", b, c, 2, 0.4, beltStyle)
+	belt(m, "BeltStripe", a + up, b + up, 0.3, 0.05, stripe)
+	belt(m, "BeltStripe", b + up, c + up, 0.3, 0.05, stripe)
+
+	local foot = craterPoint(angle, CONVEYOR_FOOT_RADIUS, 0)
+	local inletPos = foot + Vector3.new(0, 0.7, 0)
+	part(m, "PipeInlet", Vector3.new(1.8, 1.4, 1.8), CFrame.lookAt(inletPos, inletPos + outward), dark)
+	local towardFoot = flatUnit(foot - SILO_CENTRE, Vector3.zAxis)
+	local pipeEnd = SILO_CENTRE + towardFoot * (SILO_GLASS_DIAMETER / 2 + 1.4)
+	pipe(m, "IcePipe", Vector3.new(foot.X, 0, foot.Z), Vector3.new(pipeEnd.X, 0, pipeEnd.Z), 0.9, {
+		color = METAL,
+		material = Enum.Material.Metal,
+		collide = false,
+		shadow = false,
+	})
+
+	-- Ice cubes riding the open belt (a small pool, moved only while someone is near).
+	local lift = Vector3.new(0, 0.65, 0)
+	local cubeLine = polyline({ a + lift, b + lift, c + lift })
+	local cubes: { BasePart } = {}
+	for k = 1, ICE_CUBE_COUNT do
+		local position, dir = alongPolyline(cubeLine, (k - 1) * cubeLine.total / ICE_CUBE_COUNT)
+		table.insert(
+			cubes,
+			part(m, "IceCube", Vector3.new(0.9, 0.9, 0.9), CFrame.lookAt(position, position + dir), {
+				color = ICE_LOAD,
+				material = Enum.Material.Ice,
+				collide = false,
+				shadow = false,
+			})
+		)
+	end
+	return { model = m, cubes = cubes, cubeLine = cubeLine, pipeEnd = pipeEnd }
+end
+
+type SiloRefs = {
+	model: Model,
+	fill: Part,
+	light: PointLight,
+	ring: Part,
+	prompt: ProximityPrompt,
+	bottomY: number,
+	height: number,
+	diameter: number,
+}
+
+-- The ice silo behind the habitat: a glass column that shows how much ice the drills have stored,
+-- a lift pipe from the conveyor, and a pipe through the back wall into the water tank.
+local function buildSilo(base: Instance, pipeEnd: Vector3): SiloRefs
+	local m = model(base, "IceSilo")
+	local c = SILO_CENTRE
+	local metal: Style = { color = METAL, material = Enum.Material.Metal }
+	local glassBottom = 1
+	local top = glassBottom + SILO_GLASS_HEIGHT
+	local siloBase = vcylinder(m, "SiloBase", 1, SILO_GLASS_DIAMETER + 1.6, c + Vector3.new(0, 0.5, 0), {
+		color = DARK_METAL,
+		material = Enum.Material.Metal,
+	})
+	vcylinder(m, "SiloGlass", SILO_GLASS_HEIGHT, SILO_GLASS_DIAMETER, c + Vector3.new(0, glassBottom + SILO_GLASS_HEIGHT / 2, 0), {
+		color = Color3.fromRGB(210, 230, 240),
+		material = Enum.Material.Glass,
+		transparency = 0.65,
+		shadow = false,
+	})
+	local fillHeight = SILO_GLASS_HEIGHT - 0.3
+	local fillDiameter = SILO_GLASS_DIAMETER - 0.5
+	local fill = vcylinder(m, "SiloFill", fillHeight, fillDiameter, c + Vector3.new(0, glassBottom + fillHeight / 2, 0), {
+		color = ICE_LOAD,
+		material = Enum.Material.Ice,
+		transparency = 1,
+		collide = false,
+		shadow = false,
+	})
+	fill:SetAttribute(NO_RISE_ATTRIBUTE, true) -- setSilo tweens it
+	local light = pointLight(fill, ICE_GLOW, 10, 0.8, false)
+	light.Enabled = false
+	for _, y in { 4.7, 8.4 } do
+		vcylinder(m, "SiloBand", 0.4, SILO_GLASS_DIAMETER + 0.3, c + Vector3.new(0, y, 0), metal)
+	end
+	local ring = vcylinder(m, "SiloRing", 0.35, SILO_GLASS_DIAMETER + 0.5, c + Vector3.new(0, top - 0.4, 0), {
+		color = ACCENT_SYSTEM,
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	vcylinder(m, "SiloCap", 0.8, SILO_GLASS_DIAMETER + 0.6, c + Vector3.new(0, top + 0.4, 0), metal)
+	vcylinder(m, "SiloHatch", 0.6, 2.4, c + Vector3.new(0, top + 1.1, 0), { color = WHITE_HULL, material = Enum.Material.SmoothPlastic })
+
+	-- Lift pipe from the ice pipe up the silo's side and over into the top.
+	local side = flatUnit(pipeEnd - c, Vector3.zAxis)
+	local liftAt = c + side * (SILO_GLASS_DIAMETER / 2 + 0.9)
+	vcylinder(m, "IceLift", top + 1.4, 1.1, Vector3.new(liftAt.X, (top + 1.4) / 2, liftAt.Z), metal)
+	pipe(m, "IceLiftTop", liftAt + Vector3.new(0, top + 0.9, 0), c + Vector3.new(0, top + 0.9, 0), 0.8, metal)
+
+	-- Melted ice goes on to the water tank inside (habitat corner), through the back wall up high.
+	local tankTop = HABITAT_CENTRE + Vector3.new(25, 9.1, -15)
+	local pipeY = 16.6
+	local pipeStyle: Style = { color = METAL, material = Enum.Material.Metal, collide = false, shadow = false }
+	local capTop = top + 0.8
+	vcylinder(m, "TankPipe", pipeY - capTop, 0.7, Vector3.new(c.X, (pipeY + capTop) / 2, c.Z), pipeStyle)
+	pipe(m, "TankPipe", Vector3.new(c.X, pipeY, c.Z), Vector3.new(c.X, pipeY, tankTop.Z), 0.7, pipeStyle)
+	pipe(m, "TankPipe", Vector3.new(c.X, pipeY, tankTop.Z), Vector3.new(tankTop.X, pipeY, tankTop.Z), 0.7, pipeStyle)
+	vcylinder(m, "TankPipe", pipeY - tankTop.Y, 0.7, Vector3.new(tankTop.X, (pipeY + tankTop.Y) / 2, tankTop.Z), pipeStyle)
+	for _, corner in { Vector3.new(c.X, pipeY, c.Z), Vector3.new(c.X, pipeY, tankTop.Z), Vector3.new(tankTop.X, pipeY, tankTop.Z) } do
+		ball(m, "TankPipeJoint", 0.85, corner, pipeStyle)
+	end
+
+	-- Ice sign facing away from the habitat (where players walk up to it).
+	local sign = part(m, "SiloSign", Vector3.new(2.4, 2.4, 0.2), CFrame.new(c + Vector3.new(0, 6.5, -(SILO_GLASS_DIAMETER / 2 + 0.2))), {
+		color = PALETTE.night,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+		shadow = false,
+	})
+	local signGui = Instance.new("SurfaceGui")
+	signGui.Name = "SiloIcon"
+	signGui.Face = Enum.NormalId.Front
+	signGui.LightInfluence = 0
+	signGui.CanvasSize = Vector2.new(64, 64)
+	signGui.Parent = sign
+	local signIcon = Instance.new("ImageLabel")
+	signIcon.BackgroundTransparency = 1
+	signIcon.Size = UDim2.fromScale(0.8, 0.8)
+	signIcon.Position = UDim2.fromScale(0.1, 0.1)
+	signIcon.Image = Icons.ice
+	signIcon.ImageColor3 = ACCENT_SYSTEM
+	signIcon.Parent = signGui
+
+	-- Claim prompt (BaseService decides when it is usable).
+	local promptPoint = Instance.new("Attachment")
+	promptPoint.Name = "PromptPoint"
+	promptPoint.Position = Vector3.new(2.5, 0, 0) -- the base's X axis points up
+	promptPoint.Parent = siloBase
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "SiloPrompt"
+	prompt.ActionText = "Collect ice"
+	prompt.ObjectText = ""
+	prompt.HoldDuration = 0.5
+	prompt.MaxActivationDistance = PROMPT_DISTANCE
+	prompt.RequiresLineOfSight = false
+	prompt.Enabled = false
+	prompt:SetAttribute("TextKey", "prompt.claim_silo")
+	prompt.Parent = promptPoint
+
+	return {
+		model = m,
+		fill = fill,
+		light = light,
+		ring = ring,
+		prompt = prompt,
+		bottomY = c.Y + glassBottom,
+		height = fillHeight,
+		diameter = fillDiameter,
+	}
+end
+
+type CargoRefs = { model: Model, root: Part, load: Part, route: Polyline }
+
+-- The cargo robot: a small wheeled cart with an ice bin, parked at its dock by the silo.
+local function buildCargoBot(base: Instance, route: Polyline): CargoRefs
+	local m = model(base, "CargoRobot")
+	local start = route.points[1]
+	local cf = CFrame.lookAt(start, start + flatUnit(route.points[2] - start, -Vector3.xAxis))
+	local function style(color: Color3, material: Enum.Material): Style
+		return { color = color, material = material, collide = false }
+	end
+	local glow: Style = { color = ACCENT_SYSTEM, material = Enum.Material.Neon, collide = false, shadow = false }
+	local root = part(m, "Body", Vector3.new(3, 1.2, 4.2), cf, style(WHITE_HULL, Enum.Material.SmoothPlastic))
+	local attached: { BasePart } = {}
+	local function add(p: BasePart)
+		table.insert(attached, p)
+	end
+	add(part(m, "Bin", Vector3.new(2.8, 1, 2.8), cf * CFrame.new(0, 1.05, 0.5), style(DARK_METAL, Enum.Material.Metal)))
+	local load = part(m, "IceLoad", Vector3.new(2.3, 0.45, 2.3), cf * CFrame.new(0, 1.65, 0.5), {
+		color = ICE_LOAD,
+		material = Enum.Material.Ice,
+		transparency = 1,
+		collide = false,
+		shadow = false,
+	})
+	add(load)
+	local wheelStyle = style(Color3.fromRGB(44, 46, 52), Enum.Material.Rubber)
+	for _, wx in { -1.7, 1.7 } do
+		for _, wz in { -1.4, 1.4 } do
+			add(cylinder(m, "Wheel", 0.5, 1.2, cf * CFrame.new(wx, -0.7, wz), wheelStyle))
+		end
+	end
+	add(part(m, "Trim", Vector3.new(3.05, 0.25, 4.25), cf * CFrame.new(0, 0.2, 0), style(HULL_TRIM, Enum.Material.SmoothPlastic)))
+	for _, ex in { -0.7, 0.7 } do
+		add(part(m, "Eye", Vector3.new(0.5, 0.35, 0.1), cf * CFrame.new(ex, 0.25, -2.12), glow))
+	end
+	add(part(m, "Mast", Vector3.new(0.2, 1.2, 0.2), cf * CFrame.new(1.1, 1.2, -1.6), style(METAL, Enum.Material.Metal)))
+	add(ball(m, "Beacon", 0.45, (cf * CFrame.new(1.1, 1.9, -1.6)).Position, glow))
+	weldTo(root, attached)
+	return { model = m, root = root, load = load, route = route }
+end
+
+type PadRefs = { pad: Part, prompt: ProximityPrompt }
+
+-- A round glowing build pad with the structure's icon and a hold prompt. BaseService sets the
+-- prompt text and the pad attributes SBO_Level, SBO_Cost (nil at the top level) and SBO_Locked;
+-- the pad dims while locked and shrinks once the structure is at its top level.
+local function buildPad(parent: Instance, id: string, position: Vector3, icon: string): PadRefs
+	local pad = vcylinder(parent, id, PAD_HEIGHT, PAD_DIAMETER, position + Vector3.new(0, PAD_HEIGHT / 2, 0), {
+		color = PALETTE.night,
+		material = Enum.Material.SmoothPlastic,
+		shadow = false,
+	})
+	pad:SetAttribute("BuildId", id)
+	local ring = vcylinder(pad, "Ring", PAD_HEIGHT * 0.8, PAD_RING_DIAMETER, position + Vector3.new(0, PAD_HEIGHT * 0.4, 0), {
+		color = ACCENT_SYSTEM,
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	local gui = Instance.new("SurfaceGui")
+	gui.Name = "PadIcon"
+	gui.Face = Enum.NormalId.Right -- the pad's X axis points up
+	gui.LightInfluence = 0
+	gui.CanvasSize = Vector2.new(100, 100)
+	gui.Parent = pad
+	local image = Instance.new("ImageLabel")
+	image.BackgroundTransparency = 1
+	image.Size = UDim2.fromScale(0.6, 0.6)
+	image.Position = UDim2.fromScale(0.2, 0.2)
+	image.Image = icon
+	image.ImageColor3 = ACCENT_SYSTEM
+	image.Parent = gui
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "BuildPrompt"
+	prompt.ActionText = "Build"
+	prompt.ObjectText = ""
+	prompt.HoldDuration = BUILD_PROMPT_HOLD
+	prompt.MaxActivationDistance = PROMPT_DISTANCE
+	prompt.RequiresLineOfSight = false
+	prompt.Enabled = false
+	prompt:SetAttribute("TextKey", "prompt.build")
+	prompt:SetAttribute("ObjectKey", `build.{id}.name`)
+	prompt.Parent = pad
+
+	local function refresh()
+		local level = pad:GetAttribute("SBO_Level")
+		local cost = pad:GetAttribute("SBO_Cost")
+		local locked = pad:GetAttribute("SBO_Locked") == true
+		local maxed = cost == nil and type(level) == "number" and level > 0
+		local diameter = if maxed then PAD_MAXED_DIAMETER else PAD_DIAMETER
+		pad.Size = Vector3.new(PAD_HEIGHT, diameter, diameter)
+		pad.Transparency = if maxed then 0.7 else 0
+		ring.Transparency = if maxed then 1 else 0
+		gui.Enabled = not maxed
+		ring.Material = if locked then Enum.Material.SmoothPlastic else Enum.Material.Neon
+		ring.Color = if locked then ACCENT_SYSTEM:Lerp(PALETTE.night, 0.6) else ACCENT_SYSTEM
+		image.ImageColor3 = if locked then PALETTE.creamDim else ACCENT_SYSTEM
+		image.ImageTransparency = if locked then 0.55 else 0
+	end
+	for _, name in { "SBO_Level", "SBO_Cost", "SBO_Locked" } do
+		pad:GetAttributeChangedSignal(name):Connect(refresh)
+	end
+	refresh()
+	return { pad = pad, prompt = prompt }
+end
+
+-- Blueprint of a structure: the same shape in see-through cyan force field. Nothing in it works:
+-- no collisions, lights, prompts, GUIs, effects or joints; tiny parts and upgrade parts are left out.
+local function makeHologram(source: Instance, parent: Instance): Instance
+	local copy = source:Clone()
+	copy.Name = source.Name .. "Blueprint"
+	for _, item in copy:GetDescendants() do
+		if item.Parent == nil then
+			continue -- inside something already removed
+		end
+		if item:IsA("BasePart") then
+			local upgradeLevel = item:GetAttribute(UPGRADE_ATTRIBUTE)
+			local isUpgrade = type(upgradeLevel) == "number" and upgradeLevel > 1
+			local invisible = upgradeLevel == nil and item.Transparency >= 0.95
+			local tiny = math.max(item.Size.X, item.Size.Y, item.Size.Z) < HOLOGRAM_MIN_PART
+			if isUpgrade or invisible or tiny then
+				item:Destroy()
+			else
+				item.Anchored = true
+				item.CanCollide = false
+				item.CanQuery = false
+				item.CanTouch = false
+				item.CastShadow = false
+				item.Material = Enum.Material.ForceField
+				item.Color = ACCENT_SYSTEM
+				item.Transparency = HOLOGRAM_TRANSPARENCY
+				item.Reflectance = 0
+			end
+		elseif
+			item:IsA("Light")
+			or item:IsA("ProximityPrompt")
+			or item:IsA("ParticleEmitter")
+			or item:IsA("Beam")
+			or item:IsA("SurfaceGui")
+			or item:IsA("BillboardGui")
+			or item:IsA("Decal")
+			or item:IsA("JointInstance")
+			or item:IsA("WeldConstraint")
+			or item:IsA("Constraint")
+			or item:IsA("LuaSourceContainer")
+		then
+			item:Destroy()
+		end
+	end
+	copy.Parent = parent
+	return copy
+end
+
+-- Anchored parts in these instances (and their descendants) that the rise-in animation may move.
+local function risableParts(roots: { Instance }): { BasePart }
+	local list: { BasePart } = {}
+	local function consider(item: Instance)
+		if item:IsA("BasePart") and item.Anchored and item:GetAttribute(NO_RISE_ATTRIBUTE) ~= true and not risingParts[item] then
+			table.insert(list, item)
+		end
+	end
+	for _, root in roots do
+		consider(root)
+		for _, item in root:GetDescendants() do
+			consider(item)
+		end
+	end
+	return list
+end
+
+-- Lifts parts up out of the ground into place over RISE_SECONDS (CFrames sent at most every
+-- PULSE_UPDATE_SECONDS). onStep(offsetY) moves anything that has its own animation.
+local function riseIn(parts: { BasePart }, drop: number, onStep: ((offset: number) -> ())?, onDone: (() -> ())?)
+	local finals: { CFrame } = table.create(#parts)
+	for i, p in parts do
+		finals[i] = p.CFrame
+		risingParts[p] = true
+		p.CFrame = finals[i] - Vector3.new(0, drop, 0)
+	end
+	if onStep then
+		onStep(-drop)
+	end
+	local elapsed = 0
+	local sinceSend = 0
+	local connection: RBXScriptConnection? = nil
+	connection = RunService.Heartbeat:Connect(function(dt: number)
+		elapsed += dt
+		sinceSend += dt
+		local alpha = math.clamp(elapsed / RISE_SECONDS, 0, 1)
+		if sinceSend < PULSE_UPDATE_SECONDS and alpha < 1 then
+			return
+		end
+		sinceSend = 0
+		local eased = 1 - (1 - alpha) ^ 3
+		local offset = -drop * (1 - eased)
+		for i, p in parts do
+			p.CFrame = finals[i] + Vector3.new(0, offset, 0)
+		end
+		if onStep then
+			onStep(offset)
+		end
+		if alpha >= 1 then
+			if connection then
+				connection:Disconnect()
+			end
+			for _, p in parts do
+				risingParts[p] = nil
+			end
+			if onDone then
+				onDone()
+			end
+		end
+	end)
+end
+
+-- Dust kicked up where something is built. With no air on the Moon, the dust flies out in arcs and
+-- falls straight back down instead of hanging in a cloud.
+local function dustPuff(parent: Instance, position: Vector3)
+	local holder = Instance.new("Part")
+	holder.Name = "BuildDust"
+	holder.Anchored = true
+	holder.CanCollide = false
+	holder.CanQuery = false
+	holder.CanTouch = false
+	holder.CastShadow = false
+	holder.Transparency = 1
+	holder.Size = Vector3.new(4, 0.2, 4)
+	holder.CFrame = CFrame.new(position + Vector3.new(0, 0.3, 0))
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Color = ColorSequence.new(REGOLITH_LIGHT)
+	emitter.Size = NumberSequence.new(0.8, 2)
+	emitter.Transparency = NumberSequence.new(0.35, 1)
+	emitter.Lifetime = NumberRange.new(0.8, 1.3)
+	emitter.Speed = NumberRange.new(7, 12)
+	emitter.SpreadAngle = Vector2.new(70, 70)
+	emitter.EmissionDirection = Enum.NormalId.Top
+	emitter.Acceleration = Vector3.new(0, -18, 0)
+	emitter.Drag = 0
+	emitter.Rate = 70
+	emitter.Parent = holder
+	holder.Parent = parent
+	task.delay(0.35, function()
+		emitter.Enabled = false
+	end)
+	task.delay(2.5, function()
+		holder:Destroy()
+	end)
+end
+
+local function hiddenStore(): Folder
+	local old = ServerStorage:FindFirstChild(HIDDEN_FOLDER)
+	if old then
+		old:Destroy()
+	end
+	local store = Instance.new("Folder")
+	store.Name = HIDDEN_FOLDER
+	store.Parent = ServerStorage
+	return store
 end
 
 ------------------------------------------------------------------------------------------------
@@ -2090,16 +2882,8 @@ end
 ------------------------------------------------------------------------------------------------
 
 -- Every secret place is closed by walls at least 4 studs thick, so the default camera cannot slide
--- into it and nobody sees the item from the base, the paths or the crater floor. A tiny magenta
--- pebble marks each entrance: magenta always means "secret" in this base.
-local function hintPebble(parent: Instance, position: Vector3)
-	ball(parent, "SecretHint", 0.5, position, {
-		color = ACCENT_SECRET,
-		material = Enum.Material.Neon,
-		collide = false,
-		shadow = false,
-	})
-end
+-- into it and nobody sees the item from the base, the paths or the crater floor. Entrances carry no
+-- marker (players took the old magenta pebbles for a bug); magenta still means "secret" on the items.
 
 -- Cuts a rectangular hole (in X and Z) out of the ground tiles, keeping each tile's colour.
 local function carveGround(ground: Instance, x0: number, x1: number, z0: number, z1: number)
@@ -2164,7 +2948,6 @@ local function buildCrawlSpace(base: Instance, ground: Instance): CFrame
 		CFrame.new(v(42.2, 7, -16)) * CFrame.Angles(0, 0, math.rad(70)) * CFrame.new(0, -2.5, 0),
 		{ color = DARK_METAL, material = Enum.Material.DiamondPlate, collide = false }
 	)
-	hintPebble(crawl, v(43.4, 0.25, -18.4))
 
 	-- Inside: a crate to climb back out (two 6-stud hops), a pipe and a dim cyan service lamp.
 	box(crawl, "Crate", v(33, -12, -20), v(38, -6, -15), { color = DARK_METAL, material = Enum.Material.Metal })
@@ -2224,7 +3007,6 @@ local function buildLookoutRock(base: Instance): CFrame
 	part(rockModel, "Boulder", Vector3.new(7, 5, 6), cf * CFrame.new(-13, 2, 3) * CFrame.Angles(0.2, 0.5, -0.1), loose)
 	part(rockModel, "Boulder", Vector3.new(6, 4, 7), cf * CFrame.new(5, 37.5, 2) * CFrame.Angles(0.1, 0.8, 0.15), loose)
 	part(rockModel, "Boulder", Vector3.new(5, 4, 5), cf * CFrame.new(13, 1.5, 4) * CFrame.Angles(-0.15, 1.1, 0.1), loose)
-	hintPebble(rockModel, (cf * CFrame.new(10, 0.25, -12.5)).Position)
 
 	return cf * CFrame.new(-5, 24 + COLLECTIBLE_FLOAT, -4)
 end
@@ -2271,7 +3053,6 @@ local function buildLavaTube(base: Instance): CFrame
 	part(hill, "Boulder", Vector3.new(5, 8, 11), CFrame.new(lo.X - 7, 4, crackMid), loose)
 	part(hill, "Boulder", Vector3.new(4, 3, 5), CFrame.new(lo.X - 7.5, 9.2, crackMid + 1.5) * CFrame.Angles(0.1, 0.5, 0.2), loose)
 	part(hill, "Boulder", Vector3.new(6, 5, 6), CFrame.new(lo.X - 9, 2.2, crackMid - 11) * CFrame.Angles(0.2, 0.9, -0.1), loose)
-	hintPebble(hill, Vector3.new(lo.X - 1.2, 0.25, crackZ0 - 2.6))
 
 	return CFrame.new(roomX1 - 4, COLLECTIBLE_FLOAT, roomZ0 + 5)
 end
@@ -2683,11 +3464,6 @@ local function applyEclipseLook(a: number)
 	Lighting.OutdoorAmbient = LIGHT_OUTDOOR_AMBIENT:Lerp(ECLIPSE_OUTDOOR_AMBIENT, t)
 	local g = earthGui
 	if g then
-		local ringColour = PALETTE.cyan:Lerp(PALETTE.orange, t)
-		g.halo.BackgroundColor3 = ringColour
-		g.halo.BackgroundTransparency = lerp(0.82, 0.45, t)
-		g.rimStroke.Color = ringColour
-		g.rimStroke.Transparency = lerp(0.45, 0.1, t)
 		g.eclipseGlow.BackgroundTransparency = lerp(1, 0.7, t)
 		g.eclipseStroke.Transparency = lerp(1, 0, t)
 	end
@@ -2737,7 +3513,7 @@ local function updateArrays(tracks: { ArrayTrack })
 	local angle = sunAngleNow()
 	for _, track in tracks do
 		local yaw = wrapAngle(angle - track.baseAngle)
-		if math.abs(wrapAngle(yaw - track.yaw)) >= ARRAY_MIN_TURN and track.panel.Parent ~= nil then
+		if math.abs(wrapAngle(yaw - track.yaw)) >= ARRAY_MIN_TURN and track.panel.Parent ~= nil and not risingParts[track.panel] then
 			track.yaw = yaw
 			track.panel.CFrame = CFrame.new(track.pivot) * CFrame.Angles(0, yaw, 0) * track.offset
 		end
@@ -2841,6 +3617,10 @@ function WorldBuilder.build(data: any): World
 	base.Name = "Base"
 	base.Parent = Workspace
 
+	risingParts = {}
+	extraKeepouts = {}
+	local hidden = hiddenStore()
+
 	local rng = Random.new(42)
 	local ground = buildGround(base, rng)
 	local habitat = buildHabitat(base)
@@ -2849,9 +3629,36 @@ function WorldBuilder.build(data: any): World
 	buildRidge(base, rng)
 	local arrays, arrayVisuals, arrayTracks = buildArrays(base, data)
 	local antenna = buildAntenna(base)
+
+	-- Stage 6 layout first, so random boulders keep clear of the pipe, the robot's route and the pads.
+	local drillAngle = chooseDrillAngle(rampAngle)
+	local conveyorFoot = craterPoint(drillAngle, CONVEYOR_FOOT_RADIUS, 0)
+	local cargoPoints = cargoRoutePoints(drillAngle)
+	local pads = padSpots(drillAngle)
+	keepoutsAlong({ conveyorFoot, SILO_CENTRE }, 5, 12, extraKeepouts)
+	keepoutsAlong(cargoPoints, 6, 12, extraKeepouts)
+	table.insert(extraKeepouts, { x = SILO_CENTRE.X, z = SILO_CENTRE.Z, r = 9 })
+	for _, spot in pads do
+		table.insert(extraKeepouts, { x = spot.X, z = spot.Z, r = 7 })
+	end
+
 	buildDecor(base, rng)
 	local greenhouse = buildGreenhouse(base)
 	local rover = buildRover(base, rampAngle)
+
+	-- Stage 6: automatic ice drills on the crater floor, the conveyor, the silo and the cargo robot.
+	local outward = dirFromAngle(drillAngle)
+	local across = Vector3.new(-outward.Z, 0, outward.X)
+	local drillsFolder = folder(base, "IceDrills")
+	local drills: { DrillRefs } = {}
+	for i = 1, 3 do
+		local beltEnd = craterPoint(drillAngle, HOPPER_RADIUS - 2, CRATER_RIM_Y + 0.6) + across * ((i - 2) * 0.9)
+		table.insert(drills, buildDrill(drillsFolder, i, drillAngle + (i - 2) * DRILL_SPREAD, beltEnd))
+	end
+	local conveyor = buildConveyor(base, drillAngle)
+	local silo = buildSilo(base, conveyor.pipeEnd)
+	local cargo = buildCargoBot(base, polyline(cargoPoints))
+	local drillCentre = craterPoint(drillAngle, DRILL_FLOOR_RADIUS, 0)
 
 	-- Secrets come last and use their own random streams, so the rest of the base keeps its layout.
 	local secretSpots: { [string]: CFrame } = {
@@ -2900,6 +3707,7 @@ function WorldBuilder.build(data: any): World
 		Leak = habitat.leakPart.Position + Vector3.new(2, 0, 0),
 		Greenhouse = greenhouse.centre,
 		Arrays = Vector3.new(RIDGE_CENTRE.X, RIDGE_TOP_Y + 1, RIDGE_CENTRE.Z),
+		Silo = SILO_CENTRE + Vector3.new(0, 3, -(SILO_GLASS_DIAMETER / 2 + 2)),
 	}
 	for _, name in MARKER_NAMES do
 		markerPart(markers, name, markerPositions[name])
@@ -2911,8 +3719,21 @@ function WorldBuilder.build(data: any): World
 	local dusty: { boolean } = table.create(#arrays, false)
 	local leakActive = false
 	local antennaLinked = false
+	local antennaLevel = 0 -- Stage 6 build level (3 = laser link terminal)
 	local dishToken = 0
 	local stormToken = 0
+
+	-- The laser beam shows only on a level 3 antenna while the link to Earth is up.
+	local function refreshLaser()
+		antenna.laserBeam.Enabled = antennaLinked and antennaLevel >= 3
+	end
+
+	-- Where the dish points right now: at the Earth when linked, else knocked off.
+	local function dishTarget(): CFrame
+		return if antennaLinked
+			then CFrame.lookAt(antenna.hubPosition, earthPosition or defaultEarthPosition())
+			else antenna.misaligned
+	end
 
 	local function refreshPrompts()
 		for i, ref in arrays do
@@ -2968,10 +3789,9 @@ function WorldBuilder.build(data: any): World
 			light.Color = colour
 		end
 		refreshPrompts()
+		refreshLaser()
 
-		local target = if linked
-			then CFrame.lookAt(antenna.hubPosition, earthPosition or defaultEarthPosition())
-			else antenna.misaligned
+		local target = dishTarget()
 		dishToken += 1
 		local token = dishToken
 		local start = antenna.dishModel:GetPivot()
@@ -3157,6 +3977,339 @@ function WorldBuilder.build(data: any): World
 		return eclipseActive
 	end
 
+	-- Stage 6: build levels. Every structure was built above; each build id lists the models it shows
+	-- from which level, and its blueprint copies. setBuildLevel(id, 0) is applied to all of them below,
+	-- so the base starts with only the habitat, its water tank and blueprints.
+	type BuildUnit = { level: number, instance: Instance, home: Instance, hologram: Instance, shown: boolean, dust: Vector3? }
+	type UpgradeEntry = { part: BasePart, level: number, alpha: number }
+	type UpgradeLight = { light: Light, level: number }
+	type BuildEntry = {
+		units: { BuildUnit },
+		upgrades: { UpgradeEntry },
+		lights: { UpgradeLight },
+		level: number,
+		maxLevel: number,
+		pad: BasePart?,
+		onLevel: ((level: number) -> ())?,
+		onRiseStep: ((offset: number) -> ())?,
+		onRiseDone: (() -> ())?,
+	}
+	type UnitSpec = { level: number, instance: Instance, dust: Vector3? }
+
+	local blueprints = folder(base, "Blueprints")
+	local entries: { [string]: BuildEntry } = {}
+	local buildData = if type(data) == "table" and type(data.BASE) == "table" then data.BASE.BUILDS else nil
+	local function maxLevelOf(id: string, fallback: number): number
+		if type(buildData) == "table" then
+			for _, def in buildData do
+				if type(def) == "table" and def.id == id and type(def.maxLevel) == "number" then
+					return def.maxLevel
+				end
+			end
+		end
+		return fallback
+	end
+
+	local function register(id: string, fallbackMax: number, specs: { UnitSpec }): BuildEntry
+		local entry: BuildEntry = {
+			units = {},
+			upgrades = {},
+			lights = {},
+			level = 1, -- as built: every unit standing, upgrade parts hidden
+			maxLevel = maxLevelOf(id, fallbackMax),
+		}
+		for _, spec in specs do
+			local home = spec.instance.Parent :: Instance
+			table.insert(entry.units, {
+				level = spec.level,
+				instance = spec.instance,
+				home = home,
+				hologram = makeHologram(spec.instance, hidden),
+				shown = true,
+				dust = spec.dust,
+			})
+			for _, item in spec.instance:GetDescendants() do
+				local upgradeLevel = item:GetAttribute(UPGRADE_ATTRIBUTE)
+				if item:IsA("BasePart") and type(upgradeLevel) == "number" then
+					local alpha = item:GetAttribute(ALPHA_ATTRIBUTE)
+					table.insert(entry.upgrades, { part = item, level = upgradeLevel, alpha = if type(alpha) == "number" then alpha else 0 })
+					for _, light in item:GetDescendants() do
+						if light:IsA("Light") then
+							table.insert(entry.lights, { light = light, level = upgradeLevel })
+						end
+					end
+				end
+			end
+		end
+		entries[id] = entry
+		return entry
+	end
+
+	local solarSpecs: { UnitSpec } = {}
+	for i, ref in arrays do
+		table.insert(solarSpecs, { level = i, instance = ref.model })
+	end
+	register("solar", #arrays, solarSpecs)
+	register("greenhouse", 1, { { level = 1, instance = greenhouse.model } })
+	local antennaEntry = register("antenna", 3, { { level = 1, instance = antenna.model, dust = ANTENNA_BASE } })
+	local shelterEntry = register("shelter", 1, { { level = 1, instance = shelter.model, dust = SHELTER_CENTRE + Vector3.new(0, 0, 31) } })
+	local function drillFloor(i: number): Vector3
+		return craterPoint(drillAngle + (i - 2) * DRILL_SPREAD, DRILL_FLOOR_RADIUS, CRATER_FLOOR_Y)
+	end
+	register("drill_1", 3, {
+		{ level = 1, instance = drills[1].model, dust = drillFloor(1) },
+		{ level = 1, instance = conveyor.model, dust = conveyorFoot },
+		{ level = 1, instance = silo.model, dust = SILO_CENTRE },
+	})
+	register("drill_2", 3, { { level = 1, instance = drills[2].model, dust = drillFloor(2) } })
+	register("drill_3", 3, { { level = 1, instance = drills[3].model, dust = drillFloor(3) } })
+	register("cargo_bot", 1, { { level = 1, instance = cargo.model } })
+
+	-- A blueprint shelter has no mass, so it protects nobody: its zone moves far below the ground
+	-- until the shelter is built (CrewService reads the zone's CFrame through WorldBuilder.isInZone).
+	local shelterZoneHome = shelter.zone.CFrame
+	shelterEntry.onLevel = function(level: number)
+		shelter.zone.CFrame = if level >= 1 then shelterZoneHome else shelterZoneHome - Vector3.new(0, 2000, 0)
+	end
+
+	-- The dish has its own animation: during the rise it moves with the tower, then settles on its
+	-- current target (a link change during the rise is not lost).
+	antennaEntry.onLevel = function(level: number)
+		antennaLevel = level
+		refreshLaser()
+	end
+	antennaEntry.onRiseStep = function(offset: number)
+		dishToken += 1 -- stops a running dish turn
+		antenna.dishModel:PivotTo(dishTarget() + Vector3.new(0, offset, 0))
+	end
+	antennaEntry.onRiseDone = function()
+		dishToken += 1
+		antenna.dishModel:PivotTo(dishTarget())
+	end
+
+	-- Build pads: Workspace.Base.BuildPads.<id>.
+	local padsFolder = folder(base, "BuildPads")
+	local buildPads: { [string]: BasePart } = {}
+	local buildPrompts: { [string]: ProximityPrompt } = {}
+	local padIcons: { [string]: string } = {
+		solar = "solar",
+		greenhouse = "plant",
+		antenna = "antenna",
+		shelter = "shield",
+		drill_1 = "drill",
+		drill_2 = "drill",
+		drill_3 = "drill",
+		cargo_bot = "robot",
+	}
+	if type(buildData) == "table" then
+		for _, def in buildData do
+			if type(def) == "table" and type(def.id) == "string" and type(def.icon) == "string" then
+				padIcons[def.id] = def.icon
+			end
+		end
+	end
+	for id, entry in entries do
+		local spot = pads[id]
+		if spot then
+			local iconName = padIcons[id] or "build"
+			local icon = (Icons :: any)[iconName] or Icons.build
+			local refs = buildPad(padsFolder, id, spot, icon)
+			buildPads[id] = refs.pad
+			buildPrompts[id] = refs.prompt
+			entry.pad = refs.pad
+		end
+	end
+
+	local function dustSpot(unit: BuildUnit): Vector3?
+		if unit.dust then
+			return unit.dust
+		end
+		local instance = unit.instance
+		if instance:IsA("Model") then
+			local cf, size = instance:GetBoundingBox()
+			return cf.Position - Vector3.new(0, size.Y / 2, 0)
+		end
+		return nil
+	end
+
+	local function setBuildLevel(id: string, level: number, animate: boolean)
+		local entry = if type(id) == "string" then entries[id] else nil
+		if entry == nil or type(level) ~= "number" or level ~= level then
+			return
+		end
+		local newLevel = math.clamp(math.floor(level), 0, entry.maxLevel)
+		local raised: { Instance } = {}
+		local raisedUnits: { BuildUnit } = {}
+		for _, unit in entry.units do
+			local show = newLevel >= unit.level
+			if show ~= unit.shown then
+				unit.shown = show
+				if show then
+					unit.hologram.Parent = hidden
+					unit.instance.Parent = unit.home
+					table.insert(raised, unit.instance)
+					table.insert(raisedUnits, unit)
+				else
+					unit.instance.Parent = hidden
+					unit.hologram.Parent = blueprints
+				end
+			end
+		end
+		local upgraded: { Instance } = {}
+		for _, up in entry.upgrades do
+			local visible = newLevel >= up.level
+			local target = if visible then up.alpha else 1
+			if up.part.Transparency ~= target then
+				up.part.Transparency = target
+				if visible then
+					table.insert(upgraded, up.part)
+				end
+			end
+		end
+		for _, item in entry.lights do
+			item.light.Enabled = newLevel >= item.level
+		end
+		entry.level = newLevel
+		if entry.onLevel then
+			entry.onLevel(newLevel)
+		end
+		if animate ~= true then
+			return
+		end
+		if #raised > 0 then
+			riseIn(risableParts(raised), RISE_DROP, entry.onRiseStep, entry.onRiseDone)
+			for _, unit in raisedUnits do
+				local spot = dustSpot(unit)
+				if spot then
+					dustPuff(base, spot)
+				end
+			end
+		end
+		if #upgraded > 0 then
+			riseIn(risableParts(upgraded), UPGRADE_DROP, nil, nil)
+			local pad = entry.pad
+			if pad and #raised == 0 then
+				dustPuff(base, pad.Position)
+			end
+		end
+	end
+
+	local function buildLevel(id: string): number
+		local entry = if type(id) == "string" then entries[id] else nil
+		return if entry then entry.level else 0
+	end
+
+	local function isBuilt(id: string): boolean
+		return buildLevel(id) >= 1
+	end
+
+	-- Silo fill: the ice column grows, and the top ring turns lime when the silo is full.
+	local siloFraction = -1
+	local function setSilo(ice: number, max: number)
+		if type(ice) ~= "number" or type(max) ~= "number" or ice ~= ice or max <= 0 then
+			return
+		end
+		local f = math.clamp(ice / max, 0, 1)
+		if math.abs(f - siloFraction) < 1e-3 then
+			return
+		end
+		siloFraction = f
+		local height = math.max(0.05, silo.height * f)
+		local centre = Vector3.new(SILO_CENTRE.X, silo.bottomY + height / 2, SILO_CENTRE.Z)
+		TweenService:Create(silo.fill, SILO_TWEEN, {
+			Size = Vector3.new(height, silo.diameter, silo.diameter),
+			CFrame = CFrame.new(centre) * CFrame.Angles(0, 0, math.rad(90)),
+			Transparency = if f <= 0 then 1 else 0.05,
+		}):Play()
+		silo.light.Enabled = f > 0
+		silo.ring.Color = if f >= 1 then ACCENT_OK else ACCENT_SYSTEM
+	end
+	setSilo(0, 1)
+
+	-- Cargo robot: drives the route (dock -> conveyor foot -> back) while active, parked otherwise.
+	local cargoActive = false
+	local cargoDistance = 0
+	local cargoDirection = 1
+	local cargoWait = 0
+	local cargoAccumulator = 0
+	local function cargoPose(distance: number, direction: number, smooth: boolean): CFrame
+		local position, dir = alongPolyline(cargo.route, distance)
+		local facing = flatUnit(dir * direction, Vector3.zAxis)
+		local target = CFrame.lookAt(position, position + facing)
+		if not smooth then
+			return target
+		end
+		local current = cargo.root.CFrame
+		return CFrame.new(position) * current.Rotation:Lerp(target.Rotation, 0.35)
+	end
+	local function setCargoActive(active: boolean)
+		cargoActive = active == true
+		if not cargoActive then
+			cargoDistance = 0
+			cargoDirection = 1
+			cargoWait = 0
+			cargo.load.Transparency = 1
+			if not risingParts[cargo.root] then
+				cargo.root.CFrame = cargoPose(0, 1, false)
+			end
+		end
+	end
+
+	-- Drill bits and ice cubes (only while someone is near the drills).
+	local drillsAwake = false
+	local drillSpin: { number } = { 0, 0, 0 }
+	local spinAccumulator = 0
+	local cubeClock = 0
+	local cubeSpacing = conveyor.cubeLine.total / math.max(1, #conveyor.cubes)
+	local function animateDrills(step: number)
+		for i, drill in drills do
+			local level = buildLevel("drill_" .. i)
+			if level < 1 then
+				continue
+			end
+			drillSpin[i] = (drillSpin[i] + DRILL_SPIN_RAD[math.min(level, #DRILL_SPIN_RAD)] * step) % (2 * math.pi)
+			local turn = CFrame.Angles(0, drillSpin[i], 0)
+			for _, bit in drill.bits do
+				if level >= bit.level and not risingParts[bit.root] then
+					bit.root.CFrame = CFrame.new(bit.base.Position) * turn * bit.base.Rotation
+				end
+			end
+		end
+		if buildLevel("drill_1") >= 1 then
+			cubeClock += step
+			for k, cube in conveyor.cubes do
+				if not risingParts[cube] then
+					local d = (cubeClock * ICE_CUBE_SPEED + (k - 1) * cubeSpacing) % conveyor.cubeLine.total
+					local position, dir = alongPolyline(conveyor.cubeLine, d)
+					cube.CFrame = CFrame.lookAt(position, position + dir)
+				end
+			end
+		end
+	end
+
+	local function animateCargo(step: number)
+		if not cargoActive or buildLevel("cargo_bot") < 1 or risingParts[cargo.root] then
+			return
+		end
+		if cargoWait > 0 then
+			cargoWait -= step
+			return
+		end
+		cargoDistance += cargoDirection * CARGO_SPEED * step
+		if cargoDistance >= cargo.route.total then
+			cargoDistance = cargo.route.total
+			cargoDirection = -1
+			cargoWait = CARGO_WAIT_SECONDS
+			cargo.load.Transparency = 0 -- loaded at the conveyor
+		elseif cargoDistance <= 0 then
+			cargoDistance = 0
+			cargoDirection = 1
+			cargoWait = CARGO_WAIT_SECONDS
+			cargo.load.Transparency = 1 -- unloaded at the silo
+		end
+		cargo.root.CFrame = cargoPose(cargoDistance, cargoDirection, true)
+	end
+
 	-- Collectibles only bob and spin while someone is near, so idle servers replicate nothing.
 	local awake: { boolean } = table.create(#collectibleItems, false)
 	local awakeTimer = COLLECTIBLE_AWAKE_CHECK
@@ -3180,6 +4333,14 @@ function WorldBuilder.build(data: any): World
 			end
 			awake[i] = near
 		end
+		local drillsNear = false
+		for _, position in positions do
+			if (position - drillCentre).Magnitude <= DRILL_AWAKE_RANGE then
+				drillsNear = true
+				break
+			end
+		end
+		drillsAwake = drillsNear
 	end
 
 	-- One cheap Heartbeat drives every animation (systems and collectibles); it stops when the base
@@ -3226,11 +4387,31 @@ function WorldBuilder.build(data: any): World
 				item.root.CFrame = item.home * CFrame.new(0, bob, 0) * CFrame.Angles(0, t * COLLECTIBLE_SPIN_RAD, 0)
 			end
 		end
+		-- Stage 6: drill bits and ice cubes (15 times a second, only near the drills), cargo robot.
+		spinAccumulator += dt
+		if spinAccumulator >= SPIN_UPDATE_SECONDS then
+			local step = spinAccumulator
+			spinAccumulator = 0
+			if drillsAwake then
+				animateDrills(step)
+			end
+		end
+		cargoAccumulator += dt
+		if cargoAccumulator >= PULSE_UPDATE_SECONDS then
+			local step = cargoAccumulator
+			cargoAccumulator = 0
+			animateCargo(step)
+		end
 	end)
 
 	refreshPrompts()
 	setSystemVisuals({ LifeSupport = 0, Greenhouse = 0, Science = 0 })
 	startSky(base, arrayTracks)
+	-- Start from an almost empty base: only the habitat and its water tank stand (BaseService then
+	-- applies the builds of the players present).
+	for id in entries do
+		setBuildLevel(id, 0, false)
+	end
 
 	return {
 		spawn = habitat.spawn,
@@ -3257,6 +4438,14 @@ function WorldBuilder.build(data: any): World
 		onEclipse = onEclipse,
 		isEclipse = isEclipse,
 		previewEclipse = previewEclipse,
+		setBuildLevel = setBuildLevel,
+		isBuilt = isBuilt,
+		buildLevel = buildLevel,
+		buildPads = buildPads,
+		buildPrompts = buildPrompts,
+		siloPrompt = silo.prompt,
+		setSilo = setSilo,
+		setCargoActive = setCargoActive,
 	}
 end
 

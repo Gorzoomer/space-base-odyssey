@@ -1,6 +1,9 @@
 --!strict
--- Space Base Odyssey - server entry point: builds the Moon base, starts services, spawns players in
--- the astronaut suit.
+-- Space Base Odyssey - server entry point: builds the Moon base, starts services, spawns players
+-- (their own avatar with the astronaut helmet and backpack).
+-- Start order: world, remotes, CrewService, ProgressService, BaseService (Stage 6 build and grow),
+-- MissionService, SuitService, PetService. Each later service is started inside pcall so a missing
+-- or broken piece is reported with warn and never stops the server.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -9,8 +12,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Version = require(Shared:WaitForChild("Version"))
 local MissionData = require(Shared:WaitForChild("MissionData"))
+local Types = require(Shared:WaitForChild("Types"))
 
 local WorldBuilder = require(script.Parent:WaitForChild("WorldBuilder"))
+local BaseService = require(script.Parent:WaitForChild("BaseService"))
 local CrewService = require(script.Parent:WaitForChild("CrewService"))
 local MissionService = require(script.Parent:WaitForChild("MissionService"))
 local ProgressService = require(script.Parent:WaitForChild("ProgressService"))
@@ -44,13 +49,54 @@ for _, descendant in workspace:GetDescendants() do
 end
 
 local remotes = MissionService.createRemotes()
+
+-- Runs one start step; a failure is reported and the server keeps going.
+local function startStep(label: string, step: () -> ())
+	local ok, err = pcall(step)
+	if not ok then
+		warn(`[SpaceBaseOdyssey] {label} failed to start: {err}`)
+	end
+end
+
+-- Stage 6: Remotes.BASE_STATE lives in the same folder MissionService.createRemotes made.
+local function baseStateRemote(): RemoteEvent
+	local folder = ReplicatedStorage:WaitForChild(Types.Remotes.FOLDER)
+	local existing = folder:FindFirstChild(Types.Remotes.BASE_STATE)
+	if existing and existing:IsA("RemoteEvent") then
+		return existing
+	end
+	local event = Instance.new("RemoteEvent")
+	event.Name = Types.Remotes.BASE_STATE
+	event.Parent = folder
+	return event
+end
+
 CrewService.start(world, { playerStats = remotes.playerStats, message = remotes.message })
 -- Saved progress and the hidden collectibles (prompts, rewards) start before the mission loop so the
 -- mission select screen knows what is unlocked.
 ProgressService.start(world, { progress = remotes.progress, collected = remotes.collected, message = remotes.message })
-MissionService.start(world, CrewService, ProgressService)
--- Every character wears the same suit; rewards and event codes recolour parts of it.
-SuitService.start(ProgressService)
+-- Build and grow the base: credits, XP, builds, skills, pets, wardrobe (saved by ProgressService).
+startStep("BaseService", function()
+	BaseService.start(world, { baseState = baseStateRemote(), message = remotes.message }, ProgressService)
+end)
+startStep("MissionService", function()
+	MissionService.start(world, CrewService, ProgressService, BaseService)
+end)
+-- Every character keeps its own avatar and gets the astronaut helmet and backpack; rewards, event
+-- codes and the wardrobe choose their look.
+startStep("SuitService", function()
+	SuitService.start(ProgressService, BaseService)
+end)
+-- Pets follow their owners (PetService is optional: the server runs without it).
+startStep("PetService", function()
+	local module = script.Parent:FindFirstChild("PetService")
+	if module == nil or not module:IsA("ModuleScript") then
+		warn("[SpaceBaseOdyssey] PetService not found; pets are off")
+		return
+	end
+	local PetService: any = (require :: any)(module)
+	PetService.start(BaseService)
+end)
 
 -- When the Earth hides the Sun (an eclipse seen from the Moon), C.A.R.L. explains it.
 local onEclipse = (world :: any).onEclipse

@@ -1,5 +1,10 @@
 --!strict
 -- Space Base Odyssey - per-player suit oxygen, pressurized zones and carried ice (server side).
+-- Stage 6: each player's suit holds SUIT.MAX plus their "tank" skill (player attribute SBO_SuitMax,
+-- set by BaseService) and the running threshold rises with the "speed" skill (SBO_SpeedBonus). Outside
+-- a shift the suit also drains outside while the base is open to roam (Briefing and Planning: building
+-- and manual ice), refills inside and C.A.R.L. still rescues; only shift refills cost base air.
+-- The regolith shelter only counts once it is built (world.isBuilt("shelter")).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -9,15 +14,11 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local MissionData = require(Shared:WaitForChild("MissionData"))
 local Types = require(Shared:WaitForChild("Types"))
 
-type PlayerStats = {
-	suitO2: number,
-	inside: boolean,
-	sheltered: boolean,
-	carryingIce: boolean,
-}
+type PlayerStats = Types.PlayerStats
 
 type Crew = {
 	suitO2: number,
+	suitMax: number, -- SUIT.MAX plus the tank skill, read from the player attribute every tick
 	inside: boolean,
 	sheltered: boolean,
 	carryingIce: boolean,
@@ -52,7 +53,9 @@ local habitatZone: BasePart? = nil
 local shelterZone: BasePart? = nil
 local spawnLocation: SpawnLocation? = nil
 local remotes: Remotes? = nil
+local worldRef: any = nil
 local shiftActive = false
+local roamDrain = false -- suits drain outside between shifts too (Briefing / Planning)
 local refillCount = 0
 local started = false
 local zoneListeners: { ZoneListener } = {}
@@ -82,6 +85,34 @@ local function getRoot(player: Player): BasePart?
 	return nil
 end
 
+-- Per-player suit size: SUIT.MAX plus the tank skill (attribute SBO_SuitMax from BaseService).
+local function suitMaxOf(player: Player): number
+	local value = player:GetAttribute("SBO_SuitMax")
+	if type(value) == "number" and value == value and value >= 1 and value < math.huge then
+		return value
+	end
+	return SUIT.MAX
+end
+
+-- Running threshold plus the speed skill (attribute SBO_SpeedBonus): a faster walker is not "running".
+local function runThresholdOf(player: Player): number
+	local bonus = player:GetAttribute("SBO_SpeedBonus")
+	if type(bonus) == "number" and bonus == bonus and bonus >= 0 and bonus < math.huge then
+		return SUIT.RUN_SPEED_THRESHOLD + bonus
+	end
+	return SUIT.RUN_SPEED_THRESHOLD
+end
+
+-- The shelter protects only once it stands (Stage 6). Worlds without isBuilt keep the old base.
+local function shelterBuilt(): boolean
+	local isBuilt = worldRef and worldRef.isBuilt
+	if type(isBuilt) ~= "function" then
+		return true
+	end
+	local ok, built = pcall(isBuilt, "shelter")
+	return not ok or built == true
+end
+
 local function sendMessage(player: Player, key: string)
 	if remotes then
 		local text: Types.TextRef = { key = key }
@@ -95,6 +126,7 @@ local function statsOf(crew: Crew): PlayerStats
 		inside = crew.inside,
 		sheltered = crew.sheltered,
 		carryingIce = crew.carryingIce,
+		suitMax = crew.suitMax,
 	}
 end
 
@@ -109,6 +141,7 @@ local function sendStatsIfChanged(player: Player, crew: Crew)
 		and last.inside == stats.inside
 		and last.sheltered == stats.sheltered
 		and last.carryingIce == stats.carryingIce
+		and last.suitMax == stats.suitMax
 	then
 		return
 	end
@@ -117,7 +150,7 @@ local function sendStatsIfChanged(player: Player, crew: Crew)
 end
 
 local function fillSuit(crew: Crew)
-	crew.suitO2 = SUIT.MAX
+	crew.suitO2 = crew.suitMax
 	crew.countRefill = false
 	crew.rescueTopUp = false
 	crew.lowWarned = false
@@ -129,12 +162,14 @@ local function rescue(player: Player, crew: Crew)
 		character:PivotTo(spawnLocation.CFrame + RESCUE_OFFSET)
 		crew.measured = false -- a teleport, not a walk back inside
 	end
-	crew.suitO2 = SUIT.RESCUE_REFILL
+	crew.suitO2 = math.min(SUIT.RESCUE_REFILL, crew.suitMax)
 	crew.carryingIce = false
 	crew.countRefill = false
 	crew.rescueTopUp = true
 	crew.lowWarned = false
-	refillCount += 1
+	if shiftActive then
+		refillCount += 1 -- only shift refills cost base air (a rescue while roaming is free)
+	end
 	sendMessage(player, "carl.rescued")
 end
 
@@ -158,9 +193,16 @@ local function updateCrew(player: Player, crew: Crew, dt: number)
 		return
 	end
 
+	-- The tank skill can grow (or a reset shrink) the suit at any time: keep the air inside it.
+	local suitMax = suitMaxOf(player)
+	if suitMax ~= crew.suitMax then
+		crew.suitMax = suitMax
+		crew.suitO2 = math.min(crew.suitO2, suitMax)
+	end
+
 	local position = root.Position
 	local wasInside, wasSheltered = crew.inside, crew.sheltered
-	crew.sheltered = insideBox(shelterZone, position)
+	crew.sheltered = shelterBuilt() and insideBox(shelterZone, position)
 	crew.inside = crew.sheltered or insideBox(habitatZone, position)
 	if not crew.measured then
 		crew.measured = true
@@ -169,12 +211,12 @@ local function updateCrew(player: Player, crew: Crew, dt: number)
 	end
 
 	if crew.inside then
-		if crew.suitO2 < SUIT.MAX then
-			if crew.suitO2 < SUIT.MAX * REFILL_COUNT_FRACTION then
+		if crew.suitO2 < suitMax then
+			if crew.suitO2 < suitMax * REFILL_COUNT_FRACTION then
 				crew.countRefill = true
 			end
-			crew.suitO2 = math.min(SUIT.MAX, crew.suitO2 + SUIT.REFILL_PER_SECOND * dt)
-			if crew.suitO2 >= SUIT.MAX and crew.countRefill then
+			crew.suitO2 = math.min(suitMax, crew.suitO2 + SUIT.REFILL_PER_SECOND * dt)
+			if crew.suitO2 >= suitMax and crew.countRefill then
 				crew.countRefill = false
 				if crew.rescueTopUp then
 					-- The rescue already counted this refill.
@@ -184,29 +226,29 @@ local function updateCrew(player: Player, crew: Crew, dt: number)
 				end
 			end
 		end
-		if crew.suitO2 >= SUIT.MAX * LOW_WARNING_FRACTION then
+		if crew.suitO2 >= suitMax * LOW_WARNING_FRACTION then
 			crew.lowWarned = false
 		end
 		return
 	end
 
-	if not shiftActive then
+	if not shiftActive and not roamDrain then
 		return
 	end
 
 	local velocity = root.AssemblyLinearVelocity
 	local speed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
-	local drain = if speed > SUIT.RUN_SPEED_THRESHOLD
+	local drain = if speed > runThresholdOf(player)
 		then SUIT.DRAIN_RUN_PER_SECOND
 		elseif speed > MOVING_SPEED then SUIT.DRAIN_WALK_PER_SECOND
 		else SUIT.DRAIN_IDLE_PER_SECOND
 	crew.suitO2 = math.max(0, crew.suitO2 - drain * dt)
 	crew.rescueTopUp = false -- going back out uses more air: the next refill counts again
 
-	if crew.suitO2 < SUIT.MAX * REFILL_COUNT_FRACTION then
+	if crew.suitO2 < suitMax * REFILL_COUNT_FRACTION then
 		crew.countRefill = true
 	end
-	if crew.suitO2 < SUIT.MAX * LOW_WARNING_FRACTION and not crew.lowWarned and crew.suitO2 > 0 then
+	if crew.suitO2 < suitMax * LOW_WARNING_FRACTION and not crew.lowWarned and crew.suitO2 > 0 then
 		crew.lowWarned = true
 		sendMessage(player, "carl.suit_low")
 	end
@@ -219,8 +261,10 @@ local function addPlayer(player: Player)
 	if crews[player] then
 		return
 	end
+	local startMax = suitMaxOf(player)
 	local crew: Crew = {
-		suitO2 = SUIT.MAX,
+		suitO2 = startMax,
+		suitMax = startMax,
 		inside = false,
 		sheltered = false,
 		carryingIce = false,
@@ -236,6 +280,7 @@ local function addPlayer(player: Player)
 		crew.connections,
 		player.CharacterAdded:Connect(function()
 			-- A fresh character starts with a full suit and empty hands.
+			crew.suitMax = suitMaxOf(player)
 			fillSuit(crew)
 			crew.carryingIce = false
 			crew.measured = false
@@ -254,10 +299,11 @@ local function removePlayer(player: Player)
 	crews[player] = nil
 end
 
--- world: WorldBuilder.World (uses habitatZone, shelterZone, spawn).
+-- world: WorldBuilder.World (uses habitatZone, shelterZone, spawn, and isBuilt when present).
 function CrewService.start(world: any, remoteEvents: Remotes)
 	assert(not started, "CrewService already started")
 	started = true
+	worldRef = world
 	habitatZone = world.habitatZone
 	shelterZone = world.shelterZone
 	spawnLocation = world.spawn
@@ -305,6 +351,18 @@ end
 
 function CrewService.isShiftActive(): boolean
 	return shiftActive
+end
+
+-- Stage 6 base mode: while true, suits also drain outside between shifts (roaming, building, manual
+-- ice). Refills taken then are free: only refills during a shift cost base air.
+function CrewService.setRoamDrain(active: boolean)
+	roamDrain = active
+end
+
+-- This player's suit size (SUIT.MAX plus the tank skill).
+function CrewService.suitMax(player: Player): number
+	local crew = crews[player]
+	return if crew then crew.suitMax else suitMaxOf(player)
 end
 
 -- True when the player has a living character (used to count storm exposure).

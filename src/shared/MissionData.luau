@@ -129,6 +129,70 @@ MissionData.STORM = table.freeze({
 	FLARE_AT_SECONDS = 40, -- seconds into the shift when the flare is spotted
 })
 
+-- Build and grow the base (GAME, Stage 6). A new player starts with only the habitat and its water
+-- tank and builds everything else with credits. Credits come from useful work (ice, repairs, days
+-- finished, data sent); experience (XP) raises the player level, which unlocks bigger builds and
+-- gives skill points. Pure numbers; the rules that use them live in BaseBuild.luau.
+-- Build ids: "solar" (level = solar arrays standing, 1 to POWER.ARRAYS), "greenhouse", "antenna"
+-- (2 = bigger dish, 3 = laser link), "shelter", "drill_1".."drill_3" (automatic ice drills; each
+-- needs one more solar array: machines need electricity), "cargo_bot" (carries silo ice for you).
+-- costs[i] / minLevel[i] = credits and player level for level i of that build.
+MissionData.BASE = table.freeze({
+	START_CREDITS = 25,
+	BUILDS = table.freeze({
+		table.freeze({ id = "solar", icon = "solar", maxLevel = 3, costs = table.freeze({ 0, 30, 60 }), minLevel = table.freeze({ 1, 2, 3 }), requires = table.freeze({}) }),
+		table.freeze({ id = "greenhouse", icon = "plant", maxLevel = 1, costs = table.freeze({ 15 }), minLevel = table.freeze({ 1 }), requires = table.freeze({ solar = 1 }) }),
+		table.freeze({ id = "antenna", icon = "antenna", maxLevel = 3, costs = table.freeze({ 20, 90, 200 }), minLevel = table.freeze({ 1, 4, 6 }), requires = table.freeze({ solar = 1 }) }),
+		table.freeze({ id = "shelter", icon = "shield", maxLevel = 1, costs = table.freeze({ 40 }), minLevel = table.freeze({ 1 }), requires = table.freeze({ antenna = 1 }) }),
+		table.freeze({ id = "drill_1", icon = "drill", maxLevel = 3, costs = table.freeze({ 60, 120, 240 }), minLevel = table.freeze({ 2, 3, 5 }), requires = table.freeze({ shelter = 1, solar = 1 }) }),
+		table.freeze({ id = "drill_2", icon = "drill", maxLevel = 3, costs = table.freeze({ 150, 250, 400 }), minLevel = table.freeze({ 4, 5, 7 }), requires = table.freeze({ drill_1 = 1, solar = 2 }) }),
+		table.freeze({ id = "drill_3", icon = "drill", maxLevel = 3, costs = table.freeze({ 300, 450, 650 }), minLevel = table.freeze({ 6, 7, 9 }), requires = table.freeze({ drill_2 = 1, solar = 3 }) }),
+		table.freeze({ id = "cargo_bot", icon = "robot", maxLevel = 1, costs = table.freeze({ 250 }), minLevel = table.freeze({ 5 }), requires = table.freeze({ drill_1 = 1 }) }),
+	}),
+	-- Rewards: credits and XP for each kind of work (counted for the player who did it).
+	REWARDS = table.freeze({
+		ice_delivered = table.freeze({ credits = 5, xp = 8 }),
+		panel_cleaned = table.freeze({ credits = 2, xp = 4 }),
+		antenna_aligned = table.freeze({ credits = 3, xp = 4 }),
+		leak_repaired = table.freeze({ credits = 5, xp = 8 }),
+		day_finished = table.freeze({ credits = 5, xp = 10 }), -- every player present
+		star = table.freeze({ credits = 5, xp = 5 }), -- per star in the report, every player present
+		mission_first = table.freeze({ credits = 20, xp = 30 }), -- first time a mission is completed
+		mission_repeat = table.freeze({ credits = 5, xp = 10 }),
+		collectible = table.freeze({ credits = 10, xp = 20 }), -- first time only
+	}),
+	BUILD_XP_BASE = 10, -- XP for any build or upgrade ...
+	BUILD_XP_PER_CREDIT = 0.25, -- ... plus a quarter of its cost (rounded down)
+	-- Automatic drills fill the ice silo while at least one player is in the server.
+	DRILL_ICE_PER_MINUTE = table.freeze({ 2, 4, 7 }), -- per drill, by drill level
+	SILO_MAX = 40,
+	CREDITS_PER_SILO_ICE = 2,
+	XP_PER_SILO_ICE = 1,
+	CARGO_BOT_SECONDS = 30, -- the cargo robot empties the silo for its owner this often
+	-- Player level i needs LEVEL_XP[i] total XP. Each level above 1 gives one skill point.
+	LEVEL_XP = table.freeze({ 0, 40, 100, 180, 280, 400, 550, 730, 940, 1200 }),
+	-- Skills: each level costs one skill point and needs the player level in minLevel.
+	SKILLS = table.freeze({
+		table.freeze({ id = "speed", icon = "run", maxLevel = 3, minLevel = table.freeze({ 2, 4, 6 }) }),
+		table.freeze({ id = "tank", icon = "lungs", maxLevel = 3, minLevel = table.freeze({ 2, 4, 6 }) }),
+		table.freeze({ id = "jump", icon = "rocket", maxLevel = 3, minLevel = table.freeze({ 3, 5, 7 }) }),
+		table.freeze({ id = "drill", icon = "drill", maxLevel = 3, minLevel = table.freeze({ 2, 4, 6 }) }),
+	}),
+	SPEED_BONUS_PER_LEVEL = 1.5, -- studs/s added to walking and running (and the running threshold)
+	TANK_BONUS_PER_LEVEL = 25, -- suit air added to SUIT.MAX
+	JUMP_POWER_BONUS = table.freeze({ 0, 4, 8 }), -- by jump level; level 1 already gives a double jump
+	DOUBLE_JUMP_FRACTION = 0.8, -- the second jump (a backpack gas puff) is 80% of a normal jump
+	DRILL_HOLD_FACTOR = table.freeze({ 0.8, 0.6, 0.45 }), -- ice drilling hold time, by drill level
+	-- Pets that follow the player (cosmetic only). laika and cheese come from the hidden collectibles;
+	-- rabbit and monkey are bought with credits once the player level is high enough.
+	PETS = table.freeze({
+		table.freeze({ id = "laika", collectible = "laika" }),
+		table.freeze({ id = "cheese", collectible = "cheese" }),
+		table.freeze({ id = "rabbit", cost = 120, minLevel = 3 }),
+		table.freeze({ id = "monkey", cost = 200, minLevel = 5 }),
+	}),
+})
+
 -- Event schedule (GAME). Days 1-2 are fixed for onboarding; days 3-7 are shuffled on replay.
 MissionData.EVENTS = table.freeze({
 	FIXED = table.freeze({ "None", "None" }),

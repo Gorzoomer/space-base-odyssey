@@ -1,27 +1,66 @@
 --!strict
 -- Space Base Odyssey - localizes world text: every ProximityPrompt in Workspace with a "TextKey"
--- attribute (ActionText), and every TextLabel / TextButton in Workspace with one (e.g. the
--- observatory teaser sign, a SurfaceGui built by WorldBuilder).
+-- attribute (ActionText) or an "ObjectKey" attribute (ObjectText), and every TextLabel / TextButton
+-- in Workspace with a "TextKey" (e.g. the observatory teaser sign, a SurfaceGui built by WorldBuilder).
+-- Optional "TextParams" / "ObjectParams" attributes hold a JSON object of {placeholders} for the key
+-- (Stage 6 build pads: TextKey "prompt.build", TextParams {"n": 30}, ObjectKey "build.solar.name").
+-- Text follows attribute changes and the chosen language.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
+
+local HttpService = game:GetService("HttpService")
 
 local Store = require(script.Parent.Store)
 
-local TEXT_KEY_ATTRIBUTE = "TextKey"
+local TEXT_KEY = "TextKey"
+local TEXT_PARAMS = "TextParams"
+local OBJECT_KEY = "ObjectKey"
+local OBJECT_PARAMS = "ObjectParams"
+local WATCHED: { [string]: boolean } = {
+	[TEXT_KEY] = true,
+	[TEXT_PARAMS] = true,
+	[OBJECT_KEY] = true,
+	[OBJECT_PARAMS] = true,
+}
 
 local Prompts = {}
 
 local tracked: { [Instance]: RBXScriptConnection } = {}
 local started = false
 
-local function localize(instance: Instance)
-	local key = instance:GetAttribute(TEXT_KEY_ATTRIBUTE)
-	if type(key) ~= "string" or key == "" then
-		return
+-- A JSON object string of placeholder values, or nil when missing or broken.
+local function readParams(instance: Instance, attribute: string): { [string]: string | number }?
+	local raw = instance:GetAttribute(attribute)
+	if type(raw) ~= "string" or raw == "" then
+		return nil
 	end
+	local ok, decoded = pcall(function(): any
+		return HttpService:JSONDecode(raw)
+	end)
+	if not ok or type(decoded) ~= "table" then
+		return nil
+	end
+	local params: { [string]: string | number } = {}
+	for name, value in decoded do
+		if type(name) == "string" and (type(value) == "string" or type(value) == "number") then
+			params[name] = value
+		end
+	end
+	return params
+end
+
+local function localize(instance: Instance)
+	local key = instance:GetAttribute(TEXT_KEY)
+	local hasKey = type(key) == "string" and key ~= ""
 	if instance:IsA("ProximityPrompt") then
-		instance.ActionText = Store.t(key)
-	elseif instance:IsA("TextLabel") or instance:IsA("TextButton") then
-		(instance :: any).Text = Store.t(key)
+		if hasKey then
+			instance.ActionText = Store.t(key :: string, readParams(instance, TEXT_PARAMS))
+		end
+		local objectKey = instance:GetAttribute(OBJECT_KEY)
+		if type(objectKey) == "string" then
+			instance.ObjectText = if objectKey == "" then "" else Store.t(objectKey, readParams(instance, OBJECT_PARAMS))
+		end
+	elseif hasKey and (instance:IsA("TextLabel") or instance:IsA("TextButton")) then
+		(instance :: any).Text = Store.t(key :: string, readParams(instance, TEXT_PARAMS))
 	end
 end
 
@@ -33,8 +72,10 @@ local function track(instance: Instance)
 	if not isLocalizable(instance) or tracked[instance] then
 		return
 	end
-	tracked[instance] = instance:GetAttributeChangedSignal(TEXT_KEY_ATTRIBUTE):Connect(function()
-		localize(instance)
+	tracked[instance] = instance.AttributeChanged:Connect(function(attribute: string)
+		if WATCHED[attribute] then
+			localize(instance)
+		end
 	end)
 	localize(instance)
 end

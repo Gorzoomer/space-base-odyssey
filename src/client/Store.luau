@@ -1,6 +1,8 @@
 --!strict
 -- Space Base Odyssey - client state: latest Snapshot, PlayerStats and Progress (missions, hidden
--- collectibles and event cosmetics), chosen language, local settings and the Action sender.
+-- collectibles and event cosmetics), the player's BaseState (Stage 6: credits, XP, builds, skills,
+-- pets, what they wear), chosen language, local settings, the screen mode (mission select open or
+-- base mode) and the Action sender.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -15,7 +17,8 @@ export type TextRef = Types.TextRef
 export type Action = Types.Action
 export type LiveWeather = Types.LiveWeather
 export type Language = "en" | "es"
-export type ChangeKind = "snapshot" | "stats" | "language" | "progress" | "settings"
+-- "base": a new BaseState arrived. "view": the mission select opened or closed (base mode changed).
+export type ChangeKind = "snapshot" | "stats" | "language" | "progress" | "settings" | "base" | "view"
 export type StormStage = "none" | "warning" | "storm"
 
 -- Stage 4 parts of the Snapshot (see Types.luau). Read through the helpers below.
@@ -24,6 +27,8 @@ export type MissionInfo = Types.MissionInfo
 export type MissionResult = Types.MissionResult
 export type MissionCard = Types.MissionCard
 export type Progress = Types.Progress
+export type BaseState = Types.BaseState
+export type Equipped = Types.Equipped
 
 local Store = {}
 
@@ -57,6 +62,9 @@ local settings: { [string]: number | boolean } = {
 local snapshot: Snapshot? = nil
 local stats: PlayerStats? = nil
 local progress: Progress = { completed = {}, collectibles = {}, cosmetics = {} }
+local progressReceived = false
+local base: BaseState? = nil
+local missionSelectOpen = false
 local language: Language = "en"
 local actionRemote: RemoteEvent? = nil
 local listeners: { (kind: ChangeKind) -> () } = {}
@@ -188,7 +196,22 @@ function Store.setProgress(value: Progress)
 		end
 	end
 	progress = { completed = completed, collectibles = collectibles, cosmetics = cosmetics }
+	progressReceived = true
 	emit("progress")
+end
+
+-- True once the server has sent this player's saved Progress.
+function Store.hasProgress(): boolean
+	return progressReceived
+end
+
+-- Number of missions this player has completed (0 for a new player).
+function Store.completedCount(): number
+	local count = 0
+	for _ in progress.completed do
+		count += 1
+	end
+	return count
 end
 
 -- Event cosmetics unlocked with a code (e.g. "explorer26"), from the saved Progress.
@@ -209,6 +232,138 @@ function Store.cosmeticIds(): { string }
 	end
 	table.sort(ids)
 	return ids
+end
+
+-- Stage 6: build and grow the base --------------------------------------------------------------
+
+-- What a player wears before choosing anything (Types.Equipped contract).
+Store.EQUIPPED_DEFAULTS = table.freeze({
+	helmet = "standard",
+	backpack = "standard",
+	carl = "classic",
+	pet = "none",
+} :: { [string]: string })
+
+local function numberOr(value: any, fallback: number): number
+	return if type(value) == "number" and value == value then value else fallback
+end
+
+local function levelMap(value: any): { [string]: number }
+	local result: { [string]: number } = {}
+	if type(value) == "table" then
+		for id, level in value do
+			if type(id) == "string" and type(level) == "number" then
+				result[id] = level
+			end
+		end
+	end
+	return result
+end
+
+local function equippedFrom(value: any): Equipped
+	local result: { [string]: string } = table.clone(Store.EQUIPPED_DEFAULTS :: any)
+	if type(value) == "table" then
+		for slot in Store.EQUIPPED_DEFAULTS do
+			if type(value[slot]) == "string" then
+				result[slot] = value[slot]
+			end
+		end
+	end
+	return {
+		helmet = result.helmet,
+		backpack = result.backpack,
+		carl = result.carl,
+		pet = result.pet,
+	}
+end
+
+-- Latest BaseState from the server (nil until it arrives, or with an older server).
+function Store.getBase(): BaseState?
+	return base
+end
+
+-- Store a BaseState from the server. Fields are checked so a partial table never breaks the UI.
+function Store.setBase(value: BaseState)
+	local raw: any = value
+	if type(raw) ~= "table" then
+		return
+	end
+	local pets: { [string]: boolean } = {}
+	if type(raw.pets) == "table" then
+		for id, owned in raw.pets do
+			if type(id) == "string" and owned == true then
+				pets[id] = true
+			end
+		end
+	end
+	local xp = numberOr(raw.xp, 0)
+	base = {
+		credits = numberOr(raw.credits, 0),
+		xp = xp,
+		level = math.max(1, numberOr(raw.level, 1)),
+		levelXp = numberOr(raw.levelXp, 0),
+		nextLevelXp = if type(raw.nextLevelXp) == "number" then raw.nextLevelXp else nil,
+		skillPoints = numberOr(raw.skillPoints, 0),
+		builds = levelMap(raw.builds),
+		ownBuilds = levelMap(raw.ownBuilds),
+		skills = levelMap(raw.skills),
+		pets = pets,
+		equipped = equippedFrom(raw.equipped),
+		siloIce = numberOr(raw.siloIce, 0),
+		siloMax = numberOr(raw.siloMax, 0),
+		icePerMinute = numberOr(raw.icePerMinute, 0),
+	}
+	emit("base")
+end
+
+-- What this player wears (defaults until a BaseState arrives).
+function Store.equipped(): Equipped
+	local state = base
+	if state then
+		return state.equipped
+	end
+	return equippedFrom(nil)
+end
+
+-- Effective level of a build standing in this server (0 = not built, or no BaseState yet).
+function Store.buildLevel(id: string): number
+	local state = base
+	if state then
+		return state.builds[id] or 0
+	end
+	return 0
+end
+
+-- The four builds every mission needs (solar, greenhouse, antenna, shelter) all stand.
+Store.CORE_BUILDS = table.freeze({ "solar", "greenhouse", "antenna", "shelter" })
+function Store.coreBuilt(): boolean
+	if base == nil then
+		return true -- older server: the base is already complete
+	end
+	for _, id in Store.CORE_BUILDS do
+		if Store.buildLevel(id) < 1 then
+			return false
+		end
+	end
+	return true
+end
+
+-- Screen mode: the mission select can be closed in Briefing to explore and build ("base mode").
+function Store.isMissionSelectOpen(): boolean
+	return missionSelectOpen
+end
+
+function Store.setMissionSelectOpen(open: boolean)
+	if missionSelectOpen == open then
+		return
+	end
+	missionSelectOpen = open
+	emit("view")
+end
+
+-- Briefing with the mission select closed: the player roams the base, builds and gathers ice.
+function Store.isBaseMode(): boolean
+	return Store.phase() == "Briefing" and not missionSelectOpen
 end
 
 -- Local settings ------------------------------------------------------------------------------

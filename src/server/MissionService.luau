@@ -6,6 +6,11 @@
 -- last day ends.
 -- During a shift the snapshot carries live meters (Simulation.liveMeters): the day moving toward its
 -- end-of-day values plus task effects at once, pushed at most about four times per second.
+-- Stage 6 (build and grow the base): missions can need builds (Mission.needs) and training teaches
+-- building (build_* objectives, read from BaseService's effective builds). Useful work pays credits
+-- and XP through BaseService. Base mode: in Briefing the crater ice and the water machine stay open
+-- for manual ice runs that only pay rewards (no mission, no simulation change). Prompts of structures
+-- that are not built stay off. Build, skill, wardrobe, pet and silo actions go to BaseService.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -61,10 +66,22 @@ export type Crew = {
 	onZoneChanged: (
 		listener: (player: Player, inside: boolean, sheltered: boolean, wasInside: boolean, wasSheltered: boolean) -> ()
 	) -> (),
+	-- Stage 6: suits also drain outside between shifts (base mode); refills then are free.
+	setRoamDrain: (active: boolean) -> (),
+}
+
+-- The parts of BaseService (Stage 6) this module uses.
+export type BaseApi = {
+	handleAction: (player: Player?, action: any, trusted: boolean) -> boolean,
+	reward: (player: Player, kind: string, count: number?) -> (),
+	rewardAll: (players: { Player }, kind: string, count: number?) -> (),
+	effectiveBuilds: () -> { [string]: number },
+	onBuildsChanged: (listener: (builds: { [string]: number }) -> ()) -> (),
 }
 
 -- The parts of ProgressService this module uses.
 export type ProgressApi = {
+	get: (player: Player) -> Types.Progress?,
 	completedUnion: () -> { [string]: boolean },
 	markCompleted: (players: { Player }, missionId: string) -> (),
 	grantCollectible: (player: Player, id: string) -> (),
@@ -103,12 +120,24 @@ local TUTORIAL_EXTRA_SECONDS = 30
 -- GAME: an extended tutorial shift can take many suit refills (each costs base air). Training counts
 -- at most this many, the worst case tests/missions proves can never empty a meter in one day.
 local TUTORIAL_MAX_REFILLS = 4
+-- Stage 6 actions handled by BaseService.
+local BASE_ACTIONS: { [string]: boolean } = {
+	Build = true,
+	LearnSkill = true,
+	Equip = true,
+	BuyPet = true,
+	ClaimSilo = true,
+	DebugGrantCredits = true,
+	DebugResetBase = true,
+}
+local BASE_DEBUG_ACTIONS: { [string]: boolean } = { DebugGrantCredits = true, DebugResetBase = true }
 
 local MissionService = {}
 
 local world: any = nil
 local crew: Crew = nil :: any
 local progress: ProgressApi? = nil
+local baseApi: BaseApi? = nil -- nil = no build-and-grow: the whole base stands (Stage 5 behaviour)
 local remotes: Remotes? = nil
 local started = false
 
@@ -142,6 +171,7 @@ local objectiveProgress: { [string]: number } = {}
 local wentOutside: { [Player]: boolean } = {} -- return_inside only counts after going out
 local missionResult: Types.MissionResult? = nil
 local unlockAll = false -- DebugUnlockAll, this server session only
+local hintedBuild: string? = nil -- build the planning hint last asked for (training)
 local pendingFirstEvent: EventId? = nil -- DebugForceEvent in Briefing, applied at StartMission
 local finishing = false -- inside finishShift: auto-complete waits for the day to close
 local autoCompleteQueued = false
@@ -200,6 +230,10 @@ end
 local function setPhase(newPhase: Phase)
 	phase = newPhase
 	phaseSerial += 1
+	-- Base mode: suits drain outside while players roam between shifts (refills then are free).
+	if crew ~= nil then
+		crew.setRoamDrain(newPhase == "Briefing" or newPhase == "Planning")
+	end
 end
 
 local function worldCall(name: string, ...: any)
@@ -236,6 +270,83 @@ local function flareParams(flare: ArchivedFlare): Params
 end
 
 ----------------------------------------------------------------------------------------------------
+-- Stage 6: builds and rewards (BaseService)
+
+-- Effective builds standing in the server, or nil without BaseService (then the whole base stands).
+local function currentBuilds(): { [string]: number }?
+	local api = baseApi
+	if api == nil then
+		return nil
+	end
+	local ok, builds = pcall(api.effectiveBuilds)
+	if ok and type(builds) == "table" then
+		return builds
+	end
+	return {}
+end
+
+local function buildLevel(id: string): number
+	local builds = currentBuilds()
+	if builds == nil then
+		return math.huge
+	end
+	local value = builds[id]
+	return if type(value) == "number" then value else 0
+end
+
+-- Is a structure standing? The world decides when it can tell (it shows the structure), else the
+-- effective builds.
+local function structureBuilt(id: string): boolean
+	local isBuilt = world and world.isBuilt
+	if type(isBuilt) == "function" then
+		local ok, built = pcall(isBuilt, id)
+		if ok then
+			return built == true
+		end
+	end
+	return buildLevel(id) >= 1
+end
+
+-- Solar arrays standing for a new mission: the effective solar level, at least 1.
+local function solarArrays(): number
+	return math.clamp(math.floor(buildLevel("solar")), 1, MissionData.POWER.ARRAYS)
+end
+
+-- C.A.R.L. line for "build this first" (only the builds missions need have their own line).
+local BUILD_FIRST_KEYS: { [string]: string } = {
+	solar = "carl.build_first.solar",
+	greenhouse = "carl.build_first.greenhouse",
+	antenna = "carl.build_first.antenna",
+	shelter = "carl.build_first.shelter",
+}
+local function buildFirstKey(buildId: string): string
+	return BUILD_FIRST_KEYS[buildId] or "carl.build_first"
+end
+
+-- Credits and XP for one player's work (kind = key of MissionData.BASE.REWARDS).
+local function reward(player: Player?, kind: string, count: number?)
+	local api = baseApi
+	if api == nil or player == nil or player.Parent == nil then
+		return
+	end
+	local ok, err = pcall(api.reward, player, kind, count)
+	if not ok then
+		warn(`[SpaceBaseOdyssey] BaseService.reward failed: {err}`)
+	end
+end
+
+local function rewardPlayers(players: { Player }, kind: string, count: number?)
+	local api = baseApi
+	if api == nil or #players == 0 or (count ~= nil and count <= 0) then
+		return
+	end
+	local ok, err = pcall(api.rewardAll, players, kind, count)
+	if not ok then
+		warn(`[SpaceBaseOdyssey] BaseService.rewardAll failed: {err}`)
+	end
+end
+
+----------------------------------------------------------------------------------------------------
 -- Objectives
 
 local function isEarlyReturn(): boolean
@@ -262,6 +373,11 @@ local function objectiveValue(objective: Objective): number
 		return if isEarlyReturn() then math.max(0, #state.history - 1) else #state.history
 	elseif objective.id == "stars_at_least" then
 		return projectedStars()
+	end
+	local buildId = Missions.buildForObjective(objective.id)
+	if buildId then
+		-- build_*: done while that structure stands in the server (whoever built it).
+		return if buildLevel(buildId) >= 1 then 1 else 0
 	end
 	return objectiveProgress[objective.id] or 0
 end
@@ -305,15 +421,14 @@ local function missionActive(): boolean
 	return missionDef ~= nil and (phase == "Planning" or phase == "Shift")
 end
 
--- Tutorials: the shift can only start once every objective listed before start_shift is done
--- (so "set the power" really comes first).
-local function readyForShift(): boolean
+-- True when every objective listed before `id` is done (training keeps its steps in order).
+local function earlierObjectivesDone(id: ObjectiveId): boolean
 	local def = missionDef
-	if def == nil or def.kind ~= "Tutorial" or not hasObjective("start_shift") then
+	if def == nil then
 		return true
 	end
 	for _, objective in def.objectives do
-		if objective.id == "start_shift" then
+		if objective.id == id then
 			return true
 		end
 		if not objectiveDone(objective) then
@@ -321,6 +436,37 @@ local function readyForShift(): boolean
 		end
 	end
 	return true
+end
+
+-- The build of the first build_* objective of the running mission that is not done yet, or nil.
+local function missingBuildObjective(): string?
+	local def = missionDef
+	if def == nil then
+		return nil
+	end
+	for _, objective in def.objectives do
+		local buildId = Missions.buildForObjective(objective.id)
+		if buildId and not objectiveDone(objective) then
+			return buildId
+		end
+	end
+	return nil
+end
+
+-- Tutorials: the shift can only start once everything they teach to build stands, and once every
+-- objective listed before start_shift is done (so "set the power" really comes first).
+local function readyForShift(): boolean
+	local def = missionDef
+	if def == nil or def.kind ~= "Tutorial" then
+		return true
+	end
+	if missingBuildObjective() ~= nil then
+		return false
+	end
+	if not hasObjective("start_shift") then
+		return true
+	end
+	return earlierObjectivesDone("start_shift")
 end
 
 local function buildMissionInfo(): Types.MissionInfo?
@@ -355,17 +501,25 @@ local function completedMissions(): { [string]: boolean }
 	return {}
 end
 
+-- Unlocked = every required mission done (by anyone here) and every needed build standing.
+-- missingBuild is set only when the builds are the one thing still missing.
 local function buildMissionCards(): { Types.MissionCard }
 	local completed = completedMissions()
+	local builds = currentBuilds()
 	local cards: { Types.MissionCard } = {}
 	for _, mission in Missions.LIST do
+		local requiresDone = Missions.requiresDone(mission, completed)
+		local missing = if builds ~= nil and requiresDone and not unlockAll
+			then Missions.missingBuild(mission, builds)
+			else nil
 		table.insert(cards, {
 			id = mission.id,
 			kind = mission.kind,
 			titleKey = Missions.titleKey(mission.id),
 			icon = mission.icon,
-			unlocked = unlockAll or Missions.isUnlocked(mission, completed),
+			unlocked = unlockAll or (requiresDone and missing == nil),
 			completed = completed[mission.id] == true,
+			missingBuild = missing,
 		})
 	end
 	return cards
@@ -552,17 +706,19 @@ local function syncSystemVisuals(force: boolean?)
 	worldCall("setSystemVisuals", table.clone(a))
 end
 
--- Keeps the dusty-array flags in line with Simulation's clean array count.
+-- Keeps the dusty-array flags in line with Simulation's clean array count. Only the arrays standing
+-- for this mission (state.arrays: arrays 1..n) can be dusty.
 local function reconcileDust()
-	local wanted = MissionData.POWER.ARRAYS - state.cleanArrays
+	local standing = state.arrays
+	local wanted = standing - state.cleanArrays
 	for i = 1, MissionData.POWER.ARRAYS do
-		if dusty[i] == nil then
+		if dusty[i] == nil or i > standing then
 			dusty[i] = false
 		end
 	end
 	local current = countDusty()
 	if current > wanted then
-		for i = MissionData.POWER.ARRAYS, 1, -1 do
+		for i = standing, 1, -1 do
 			if current <= wanted then
 				break
 			end
@@ -572,7 +728,7 @@ local function reconcileDust()
 			end
 		end
 	elseif current < wanted then
-		for i = 1, MissionData.POWER.ARRAYS do
+		for i = 1, standing do
 			if current >= wanted then
 				break
 			end
@@ -635,19 +791,24 @@ local function refreshWorld()
 	syncSystemVisuals()
 
 	local inShift = phase == "Shift" and shift ~= nil
+	-- Base mode (Stage 6): between missions the crater ice and the water machine stay open for
+	-- manual ice runs. Ice carried from base mode can still be handed in while planning.
+	local baseMode = phase == "Briefing"
 	worldCall("setShiftPromptsEnabled", inShift)
+	-- Set after the world's own prompt refresh: unbuilt structures keep their prompts off.
+	local solarBuilt = structureBuilt("solar")
 	for i, ref in world.arrays do
-		setPromptEnabled(ref.prompt, inShift and dusty[i] == true)
+		setPromptEnabled(ref.prompt, inShift and solarBuilt and i <= state.arrays and dusty[i] == true)
 	end
 	for i, node in world.iceNodes do
-		setPromptEnabled(node.prompt, inShift and not iceUsed[i])
+		setPromptEnabled(node.prompt, (inShift and not iceUsed[i]) or baseMode)
 		if typeof(node.part) == "Instance" and node.part:IsA("BasePart") and iceTransparency[i] then
-			node.part.Transparency = if iceUsed[i] then DEPLETED_ICE_TRANSPARENCY else iceTransparency[i]
+			node.part.Transparency = if inShift and iceUsed[i] then DEPLETED_ICE_TRANSPARENCY else iceTransparency[i]
 		end
 	end
-	setPromptEnabled(world.processorPrompt, inShift)
+	setPromptEnabled(world.processorPrompt, inShift or baseMode or phase == "Planning")
 	setPromptEnabled(world.leak.prompt, inShift and leak)
-	setPromptEnabled(world.antenna.prompt, inShift and not linked)
+	setPromptEnabled(world.antenna.prompt, inShift and not linked and structureBuilt("antenna"))
 	setPromptEnabled(world.console.prompt, inShift)
 end
 
@@ -673,7 +834,10 @@ end
 
 local function resetMission(seed: number, def: Mission?)
 	currentSeed = seed
-	local config: Simulation.MissionConfig? = if def then { totalDays = def.days, schedule = def.schedule } else nil
+	-- A mission runs with the solar arrays standing when it starts (Stage 6: the players build them).
+	local config: Simulation.MissionConfig? = if def
+		then { totalDays = def.days, schedule = def.schedule, arrays = solarArrays() }
+		else nil
 	state = Simulation.newMission(MissionData, seed, config)
 	random = Random.new(seed)
 	stormFlaresUsed = 0
@@ -692,6 +856,10 @@ local function beginNextDay()
 end
 
 local function planningHintKey(): string
+	local missingBuild = missingBuildObjective()
+	if missingBuild then
+		return buildFirstKey(missingBuild) -- training: build it at its glowing pad first
+	end
 	if state.todayEvent == "Dust" then
 		return "carl.dust"
 	elseif state.todayEvent == "EquipmentFailure" then
@@ -726,8 +894,28 @@ local function enterReport()
 	setPhase("Report")
 	local def = missionDef
 	local api = progress
-	if result.success and def and api then
-		api.markCompleted(Players:GetPlayers(), def.id)
+	local players = Players:GetPlayers()
+	if def then
+		-- Every star in the report pays every player here (an early return still earns 1 star).
+		rewardPlayers(players, "star", Simulation.stars(state, MissionData))
+	end
+	if result.success and def then
+		-- First completion pays more than a replay. Checked before saving the completion.
+		local first: { Player } = {}
+		local again: { Player } = {}
+		for _, player in players do
+			local saved = if api then api.get(player) else nil
+			if saved and saved.completed[def.id] then
+				table.insert(again, player)
+			else
+				table.insert(first, player)
+			end
+		end
+		if api then
+			api.markCompleted(players, def.id)
+		end
+		rewardPlayers(first, "mission_first")
+		rewardPlayers(again, "mission_repeat")
 	end
 end
 
@@ -790,6 +978,7 @@ local function finishShift(forceComplete: boolean?)
 	local result = shiftResultNow(currentShift, data, crew.takeRefillCount())
 	crew.setShiftActive(false)
 	Simulation.endDay(state, MissionData, result)
+	rewardPlayers(Players:GetPlayers(), "day_finished")
 
 	finishing = true
 	addProgress("finish_day")
@@ -1045,33 +1234,52 @@ checkAutoComplete = function()
 end
 
 local function isUnlocked(mission: Mission): boolean
-	return unlockAll or Missions.isUnlocked(mission, completedMissions())
+	return unlockAll or Missions.isUnlocked(mission, completedMissions(), currentBuilds())
+end
+
+-- The build `mission` still needs when that is the only thing keeping it locked, else nil.
+local function blockingBuild(mission: Mission, completed: { [string]: boolean }): string?
+	local builds = currentBuilds()
+	if unlockAll or builds == nil or not Missions.requiresDone(mission, completed) then
+		return nil
+	end
+	return Missions.missingBuild(mission, builds)
 end
 
 -- missionId nil = the next mission: the first unlocked one nobody here has completed, else the last
--- unlocked one (free play once the story is done). A locked or unknown id gives nil.
-local function resolveMission(missionId: any): Mission?
+-- unlocked one (free play once the story is done). A locked or unknown id gives nil; when the only
+-- thing missing is a build, the second result names it (C.A.R.L. says "build it first").
+local function resolveMission(missionId: any): (Mission?, string?)
+	local completed = completedMissions()
 	if missionId ~= nil then
 		if type(missionId) ~= "string" then
-			return nil
+			return nil, nil
 		end
 		local mission = Missions.get(missionId)
-		if mission and isUnlocked(mission) then
-			return mission
+		if mission == nil then
+			return nil, nil
 		end
-		return nil
+		if isUnlocked(mission) then
+			return mission, nil
+		end
+		return nil, blockingBuild(mission, completed)
 	end
-	local completed = completedMissions()
 	local lastUnlocked: Mission? = nil
 	for _, mission in Missions.LIST do
 		if isUnlocked(mission) then
 			if not completed[mission.id] then
-				return mission
+				return mission, nil
 			end
 			lastUnlocked = mission
+		elseif not completed[mission.id] then
+			-- The next new mission waits for a build: say which instead of replaying an old one.
+			local missing = blockingBuild(mission, completed)
+			if missing then
+				return nil, missing
+			end
 		end
 	end
-	return lastUnlocked
+	return lastUnlocked, nil
 end
 
 -- Prepares `def` without starting day 1 (shared by StartMission and DebugSkipToDay).
@@ -1082,6 +1290,7 @@ local function prepareMission(def: Mission, seed: number)
 	table.clear(wentOutside)
 	autoCompleteQueued = false
 	resetMission(seed, def)
+	hintedBuild = missingBuildObjective()
 	if pendingFirstEvent then
 		state.schedule[1] = pendingFirstEvent
 		pendingFirstEvent = nil
@@ -1120,6 +1329,7 @@ local function returnToBriefing()
 	end
 	missionDef = nil
 	missionResult = nil
+	hintedBuild = nil
 	table.clear(objectiveProgress)
 	table.clear(wentOutside)
 	resetMission(newSeed())
@@ -1136,7 +1346,8 @@ local function onZoneChanged(player: Player, inside: boolean, _sheltered: boolea
 	if not inside then
 		wentOutside[player] = true
 		addProgress("go_outside")
-	elseif wentOutside[player] then
+	elseif wentOutside[player] and earlierObjectivesDone("return_inside") then
+		-- First steps: coming back in counts once the steps before it (build the panels) are done.
 		addProgress("return_inside")
 	end
 end
@@ -1144,8 +1355,11 @@ end
 ----------------------------------------------------------------------------------------------------
 -- Shift task prompts
 
-local function onArrayCleaned(index: number)
+local function onArrayCleaned(player: Player, index: number)
 	if phase ~= "Shift" or shift == nil or shiftData == nil or not dusty[index] then
+		return
+	end
+	if not structureBuilt("solar") or index > state.arrays then
 		return
 	end
 	dusty[index] = false
@@ -1153,34 +1367,54 @@ local function onArrayCleaned(index: number)
 	shift.dustyArrays = countDusty()
 	say("carl.panel_clean")
 	addProgress("clean_panel")
+	reward(player, "panel_cleaned")
 	refreshWorld()
 	broadcast()
 end
 
+-- During a shift each ice spot gives one core. Base mode (Briefing): the crater is open for manual
+-- ice runs; spots never run out, but each run still needs empty hands and a walk to the machine.
 local function onIceDrilled(player: Player, index: number)
-	if phase ~= "Shift" or shift == nil or iceUsed[index] or crew.isCarrying(player) then
+	if crew.isCarrying(player) then
 		return
 	end
-	iceUsed[index] = true
-	crew.setCarrying(player, true)
-	sayTo(player, "carl.ice_picked")
-	addProgress("drill_ice")
-	refreshWorld()
+	if phase == "Shift" and shift ~= nil then
+		if iceUsed[index] then
+			return
+		end
+		iceUsed[index] = true
+		crew.setCarrying(player, true)
+		sayTo(player, "carl.ice_picked")
+		addProgress("drill_ice")
+		refreshWorld()
+	elseif phase == "Briefing" then
+		crew.setCarrying(player, true)
+		sayTo(player, "carl.ice_picked")
+	end
 end
 
+-- During a shift ice fills the water tank (Simulation). Outside a shift (ice from base mode, handed
+-- in from Briefing or while planning) it only pays credits and XP: no mission, no water change.
 local function onIceDelivered(player: Player)
-	if phase ~= "Shift" or shift == nil or not crew.isCarrying(player) then
+	if not crew.isCarrying(player) then
 		return
 	end
-	crew.setCarrying(player, false)
-	shift.iceCoresDelivered += 1
-	say("carl.ice_delivered")
-	addProgress("deliver_ice")
-	addProgress("deliver_ice_total")
-	broadcast()
+	if phase == "Shift" and shift ~= nil then
+		crew.setCarrying(player, false)
+		shift.iceCoresDelivered += 1
+		say("carl.ice_delivered")
+		addProgress("deliver_ice")
+		addProgress("deliver_ice_total")
+		reward(player, "ice_delivered")
+		broadcast()
+	elseif phase == "Briefing" or phase == "Planning" then
+		crew.setCarrying(player, false)
+		sayTo(player, "carl.ice_saved")
+		reward(player, "ice_delivered")
+	end
 end
 
-local function onLeakRepaired()
+local function onLeakRepaired(player: Player)
 	if phase ~= "Shift" or shift == nil or shiftData == nil or not leakActiveNow() then
 		return
 	end
@@ -1188,12 +1422,13 @@ local function onLeakRepaired()
 	shift.leakActive = false
 	say("carl.leak_fixed")
 	addProgress("repair_leak")
+	reward(player, "leak_repaired")
 	refreshWorld()
 	broadcast()
 end
 
-local function onAntennaAligned()
-	if phase ~= "Shift" or shift == nil or shift.antennaLinked then
+local function onAntennaAligned(player: Player)
+	if phase ~= "Shift" or shift == nil or shift.antennaLinked or not structureBuilt("antenna") then
 		return
 	end
 	-- The science waiting on the HUD right now is sent to Earth (it counts for stars).
@@ -1205,6 +1440,7 @@ local function onAntennaAligned()
 		say("carl.data_sent", { n = waiting })
 	end
 	addProgress("align_antenna")
+	reward(player, "antenna_aligned")
 	sayLater("carl.earth_delay", {
 		moon = MissionData.REAL.MOON_EARTH_LIGHT_TIME_S,
 		mars = MissionData.REAL.MARS_LIGHT_TIME_MAX_MIN,
@@ -1233,8 +1469,8 @@ end
 
 local function connectPrompts()
 	for i, ref in world.arrays do
-		connectPrompt(ref.prompt, function()
-			onArrayCleaned(i)
+		connectPrompt(ref.prompt, function(player)
+			onArrayCleaned(player, i)
 		end)
 	end
 	for i, node in world.iceNodes do
@@ -1246,12 +1482,8 @@ local function connectPrompts()
 		end)
 	end
 	connectPrompt(world.processorPrompt, onIceDelivered)
-	connectPrompt(world.leak.prompt, function()
-		onLeakRepaired()
-	end)
-	connectPrompt(world.antenna.prompt, function()
-		onAntennaAligned()
-	end)
+	connectPrompt(world.leak.prompt, onLeakRepaired)
+	connectPrompt(world.antenna.prompt, onAntennaAligned)
 	connectPrompt(world.console.prompt, onConsole)
 end
 
@@ -1263,7 +1495,7 @@ local function assistedResult(): ShiftResult
 	return {
 		playerCount = countPlayers(),
 		iceCores = 0,
-		arraysCleaned = MissionData.POWER.ARRAYS - state.cleanArrays,
+		arraysCleaned = state.arrays - state.cleanArrays,
 		exposedAstronauts = 0,
 		leakRepaired = true,
 		suitRefills = 0,
@@ -1356,6 +1588,16 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 	end
 	local kind: string = action.type
 
+	-- Stage 6: builds, skills, wardrobe, pets and the silo belong to BaseService (it validates).
+	if BASE_ACTIONS[kind] then
+		local api = baseApi
+		if api == nil or (BASE_DEBUG_ACTIONS[kind] and not isDebugAllowed(player, trusted)) then
+			return
+		end
+		api.handleAction(player, action, trusted)
+		return
+	end
+
 	if kind == "SetCells" then
 		if phase ~= "Planning" then
 			return
@@ -1386,16 +1628,20 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 		if phase ~= "Briefing" and phase ~= "Report" then
 			return
 		end
-		local def = resolveMission(action.missionId)
+		local def, missingBuild = resolveMission(action.missionId)
 		if def then
 			startMission(def)
+		elseif missingBuild then
+			-- The mission needs a build that does not stand yet (Stage 6).
+			sayTo(player, buildFirstKey(missingBuild))
 		end
 	elseif kind == "StartShift" then
 		if phase ~= "Planning" then
 			return
 		end
 		if not readyForShift() then
-			sayTo(player, "carl.plan_hint")
+			local missingBuild = missingBuildObjective()
+			sayTo(player, if missingBuild then buildFirstKey(missingBuild) else "carl.plan_hint")
 			return
 		end
 		startShift()
@@ -1497,22 +1743,44 @@ end
 
 -- worldRefs: WorldBuilder.World; crewService: the CrewService module (already started);
 -- progressService: the ProgressService module (already started), or nil to play without saving.
-function MissionService.start(worldRefs: any, crewService: Crew, progressService: ProgressApi?)
+-- baseService (Stage 6): the BaseService module (already started), or nil to play with the whole
+-- base standing and no credits or XP.
+function MissionService.start(worldRefs: any, crewService: Crew, progressService: ProgressApi?, baseService: BaseApi?)
 	assert(not started, "MissionService already started")
 	started = true
 	world = worldRefs
 	crew = crewService
 	progress = progressService
+	baseApi = baseService
 	local remoteEvents = MissionService.createRemotes()
 
 	resetMission(newSeed())
 	connectPrompts()
+	crew.setRoamDrain(phase == "Briefing" or phase == "Planning")
 	refreshWorld()
 
 	crew.onZoneChanged(onZoneChanged)
 	-- Saved progress decides which missions are unlocked: refresh the mission select cards.
 	if progressService then
 		progressService.onChanged(scheduleBroadcast)
+	end
+	-- Builds standing change mission cards, build_* objectives and which prompts work. Deferred so the
+	-- world has shown the new structure (and refreshed its own prompts) first.
+	if baseService then
+		baseService.onBuildsChanged(function(_builds: { [string]: number })
+			task.defer(function()
+				refreshWorld()
+				-- Training: once the build C.A.R.L. asked for stands, the next hint follows (the next
+				-- build, or today's plan). First steps has no plan: coming back inside is next.
+				local before = hintedBuild
+				hintedBuild = missingBuildObjective()
+				if phase == "Planning" and before ~= nil and hintedBuild ~= before and not hasObjective("return_inside") then
+					sayLater(planningHintKey())
+				end
+				checkAutoComplete()
+				scheduleBroadcast()
+			end)
+		end)
 	end
 
 	-- The live DONKI query finishes in the background; push its result to everyone.

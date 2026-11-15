@@ -1,7 +1,9 @@
 --!strict
 -- Space Base Odyssey - mission objectives checklist: a compact panel in the top-left corner during
 -- Planning and Shift, built from snapshot.mission.objectives. Done objectives get a lime check and
--- a small "pop"; open ones show an empty ring and their progress ("1/3").
+-- a small "pop"; open ones show an empty ring and their progress ("1/3"). Open build objectives
+-- (Stage 6: build_solar, build_greenhouse, build_antenna, build_shelter) show a hammer instead of
+-- the ring.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local TweenService = game:GetService("TweenService")
@@ -37,6 +39,7 @@ type Row = {
 	frame: Frame,
 	ring: Frame,
 	check: ImageLabel,
+	build: ImageLabel,
 	text: TextLabel,
 	scale: UIScale,
 	done: boolean,
@@ -99,6 +102,15 @@ function Objectives.new(root: Frame): ObjectivesView
 			zindex = 14,
 			visible = false,
 		})
+		local build = Ui.icon(frame, Ui.Icons.build, {
+			name = "Build",
+			size = UDim2.fromScale(0.12, 0.86),
+			position = UDim2.fromScale(0.055, 0.5),
+			anchor = Vector2.new(0.5, 0.5),
+			tint = ROLE.warning,
+			zindex = 14,
+			visible = false,
+		})
 		local scale = Instance.new("UIScale")
 		scale.Parent = check
 		local text = Ui.body(frame, {
@@ -110,7 +122,7 @@ function Objectives.new(root: Frame): ObjectivesView
 			minText = 8,
 			zindex = 13,
 		})
-		table.insert(rows, { frame = frame, ring = ring, check = check, text = text, scale = scale, done = false, id = nil })
+		table.insert(rows, { frame = frame, ring = ring, check = check, build = build, text = text, scale = scale, done = false, id = nil })
 	end
 
 	local phase = "Briefing"
@@ -166,8 +178,10 @@ function Objectives.new(root: Frame): ObjectivesView
 			end
 			row.done = done
 			row.id = objective.id
+			local isBuild = string.sub(objective.id, 1, 6) == "build_"
 			row.check.Visible = done
-			row.ring.Visible = not done
+			row.build.Visible = isBuild and not done
+			row.ring.Visible = not done and not isBuild
 			row.text.Text = objectiveText(objective)
 			row.text.TextColor3 = if done then ROLE.good else ROLE.text
 			row.text.TextTransparency = if done then 0.15 else 0

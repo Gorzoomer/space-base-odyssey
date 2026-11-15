@@ -56,6 +56,7 @@ export type MissionState = {
 	todayEvent: EventId,
 	allocation: Allocation,
 	cellsAvailable: number,
+	arrays: number, -- solar arrays standing for this mission (Stage 6: the players build them)
 	cleanArrays: number,
 	air: number,
 	food: number,
@@ -119,6 +120,9 @@ end
 export type MissionConfig = {
 	totalDays: number?, -- default data.MISSION.TOTAL_DAYS
 	schedule: { EventId }?, -- default: the fixed onboarding days, then the shuffled events
+	-- Solar arrays standing (Stage 6: built by the players). Power cells = clean arrays + battery.
+	-- Default data.POWER.ARRAYS; kept between 1 and data.POWER.ARRAYS.
+	arrays: number?,
 }
 
 function Simulation.newMission(data: any, seed: number?, config: MissionConfig?): MissionState
@@ -137,7 +141,13 @@ function Simulation.newMission(data: any, seed: number?, config: MissionConfig?)
 	local totalDays = if config and config.totalDays then config.totalDays else data.MISSION.TOTAL_DAYS
 	assert(totalDays >= 1 and totalDays == math.floor(totalDays), "totalDays must be a whole number >= 1")
 
-	local cleanArrays = data.POWER.ARRAYS
+	local arrays: number = data.POWER.ARRAYS
+	local wantedArrays: number? = if config then config.arrays else nil
+	if wantedArrays ~= nil then
+		assert(wantedArrays == math.floor(wantedArrays), "arrays must be a whole number")
+		arrays = math.clamp(wantedArrays, 1, data.POWER.ARRAYS)
+	end
+	local cleanArrays = arrays
 	return {
 		day = 0,
 		totalDays = totalDays,
@@ -145,6 +155,7 @@ function Simulation.newMission(data: any, seed: number?, config: MissionConfig?)
 		todayEvent = "None",
 		allocation = { LifeSupport = 2, Greenhouse = 1, Science = 1 },
 		cellsAvailable = cellsFor(data, cleanArrays),
+		arrays = arrays,
 		cleanArrays = cleanArrays,
 		air = data.METERS.START_AIR,
 		food = data.METERS.START_FOOD,
@@ -218,7 +229,7 @@ local function pickCause(state: MissionState, data: any, result: ShiftResult, be
 	if before.waterShort and state.air < before.air then
 		return "cause.no_water"
 	end
-	if state.cleanArrays < data.POWER.ARRAYS then
+	if state.cleanArrays < state.arrays then
 		return "cause.dusty_panels"
 	end
 	if state.allocation.Greenhouse == 0 then
@@ -248,7 +259,7 @@ function Simulation.endDay(state: MissionState, data: any, result: ShiftResult)
 	if result.leakRepaired then
 		state.leakActive = false
 	end
-	state.cleanArrays = math.min(data.POWER.ARRAYS, state.cleanArrays + math.max(0, result.arraysCleaned))
+	state.cleanArrays = math.min(state.arrays, state.cleanArrays + math.max(0, result.arraysCleaned))
 
 	-- Water: ice cores melt into the tank. The powered air maker uses some every day.
 	local iceCores = math.max(0, result.iceCores)

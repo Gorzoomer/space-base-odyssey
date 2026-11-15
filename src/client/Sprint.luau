@@ -1,5 +1,7 @@
 --!strict
 -- Space Base Odyssey - Run toggle: LeftShift on PC or an on-screen button on touch sets the local WalkSpeed.
+-- The "speed" skill (Stage 6) adds the player attribute SBO_SpeedBonus (set by the server's BaseService)
+-- to both the walking and the running speed.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ContextActionService = game:GetService("ContextActionService")
@@ -14,6 +16,7 @@ local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
 
 local ACTION_NAME = "SpaceBaseOdysseyRun"
+local SPEED_BONUS_ATTRIBUTE = "SBO_SpeedBonus"
 -- Above the default player scripts, so LeftShift toggles running instead of shift lock.
 local ACTION_PRIORITY = Enum.ContextActionPriority.High.Value + 10
 
@@ -30,13 +33,20 @@ function Sprint.new(root: Frame): SprintView
 	local running = false
 	local shown = false
 
+	local function speedBonus(): number
+		local value = player:GetAttribute(SPEED_BONUS_ATTRIBUTE)
+		return if type(value) == "number" and value == value then math.max(0, value) else 0
+	end
+
 	local function applySpeed()
 		local character = player.Character
 		local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
 		if humanoid then
-			humanoid.WalkSpeed = if running then MissionData.WORLD.RUN_SPEED else MissionData.WORLD.WALK_SPEED
+			local speed = if running then MissionData.WORLD.RUN_SPEED else MissionData.WORLD.WALK_SPEED
+			humanoid.WalkSpeed = speed + speedBonus()
 		end
 	end
+	player:GetAttributeChangedSignal(SPEED_BONUS_ATTRIBUTE):Connect(applySpeed)
 
 	local button: TextButton
 	local function render()
@@ -84,6 +94,8 @@ function Sprint.new(root: Frame): SprintView
 		local humanoid = character:WaitForChild("Humanoid", 10)
 		if humanoid and humanoid:IsA("Humanoid") then
 			applySpeed()
+			-- The server also sets the spawn speed: apply ours again once it has.
+			task.delay(1, applySpeed)
 		end
 	end
 	player.CharacterAdded:Connect(onCharacter)

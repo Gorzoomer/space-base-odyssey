@@ -9,6 +9,7 @@
 --   G. skipping ice makes air fall faster than fetching ice (the air maker needs water);
 --   H. never linking the antenna earns 1 star: science waits and is sent on the next linked day;
 --   I. live meters during a shift never change the state and end exactly at the endDay values.
+--   K. fewer solar arrays built (Stage 6) means less power: never more stars than more arrays.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local MissionData = require("../src/shared/MissionData")
@@ -364,6 +365,62 @@ do
 		state.water == MissionData.WATER.MAX - MissionData.WATER.USE_PER_DAY,
 		`J: tank capped at MAX before the day's use ({state.water})`
 	)
+end
+
+-- K. Solar arrays built (Stage 6): power cells = clean arrays + battery. Fewer arrays never give
+-- more stars, dust and cleaning stay within the arrays standing, and the default is unchanged.
+do
+	local default = Simulation.newMission(MissionData, 5)
+	check(default.arrays == MissionData.POWER.ARRAYS, `K: default arrays {default.arrays}`)
+	local clampedHigh = Simulation.newMission(MissionData, 5, { arrays = MissionData.POWER.ARRAYS + 4 })
+	check(clampedHigh.arrays == MissionData.POWER.ARRAYS, "K: arrays capped at POWER.ARRAYS")
+	local clampedLow = Simulation.newMission(MissionData, 5, { arrays = 0 })
+	check(clampedLow.arrays == 1, "K: at least one array")
+
+	local function runArrays(arrays: number, seed: number): MissionState
+		local state = Simulation.newMission(MissionData, seed, { arrays = arrays })
+		while state.outcome == "InProgress" do
+			Simulation.beginDay(state, MissionData)
+			reactive.plan(state)
+			local result = reactive.shift(state)
+			result.arraysCleaned = state.arrays - state.cleanArrays
+			Simulation.endDay(state, MissionData, result)
+		end
+		return state
+	end
+
+	for _, arrays in { 1, 2 } do
+		local state = Simulation.newMission(MissionData, 1, { arrays = arrays, schedule = { "None", "Dust" }, totalDays = 2 })
+		check(state.arrays == arrays and state.cleanArrays == arrays, `K{arrays}: starts with {arrays} clean arrays`)
+		check(
+			state.cellsAvailable == arrays + MissionData.POWER.BATTERY_CELLS,
+			`K{arrays}: cells {state.cellsAvailable} = arrays + battery`
+		)
+		Simulation.beginDay(state, MissionData)
+		check(state.cellsAvailable == arrays + MissionData.POWER.BATTERY_CELLS, `K{arrays}: day 1 cells match`)
+		place(state, { LifeSupport = 2, Greenhouse = 2, Science = 2 })
+		local used = state.allocation.LifeSupport + state.allocation.Greenhouse + state.allocation.Science
+		check(used <= state.cellsAvailable, `K{arrays}: allocation {used} fits the power`)
+		local result = idleShift(false)(state)
+		result.arraysCleaned = 5 -- more than stand: cleaning never makes extra arrays
+		Simulation.endDay(state, MissionData, result)
+		check(state.cleanArrays == arrays, `K{arrays}: cleaning capped at the arrays standing ({state.cleanArrays})`)
+		Simulation.beginDay(state, MissionData) -- dust day
+		check(state.cleanArrays == arrays - 1, `K{arrays}: dust covers one array ({state.cleanArrays})`)
+		check(state.cellsAvailable == arrays - 1 + MissionData.POWER.BATTERY_CELLS, `K{arrays}: dust costs one cell`)
+		local dusty = idleShift(false)(state)
+		Simulation.endDay(state, MissionData, dusty)
+		check(state.history[2].causeKey == "cause.dusty_panels", `K{arrays}: the report blames the dusty panel ({state.history[2].causeKey})`)
+	end
+
+	for _, seed in SEEDS do
+		local one, two, three = runArrays(1, seed), runArrays(2, seed), runArrays(3, seed)
+		local s1, s2, s3 = Simulation.stars(one, MissionData), Simulation.stars(two, MissionData), Simulation.stars(three, MissionData)
+		check(s1 <= s2 and s2 <= s3, `K seed {seed}: more arrays never earn fewer stars ({s1}, {s2}, {s3})`)
+		check(one.sciencePoints <= three.sciencePoints, `K seed {seed}: one array gathers less science`)
+		check(#two.history >= 5, `K seed {seed}: a careful crew with two arrays reaches day {#two.history} (needs >= 5)`)
+		check(s3 == 3, `K seed {seed}: three arrays still allow 3 stars ({s3})`)
+	end
 end
 
 print(`balance: {passes} passed, {failures} failed; best static allocation earned {bestStatic} stars`)
