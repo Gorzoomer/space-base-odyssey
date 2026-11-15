@@ -143,8 +143,9 @@ local BASE_ACTIONS: { [string]: boolean } = {
 	DebugGrantCredits = true,
 	DebugResetBase = true,
 	DebugBuildNext = true,
+	DebugMaxResources = true,
 }
-local BASE_DEBUG_ACTIONS: { [string]: boolean } = { DebugGrantCredits = true, DebugResetBase = true, DebugMeteor = true, DebugBuildNext = true }
+local BASE_DEBUG_ACTIONS: { [string]: boolean } = { DebugGrantCredits = true, DebugResetBase = true, DebugMeteor = true, DebugBuildNext = true, DebugMaxResources = true }
 -- Stage 7: carrying a parts crate fills both hands (player attribute set by BaseService).
 local CARRYING_CRATE_ATTRIBUTE = "SBO_CarryingCrate"
 -- At most this many ice cores in one hauler delivery (a sanity cap, well above the hauler's cargo).

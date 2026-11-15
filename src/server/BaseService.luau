@@ -104,6 +104,7 @@ local ACTION_TYPES: { [string]: boolean } = {
 	DebugGrantCredits = true,
 	DebugResetBase = true,
 	DebugBuildNext = true,
+	DebugMaxResources = true,
 }
 
 local BaseService = {}
@@ -1473,6 +1474,33 @@ local function dispatch(player: Player, action: any, trusted: boolean)
 			return
 		end
 		debugBuildNext(player)
+	elseif kind == "DebugMaxResources" then
+		-- F6 (with DebugUnlockAll): just enough credits to buy every build level, tool upgrade, gear
+		-- level and pet, and the XP for the top player level. Nothing is given twice.
+		local base = baseOf(player)
+		if not isDebugAllowed(player, trusted) or not isLoaded(player) or base == nil then
+			return
+		end
+		local total = 0
+		local function addCosts(costs: { number })
+			for _, cost in costs do
+				total += cost
+			end
+		end
+		for _, def in MissionData.BASE.BUILDS do
+			addCosts(def.costs)
+		end
+		for _, up in MissionData.BASE.TOOL_UPGRADES do
+			addCosts(up.costs)
+		end
+		for _, def in MissionData.BASE.GEAR do
+			addCosts(def.costs)
+		end
+		for _, def in MissionData.BASE.PETS do
+			total += def.cost or 0
+		end
+		local topXp = MissionData.BASE.LEVEL_XP[#MissionData.BASE.LEVEL_XP]
+		grant(player, math.max(0, total - base.credits), math.max(0, topXp - base.xp), true)
 	end
 end
 

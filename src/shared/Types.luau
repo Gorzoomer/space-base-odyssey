@@ -226,6 +226,7 @@ export type Action =
 	| { type: "ToggleGear", id: string } -- Stage 8, anywhere: switch owned gear on or off (keys B / J)
 	| { type: "DebugMeteor" } -- Stage 7, Studio / place owner only: a meteorite lands now
 	| { type: "DebugBuildNext" } -- Studio / place owner only: finish or build the next structure, free
+	| { type: "DebugMaxResources" } -- Studio / place owner only: credits and XP to unlock everything
 	| { type: "DebugGrantCredits", amount: number } -- Studio / place owner only; also grants XP = amount
 	| { type: "DebugResetBase" } -- Studio / place owner only: this player's builds, skills, credits, XP back to the start
 	-- Owner-only, Studio or the place owner: deterministic testing and video recording.
