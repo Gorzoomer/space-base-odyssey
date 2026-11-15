@@ -1,8 +1,9 @@
 --!strict
 -- Space Base Odyssey - client state: latest Snapshot, PlayerStats and Progress (missions, hidden
 -- collectibles and event cosmetics), the player's BaseState (Stage 6: credits, XP, builds, skills,
--- pets, what they wear), chosen language, local settings, the screen mode (mission select open or
--- base mode) and the Action sender.
+-- pets, what they wear; Stage 7: builds in progress, the parts crate, tools, greenhouse food, scanned
+-- sites), chosen language, local settings, the screen mode (mission select open or base mode), the
+-- last exploration scan (Stage 7) and the Action sender.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -18,7 +19,8 @@ export type Action = Types.Action
 export type LiveWeather = Types.LiveWeather
 export type Language = "en" | "es"
 -- "base": a new BaseState arrived. "view": the mission select opened or closed (base mode changed).
-export type ChangeKind = "snapshot" | "stats" | "language" | "progress" | "settings" | "base" | "view"
+-- "explore" (Stage 7): the server sent an ExploreEvent (a site or meteorite crater was scanned).
+export type ChangeKind = "snapshot" | "stats" | "language" | "progress" | "settings" | "base" | "view" | "explore"
 export type StormStage = "none" | "warning" | "storm"
 
 -- Stage 4 parts of the Snapshot (see Types.luau). Read through the helpers below.
@@ -29,6 +31,8 @@ export type MissionCard = Types.MissionCard
 export type Progress = Types.Progress
 export type BaseState = Types.BaseState
 export type Equipped = Types.Equipped
+export type BuildProgress = Types.BuildProgress
+export type ExploreEvent = Types.ExploreEvent
 
 local Store = {}
 
@@ -64,6 +68,7 @@ local stats: PlayerStats? = nil
 local progress: Progress = { completed = {}, collectibles = {}, cosmetics = {} }
 local progressReceived = false
 local base: BaseState? = nil
+local lastExplore: ExploreEvent? = nil
 local missionSelectOpen = false
 local language: Language = "en"
 local actionRemote: RemoteEvent? = nil
@@ -296,6 +301,27 @@ function Store.setBase(value: BaseState)
 			end
 		end
 	end
+	local inProgress: { [string]: BuildProgress } = {}
+	if type(raw.inProgress) == "table" then
+		for id, entry in raw.inProgress do
+			if type(id) == "string" and type(entry) == "table" and type(entry.stages) == "number" then
+				inProgress[id] = {
+					level = math.max(1, numberOr(entry.level, 1)),
+					stage = math.max(0, numberOr(entry.stage, 0)),
+					stages = math.max(1, entry.stages),
+					crate = entry.crate == true,
+				}
+			end
+		end
+	end
+	local scanned: { [string]: boolean } = {}
+	if type(raw.scanned) == "table" then
+		for id, done in raw.scanned do
+			if type(id) == "string" and done == true then
+				scanned[id] = true
+			end
+		end
+	end
 	local xp = numberOr(raw.xp, 0)
 	base = {
 		credits = numberOr(raw.credits, 0),
@@ -312,6 +338,11 @@ function Store.setBase(value: BaseState)
 		siloIce = numberOr(raw.siloIce, 0),
 		siloMax = numberOr(raw.siloMax, 0),
 		icePerMinute = numberOr(raw.icePerMinute, 0),
+		inProgress = inProgress,
+		carryingCrate = raw.carryingCrate == true,
+		tools = levelMap(raw.tools),
+		foodReadyAt = if type(raw.foodReadyAt) == "number" then raw.foodReadyAt else nil,
+		scanned = scanned,
 	}
 	emit("base")
 end
@@ -334,8 +365,51 @@ function Store.buildLevel(id: string): number
 	return 0
 end
 
--- The four builds every mission needs (solar, greenhouse, antenna, shelter) all stand.
-Store.CORE_BUILDS = table.freeze({ "solar", "greenhouse", "antenna", "shelter" })
+-- Stage 7: a build being built in steps (nil when none is in progress).
+function Store.buildProgress(id: string): BuildProgress?
+	local state = base
+	if state then
+		return state.inProgress[id]
+	end
+	return nil
+end
+
+-- Stage 7: this player carries a parts crate from the lander.
+function Store.carryingCrate(): boolean
+	local state = base
+	return state ~= nil and state.carryingCrate
+end
+
+-- Stage 7: level of a tool this player can carry (0 = not unlocked yet, or no BaseState yet).
+function Store.toolLevel(id: string): number
+	local state = base
+	if state then
+		return state.tools[id] or 0
+	end
+	return 0
+end
+
+-- Stage 7: this player already scanned an exploration site ("poi:<id>" keys; a bare id also counts).
+function Store.isScanned(id: string): boolean
+	local state = base
+	if state == nil then
+		return false
+	end
+	return state.scanned["poi:" .. id] == true or state.scanned[id] == true
+end
+
+-- Stage 7: the last exploration scan the server reported (ExploreCard shows it).
+function Store.lastExplore(): ExploreEvent?
+	return lastExplore
+end
+
+function Store.setExplore(value: ExploreEvent)
+	lastExplore = value
+	emit("explore")
+end
+
+-- The builds every mission needs (habitat, solar, greenhouse, antenna, shelter) all stand.
+Store.CORE_BUILDS = table.freeze({ "habitat", "solar", "greenhouse", "antenna", "shelter" })
 function Store.coreBuilt(): boolean
 	if base == nil then
 		return true -- older server: the base is already complete

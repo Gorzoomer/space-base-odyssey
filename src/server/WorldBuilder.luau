@@ -22,7 +22,9 @@ export type CollectibleRef = { id: string, model: Model, prompt: ProximityPrompt
 export type RoverPaint = "default" | "cheese"
 
 export type World = {
-	spawn: SpawnLocation,
+	spawn: SpawnLocation, -- Stage 7: inside the arrival lander
+	-- Stage 7: the habitat is a build; while it does not stand its zone sits far below the ground (like
+	-- the shelter's), so it never counts as inside.
 	habitatZone: BasePart,
 	shelterZone: BasePart,
 	arrays: { ArrayRef },
@@ -68,6 +70,26 @@ export type World = {
 	setSilo: (ice: number, max: number) -> (),
 	-- The cargo robot drives between the drills' conveyor and the silo while active (cosmetic).
 	setCargoActive: (active: boolean) -> (),
+	-- Stage 7: building in steps. Shows level `level` of build `id` partly done: its blueprint plus the
+	-- real parts revealed from the bottom up in proportion stage / stages (stage 0 = foundation outline
+	-- only). BaseService calls setBuildLevel(id, level, true) when the last step is done (that clears it).
+	setBuildProgress: (id: string, level: number, stage: number, stages: number) -> (),
+	clearBuildProgress: (id: string) -> (), -- removes a build in progress (also done by setBuildLevel)
+	-- Stage 7: the arrival lander. world.spawn is inside it; landerZone always counts as inside.
+	landerZone: BasePart,
+	-- The parts crate depot at the lander's cargo bay ("CratePrompt", TextKey "prompt.take_crate").
+	crateDepot: { prompt: ProximityPrompt, position: Vector3 },
+	-- Welds (true) or removes (false) the small parts crate a character carries in front of it.
+	setCarryCrate: (character: Model, carrying: boolean) -> (),
+	-- "FoodPrompt" in the greenhouse dome (TextKey "prompt.pick_food"); enabled while it is built.
+	greenhouseFoodPrompt: ProximityPrompt,
+	-- World sites (src/server/WorldSites.luau); nil / empty when that module is missing or broken.
+	labPrompt: ProximityPrompt?, -- "LabPrompt", enabled only while the lab is built
+	garageBays: { CFrame }, -- vehicle spawn points inside the garage, facing out
+	pois: { { id: string, position: Vector3, prompt: ProximityPrompt } },
+	spawnImpact: (position: Vector3) -> (Model, ProximityPrompt), -- a fresh meteorite crater
+	clearImpact: (impact: Model) -> (),
+	sitesLoaded: boolean, -- false when WorldSites failed (the lab, garage, pad and ship are missing)
 }
 
 type Style = {
@@ -91,6 +113,44 @@ local CRATER_RIM_Y = 8
 local RIDGE_CENTRE = Vector3.new(-190, 0, -60)
 local RIDGE_TOP_Y = 30
 local ANTENNA_BASE = Vector3.new(-60, 0, 70)
+-- Stage 7 layout (team feedback: a modern lunar base concept). The hub is a round module with a
+-- white dome; a walk-through tube leads to the glass greenhouse dome; the game starts in the lander.
+local HUB_SEGMENTS = 16
+local HUB_APOTHEM = 31 -- inner wall face
+local HUB_WALL = 2
+local HUB_WALL_HEIGHT = 18
+local HUB_DOME_RX = 32.5
+local HUB_DOME_RY = 14
+local HUB_ROOF_Y = 19.5
+local HUB_ZONE_HALF = 23 -- the inside zone is the square that fits within the round wall
+-- Stage 7 layout points (a table: Vector3 values would each take a register in this big module).
+local S7 = {}
+-- Stage 7 geometry and construction helpers (one table for the same reason).
+local Geo = {}
+-- Stage 6 build-and-grow helpers and the secret places, grouped the same way.
+local Six = {}
+local Secret = {}
+S7.TANK_OFFSET = Vector3.new(24.5, 0, -13) -- water tank, from the hub centre
+S7.GREENHOUSE_A = Vector3.new(-62, 0, 8)
+local GREENHOUSE_A_RX = 16
+local GREENHOUSE_A_RY = 14
+S7.GREENHOUSE_B = Vector3.new(-66, 0, 44) -- level 2: a second dome north of the first
+local GREENHOUSE_B_RX = 14
+local GREENHOUSE_B_RY = 12
+local TUBE_AXIS_Y = 4.5 -- walk-through tube: octagon around this axis
+local TUBE_APOTHEM = 6.5
+S7.LANDER_CENTRE = Vector3.new(40, 0, -130)
+S7.LAB_CENTRE = Vector3.new(-55, 0, -35)
+local LAB_TUBE_INSET = 12 -- the lab tube stops this far from the lab centre (its wall)
+S7.GARAGE_CENTRE = Vector3.new(95, 0, 75)
+S7.LANDING_PAD_CENTRE = Vector3.new(-110, 0, -180)
+S7.SITE_SPOTS = {
+	Vector3.new(330, 0, 260), -- old_lander
+	Vector3.new(-380, 0, 280), -- impact_crater
+	Vector3.new(400, 0, -230), -- boulder_tracks
+	Vector3.new(-220, 0, -360), -- prospector_crash
+	Vector3.new(160, 0, 430), -- sun_peak
+}
 local GROUND_HALF = 600
 local GROUND_TILE = 150
 local EARTH_DISTANCE = 900
@@ -245,7 +305,16 @@ local MARKER_NAMES = table.freeze({
 	"Greenhouse",
 	"Arrays",
 	"Silo", -- Stage 6: the ice silo's claim side (C.A.R.L. guides here when it is full)
+	"LanderDoor", -- Stage 7: the foot of the lander ramp (objective go_outside)
+	"CrateDepot", -- Stage 7: the parts crates at the lander's cargo bay
 })
+
+-- Stage 7 construction look (visual tuning): a build in progress shows a foundation outline in
+-- construction orange, then its real parts appear from the bottom up, one step at a time.
+local CONSTRUCTION_DROP = 2 -- newly revealed parts rise this far into place
+local OUTLINE_MAX_SPAN = 90 -- long pieces (the ice conveyor) get no outline
+local CARRY_CRATE_NAME = "SBO_CarriedCrate"
+local MIN_LEVEL_ATTRIBUTE = "SBO_MinLevel" -- parts (or models) that only show from that build level on
 
 -- Module state shared between applyEnvironment and build.
 local earthPosition: Vector3? = nil
@@ -495,6 +564,108 @@ end
 local function regolith(rng: Random, base: number, spread: number): Color3
 	local g = math.clamp(base + rng:NextInteger(-spread, spread), 0, 255)
 	return Color3.fromRGB(g, math.max(g - 1, 0), math.max(g - 5, 0))
+end
+
+-- A box given by two corners in the local space of `frame` (for rotated structures like the lander).
+function Geo.framedBox(parent: Instance, name: string, frame: CFrame, a: Vector3, b: Vector3, style: Style): Part
+	local minV = a:Min(b)
+	local maxV = a:Max(b)
+	return part(parent, name, maxV - minV, frame * CFrame.new((minV + maxV) / 2), style)
+end
+
+-- Stage 7: one flat wall segment of a round module (a regular polygon). cf sits at ground level in
+-- the middle of the wall's thickness; its -Z points out of the module and X runs along the wall.
+type RingSegment = { index: number, angle: number, cf: CFrame, width: number }
+
+function Geo.ringSegments(frame: CFrame, apothem: number, thickness: number, segments: number, rotation: number): { RingSegment }
+	local list: { RingSegment } = {}
+	local mid = apothem + thickness / 2
+	for k = 0, segments - 1 do
+		local angle = rotation + k * 2 * math.pi / segments
+		local dir = dirFromAngle(angle)
+		local at = dir * mid
+		table.insert(list, {
+			index = k,
+			angle = angle,
+			cf = frame * CFrame.lookAt(at, at + dir),
+			width = 2 * (apothem + thickness) * math.tan(math.pi / segments) + 0.1,
+		})
+	end
+	return list
+end
+
+-- A faceted dome (half ellipsoid) from flat panels: `bands` rings of `segments` panels from the ground
+-- up to capAngle, then a flat cap disc. Panels listed in `skip` (band * 1000 + segment) are left out
+-- (doorways). Segment i is centred on rotation + i * 2 pi / segments. Returns the panels and the cap.
+type DomeOptions = {
+	bands: number,
+	segments: number,
+	thickness: number,
+	rotation: number?,
+	capAngle: number?,
+	skip: { [number]: boolean }?,
+	capStyle: Style?,
+}
+
+function Geo.domeShell(parent: Instance, name: string, centre: Vector3, rx: number, ry: number, style: Style, opts: DomeOptions): ({ Part }, Part)
+	local panels: { Part } = {}
+	local n = opts.segments
+	local rotation = opts.rotation or 0
+	local capAngle = opts.capAngle or math.rad(72)
+	local skip = opts.skip or {}
+	for b = 1, opts.bands do
+		local phi0 = (b - 1) / opts.bands * capAngle
+		local phi1 = b / opts.bands * capAngle
+		local r0, y0 = rx * math.cos(phi0), ry * math.sin(phi0)
+		local r1, y1 = rx * math.cos(phi1), ry * math.sin(phi1)
+		local width = 2 * r0 * math.tan(math.pi / n) + 0.15
+		for i = 0, n - 1 do
+			if skip[b * 1000 + i] then
+				continue
+			end
+			local dir = dirFromAngle(rotation + i * 2 * math.pi / n)
+			local bottom = centre + dir * r0 + Vector3.new(0, y0, 0)
+			local top = centre + dir * r1 + Vector3.new(0, y1, 0)
+			local up = (top - bottom).Unit
+			local right = Vector3.new(dir.Z, 0, -dir.X)
+			local outward = right:Cross(up)
+			local mid = (bottom + top) / 2 - outward * (opts.thickness / 2)
+			table.insert(
+				panels,
+				part(parent, name, Vector3.new(width, (top - bottom).Magnitude + 0.12, opts.thickness), CFrame.fromMatrix(mid, right, up), style)
+			)
+		end
+	end
+	local capRadius = rx * math.cos(capAngle)
+	local capY = ry * math.sin(capAngle)
+	local cap = vcylinder(parent, name .. "Cap", opts.thickness, capRadius * 2 + 0.6, centre + Vector3.new(0, capY - opts.thickness / 2, 0), opts.capStyle or style)
+	return panels, cap
+end
+
+-- Skip keys for a doorway in a domeShell: the two segments on each side of `angle`, bands 1..maxBand.
+-- The dome must use rotation = angle + pi / segments so a panel edge sits on the door's centre line.
+function Geo.domeDoorway(segments: number, maxBand: number): { [number]: boolean }
+	local skip: { [number]: boolean } = {}
+	for b = 1, maxBand do
+		skip[b * 1000 + 0] = true
+		skip[b * 1000 + (segments - 1)] = true
+	end
+	return skip
+end
+
+-- World-space box around a part (works for rotated parts).
+function Geo.partBounds(p: BasePart): (Vector3, Vector3)
+	local cf = p.CFrame
+	local half = p.Size / 2
+	local r = cf.RightVector * half.X
+	local u = cf.UpVector * half.Y
+	local l = cf.LookVector * half.Z
+	local e = Vector3.new(
+		math.abs(r.X) + math.abs(u.X) + math.abs(l.X),
+		math.abs(r.Y) + math.abs(u.Y) + math.abs(l.Y),
+		math.abs(r.Z) + math.abs(u.Z) + math.abs(l.Z)
+	)
+	return cf.Position - e, cf.Position + e
 end
 
 local function sunDirection(): Vector3
@@ -1321,7 +1492,7 @@ local function buildDecor(base: Instance, rng: Random)
 	-- Marker posts that show the way from the habitat door to each task site.
 	local markers = {
 		Vector3.new(8, 0, 42), Vector3.new(8, 0, 66), Vector3.new(8, 0, 90), -- crater
-		Vector3.new(-40, 0, 24), Vector3.new(-56, 0, -14), Vector3.new(-74, 0, -42), -- ridge ramp
+		Vector3.new(-22, 0, -50), Vector3.new(-48, 0, -64), Vector3.new(-76, 0, -66), -- ridge ramp (past the lab)
 		Vector3.new(-22, 0, 40), Vector3.new(-42, 0, 58), -- antenna
 		Vector3.new(24, 0, 28), Vector3.new(44, 0, 18), Vector3.new(62, 0, 4), -- shelter
 	}
@@ -1345,37 +1516,57 @@ end
 
 local GLASS: Style = { color = GLASS_COLOUR, material = Enum.Material.Glass, transparency = 0.4, shadow = false }
 
--- A wall with a band of windows between y = 7 and y = 11.5.
-local function windowWall(parent: Instance, name: string, a: Vector3, b: Vector3, windows: number, style: Style)
-	local minV = a:Min(b)
-	local maxV = a:Max(b)
-	local lowTop, glassTop = 7, 11.5
-	box(parent, name .. "Low", minV, Vector3.new(maxV.X, lowTop, maxV.Z), style)
-	box(parent, name .. "High", Vector3.new(minV.X, glassTop, minV.Z), maxV, style)
-	local alongX = (maxV.X - minV.X) >= (maxV.Z - minV.Z)
-	if alongX then
-		local mid = (minV.Z + maxV.Z) / 2
-		box(parent, name .. "Glass", Vector3.new(minV.X, lowTop, mid - 0.3), Vector3.new(maxV.X, glassTop, mid + 0.3), GLASS)
-	else
-		local mid = (minV.X + maxV.X) / 2
-		box(parent, name .. "Glass", Vector3.new(mid - 0.3, lowTop, minV.Z), Vector3.new(mid + 0.3, glassTop, maxV.Z), GLASS)
+-- Stage 7 (team feedback, modern lunar base concept): the habitat is a round hub. Sixteen flat wall
+-- segments carry a window band, a blue solar-cell wrap and a cyan trim line; a white faceted dome sits
+-- on top. Doors: north (toward the crater), south (toward the lander) and a west doorway into the
+-- walk-through tube to the greenhouse dome (a glass hatch closes it until the greenhouse stands).
+-- The room inside keeps the mission layout: power console, water processor, air maker, water tank.
+local HUB_DOOR_NORTH = 0
+local HUB_DOOR_SOUTH = 8
+local HUB_DOOR_WEST = 12
+
+-- A wall segment with a doorway in the middle (door `doorWidth` wide, `doorTop` tall).
+function Geo.doorSegment(parent: Instance, seg: RingSegment, doorWidth: number, doorTop: number, height: number, thickness: number, style: Style)
+	local jamb = math.max(0.4, (seg.width - doorWidth) / 2)
+	for _, side in { -1, 1 } do
+		part(parent, "WallJamb", Vector3.new(jamb, height, thickness), seg.cf * CFrame.new(side * (doorWidth / 2 + jamb / 2), height / 2, 0), style)
 	end
-	local startC = if alongX then minV.X else minV.Z
-	local stopC = if alongX then maxV.X else maxV.Z
-	for i = 0, windows do
-		local c = startC + (stopC - startC) * (i / windows)
-		local p0 = math.max(startC, c - 1)
-		local p1 = math.min(stopC, c + 1)
-		if alongX then
-			box(parent, name .. "Pillar", Vector3.new(p0, lowTop, minV.Z), Vector3.new(p1, glassTop, maxV.Z), style)
-		else
-			box(parent, name .. "Pillar", Vector3.new(minV.X, lowTop, p0), Vector3.new(maxV.X, glassTop, p1), style)
-		end
+	part(parent, "WallLintel", Vector3.new(doorWidth + 0.2, height - doorTop, thickness), seg.cf * CFrame.new(0, (doorTop + height) / 2, 0), style)
+end
+
+-- A wall segment with a band of windows between lowTop and glassTop.
+function Geo.windowSegment(parent: Instance, seg: RingSegment, height: number, thickness: number, lowTop: number, glassTop: number, style: Style, glass: Style)
+	local w = seg.width
+	part(parent, "WallLow", Vector3.new(w, lowTop, thickness), seg.cf * CFrame.new(0, lowTop / 2, 0), style)
+	part(parent, "WallHigh", Vector3.new(w, height - glassTop, thickness), seg.cf * CFrame.new(0, (glassTop + height) / 2, 0), style)
+	part(parent, "WallGlass", Vector3.new(w - 0.2, glassTop - lowTop, 0.5), seg.cf * CFrame.new(0, (lowTop + glassTop) / 2, 0), glass)
+end
+
+-- Cyan door frame and a lamp over a doorway, on the outside face of the segment (local -Z).
+function Geo.doorDressing(parent: Instance, seg: RingSegment, doorWidth: number, doorTop: number, thickness: number): Part
+	local frameStyle: Style = { color = ACCENT_SYSTEM, material = Enum.Material.SmoothPlastic, shadow = false } -- cyan = guidance
+	local face = -(thickness / 2 + 0.3)
+	for _, side in { -1, 1 } do
+		part(parent, "DoorFrame", Vector3.new(0.8, doorTop + 0.8, 0.6), seg.cf * CFrame.new(side * (doorWidth / 2 + 0.4), (doorTop + 0.8) / 2, face), frameStyle)
 	end
+	part(parent, "DoorFrame", Vector3.new(doorWidth + 1.6, 0.8, 0.6), seg.cf * CFrame.new(0, doorTop + 0.4, face), frameStyle)
+	local lamp = part(parent, "DoorLamp", Vector3.new(3, 0.5, 0.8), seg.cf * CFrame.new(0, doorTop + 1.45, face - 0.1), {
+		color = Color3.fromRGB(255, 232, 190),
+		material = Enum.Material.Neon,
+		shadow = false,
+	})
+	local light = Instance.new("SpotLight")
+	light.Face = Enum.NormalId.Bottom
+	light.Range = 22
+	light.Angle = 80
+	light.Brightness = 1.6
+	light.Color = Color3.fromRGB(255, 232, 200)
+	light.Parent = lamp
+	return lamp
 end
 
 type HabitatRefs = {
-	spawn: SpawnLocation,
+	model: Model,
 	zone: Part,
 	console: Part,
 	consolePrompt: ProximityPrompt,
@@ -1390,6 +1581,7 @@ type HabitatRefs = {
 	rackPlants: { Part },
 	processorInlet: Part,
 	waterTank: WaterTankRefs,
+	greenhouseHatch: Part, -- closes the west doorway while the greenhouse is not built
 }
 
 type WaterTankRefs = { fill: Part, light: PointLight, gauge: Part, bottomY: number, height: number, centre: Vector3, diameter: number }
@@ -1410,61 +1602,95 @@ local function buildHabitat(base: Instance): HabitatRefs
 		return o + Vector3.new(x, y, z)
 	end
 	local hull: Style = { color = WHITE_HULL, material = Enum.Material.SmoothPlastic }
+	local trimBand: Style = { color = HULL_TRIM, material = Enum.Material.SmoothPlastic, collide = false, shadow = false }
+	local solarWrap: Style = { color = PANEL_CLEAN, material = Enum.Material.Glass, reflectance = 0.12, collide = false, shadow = false }
+	local footLamp: Style = { color = ACCENT_SYSTEM, material = Enum.Material.Neon, collide = false, shadow = false }
 
-	box(hab, "Floor", v(-30, 0, -20), v(30, 0.5, 20), { color = Color3.fromRGB(170, 174, 180), material = Enum.Material.DiamondPlate })
-	windowWall(hab, "WallBack", v(-30, 0, -20), v(30, 18, -18), 4, hull)
-	-- West wall: a glass hatch looks into the greenhouse module next door.
-	windowWall(hab, "WallWestSouth", v(-30, 0, -18), v(-28, 18, -4), 1, hull)
-	windowWall(hab, "WallWestNorth", v(-30, 0, 4), v(-28, 18, 18), 1, hull)
-	box(hab, "WallWestLintel", v(-30, 10, -4), v(-28, 18, 4), hull)
-	box(hab, "GreenhouseHatch", v(-29.3, 0.5, -4), v(-28.7, 10, 4), {
+	-- Floor: round, and small enough to leave the crawl-space shaft east of the hub open.
+	vcylinder(hab, "Floor", 0.5, (HUB_APOTHEM + 1) * 2, v(0, 0.25, 0), {
+		color = Color3.fromRGB(170, 174, 180),
+		material = Enum.Material.DiamondPlate,
+	})
+
+	-- Round wall: doorways 10 wide x 12 tall (north, south) so the default camera follows a player
+	-- through without entering a wall; the west doorway matches the greenhouse tube.
+	local segments = Geo.ringSegments(CFrame.new(o), HUB_APOTHEM, HUB_WALL, HUB_SEGMENTS, 0)
+	local doorSegs: { [number]: RingSegment } = {}
+	for _, seg in segments do
+		local k = seg.index
+		if k == HUB_DOOR_NORTH or k == HUB_DOOR_SOUTH then
+			Geo.doorSegment(hab, seg, 10, 12, HUB_WALL_HEIGHT, HUB_WALL, hull)
+			doorSegs[k] = seg
+		elseif k == HUB_DOOR_WEST then
+			Geo.doorSegment(hab, seg, 9, 11, HUB_WALL_HEIGHT, HUB_WALL, hull)
+			doorSegs[k] = seg
+		else
+			Geo.windowSegment(hab, seg, HUB_WALL_HEIGHT, HUB_WALL, 7, 11.5, hull, GLASS)
+			part(hab, "SolarWrap", Vector3.new(seg.width - 0.8, 3.6, 0.2), seg.cf * CFrame.new(0, 14.4, -(HUB_WALL / 2 + 0.1)), solarWrap)
+		end
+		part(hab, "TrimBand", Vector3.new(seg.width, 0.5, 0.2), seg.cf * CFrame.new(0, 17.2, -(HUB_WALL / 2 + 0.12)), trimBand)
+		-- Window frame pillar on the corner between this segment and the next one.
+		local cornerDir = dirFromAngle(seg.angle + math.pi / HUB_SEGMENTS)
+		local corner = o + cornerDir * ((HUB_APOTHEM + HUB_WALL / 2) / math.cos(math.pi / HUB_SEGMENTS)) + Vector3.new(0, 9.25, 0)
+		part(hab, "Pillar", Vector3.new(1.1, 5, HUB_WALL + 0.3), CFrame.lookAt(corner, corner + cornerDir), hull)
+		if k % 2 == 0 then
+			local foot = o + cornerDir * ((HUB_APOTHEM + HUB_WALL) / math.cos(math.pi / HUB_SEGMENTS) + 0.25) + Vector3.new(0, 0.35, 0)
+			part(hab, "FootLamp", Vector3.new(0.9, 0.5, 0.4), CFrame.lookAt(foot, foot + cornerDir), footLamp)
+		end
+	end
+
+	-- Ceiling, a cyan ring and the white dome on top. The ceiling closes the room, so the dome's
+	-- inside is never seen.
+	local outerDiameter = (HUB_APOTHEM + HUB_WALL) * 2
+	vcylinder(hab, "Ceiling", 1.5, outerDiameter + 1.4, v(0, HUB_WALL_HEIGHT + 0.75, 0), {
+		color = Color3.fromRGB(205, 208, 214),
+		material = Enum.Material.SmoothPlastic,
+	})
+	vcylinder(hab, "DomeRing", 0.5, outerDiameter + 2.2, v(0, HUB_ROOF_Y - 0.25, 0), {
+		color = HULL_TRIM,
+		material = Enum.Material.SmoothPlastic,
+		shadow = false,
+	})
+	local _, cap = Geo.domeShell(hab, "Dome", v(0, HUB_ROOF_Y, 0), HUB_DOME_RX, HUB_DOME_RY, hull, {
+		bands = 4,
+		segments = HUB_SEGMENTS,
+		thickness = 0.8,
+		capAngle = math.rad(72),
+	})
+	local capTop = cap.Position.Y + 0.4
+	vcylinder(hab, "Skylight", 0.4, 8, Vector3.new(o.X, capTop + 0.2, o.Z), {
+		color = ACCENT_SYSTEM:Lerp(PALETTE.night, 0.4),
+		material = Enum.Material.Glass,
+		reflectance = 0.2,
+		shadow = false,
+	})
+	vcylinder(hab, "RoofMast", 4, 0.5, Vector3.new(o.X + 6, capTop + 2, o.Z - 4), { color = METAL, material = Enum.Material.Metal })
+	local beacon = ball(hab, "RoofBeacon", 1.2, Vector3.new(o.X + 6, capTop + 4.4, o.Z - 4), {
+		color = ACCENT_SYSTEM,
+		material = Enum.Material.Neon,
+		shadow = false,
+	})
+	pointLight(beacon, ACCENT_SYSTEM, 10, 1, false)
+
+	-- Door frames and lamps (north and south); the west doorway gets the greenhouse hatch.
+	Geo.doorDressing(hab, doorSegs[HUB_DOOR_NORTH], 10, 12, HUB_WALL)
+	Geo.doorDressing(hab, doorSegs[HUB_DOOR_SOUTH], 10, 12, HUB_WALL)
+	local westSeg = doorSegs[HUB_DOOR_WEST]
+	local greenhouseHatch = part(hab, "GreenhouseHatch", Vector3.new(9, 10.5, 0.4), westSeg.cf * CFrame.new(0, 0.5 + 5.25, 0), {
 		color = Color3.fromRGB(205, 236, 232),
 		material = Enum.Material.Glass,
 		transparency = 0.6,
 		shadow = false,
 	})
-	local hatchFrame: Style = { color = ACCENT_SECRET, material = Enum.Material.SmoothPlastic } -- magenta = greenhouse
-	box(hab, "HatchFrame", v(-28, 0.5, -4.8), v(-27.4, 10.8, -4), hatchFrame)
-	box(hab, "HatchFrame", v(-28, 0.5, 4), v(-27.4, 10.8, 4.8), hatchFrame)
-	box(hab, "HatchFrame", v(-28, 10, -4), v(-27.4, 10.8, 4), hatchFrame)
-	windowWall(hab, "WallEast", v(28, 0, -18), v(30, 18, 18), 3, hull)
-	-- Doorway 10 wide x 12 tall so the default camera follows a player through without entering a wall.
-	local doorHalf, doorTop = 5, 12
-	windowWall(hab, "WallFrontWest", v(-30, 0, 18), v(-doorHalf, 18, 20), 2, hull)
-	windowWall(hab, "WallFrontEast", v(doorHalf, 0, 18), v(30, 18, 20), 2, hull)
-	box(hab, "Lintel", v(-doorHalf, doorTop, 18), v(doorHalf, 18, 20), hull)
-	box(hab, "Roof", v(-31, 18, -21), v(31, 19.5, 21), { color = Color3.fromRGB(205, 208, 214), material = Enum.Material.SmoothPlastic })
+	local hatchFrame: Style = { color = ACCENT_SECRET, material = Enum.Material.SmoothPlastic, shadow = false } -- magenta = greenhouse
+	local inner = HUB_WALL / 2 + 0.3
+	for _, side in { -1, 1 } do
+		part(hab, "HatchFrame", Vector3.new(0.6, 11.3, 0.6), westSeg.cf * CFrame.new(side * 4.8, 5.65, inner), hatchFrame)
+	end
+	part(hab, "HatchFrame", Vector3.new(10.2, 0.6, 0.6), westSeg.cf * CFrame.new(0, 11.3, inner), hatchFrame)
 
-	-- Orange trim band and roof gear.
-	local trim: Style = { color = HULL_TRIM, material = Enum.Material.SmoothPlastic }
-	box(hab, "Trim", v(-30.2, 15, -20.2), v(30.2, 16, -20), trim)
-	box(hab, "Trim", v(-30.2, 15, 20), v(30.2, 16, 20.2), trim)
-	box(hab, "Trim", v(-30.2, 15, -20), v(-30, 16, 20), trim)
-	box(hab, "Trim", v(30, 15, -20), v(30.2, 16, 20), trim)
-	box(hab, "Radiator", v(-22, 19.5, -14), v(-6, 20.1, 14), { color = Color3.fromRGB(235, 236, 240), material = Enum.Material.Metal })
-	vcylinder(hab, "RoofMast", 6, 0.5, v(16, 22.5, -10), { color = METAL, material = Enum.Material.Metal })
-	local beacon = ball(hab, "RoofBeacon", 1.2, v(16, 25.8, -10), { color = ACCENT_SYSTEM, material = Enum.Material.Neon })
-	pointLight(beacon, ACCENT_SYSTEM, 10, 1, false)
-
-	-- Doorway frame and lamp.
-	local frame: Style = { color = ACCENT_SYSTEM, material = Enum.Material.SmoothPlastic } -- cyan = guidance
-	box(hab, "DoorFrame", v(-doorHalf - 0.8, 0, 20), v(-doorHalf, doorTop + 0.8, 20.6), frame)
-	box(hab, "DoorFrame", v(doorHalf, 0, 20), v(doorHalf + 0.8, doorTop + 0.8, 20.6), frame)
-	box(hab, "DoorFrame", v(-doorHalf, doorTop, 20), v(doorHalf, doorTop + 0.8, 20.6), frame)
-	local doorLamp = box(hab, "DoorLamp", v(-1.5, doorTop + 1.2, 20), v(1.5, doorTop + 1.7, 20.8), {
-		color = Color3.fromRGB(255, 232, 190),
-		material = Enum.Material.Neon,
-	})
-	local spot = Instance.new("SpotLight")
-	spot.Face = Enum.NormalId.Bottom
-	spot.Range = 24
-	spot.Angle = 80
-	spot.Brightness = 2
-	spot.Color = Color3.fromRGB(255, 232, 200)
-	spot.Parent = doorLamp
-
-	-- Ceiling lights. Players spawn in here, so the room must be bright. Every interior light casts
-	-- shadows, so none of it leaks through the walls onto the ground outside.
+	-- Ceiling lights. Players spend the planning phase in here, so the room must be bright. Every
+	-- interior light casts shadows, so none of it leaks through the walls onto the ground outside.
 	for _, z in { -8, 8 } do
 		local strip = box(hab, "CeilingLight", v(-20, 17.4, z - 0.5), v(20, 18, z + 0.5), {
 			color = Color3.fromRGB(255, 240, 215),
@@ -1549,7 +1775,7 @@ local function buildHabitat(base: Instance): HabitatRefs
 
 	-- Water tank beside the processor: melted ice is stored here before the air maker splits it.
 	-- Its glass shows how much water the base has (World.setWaterLevel).
-	local tankCentre = v(25, 0, -15)
+	local tankCentre = o + S7.TANK_OFFSET
 	local tankHeight = 7
 	local tankDiameter = 3.6
 	local tankBottom = 1.5
@@ -1578,16 +1804,25 @@ local function buildHabitat(base: Instance): HabitatRefs
 	})
 	local waterLight = pointLight(waterFill, WATER_COLOUR, 9, 0.8, false)
 	-- Pipe from the tank to the processor, and a level light on the front (lime, orange, red).
-	cylinder(hab, "WaterPipe", 3, 0.6, CFrame.new(v(21.9, 7, -15)), { color = METAL, material = Enum.Material.Metal })
-	local gauge = box(hab, "WaterGauge", v(24.3, 2.6, -13.1), v(25.7, 3.4, -12.9), {
+	cylinder(hab, "WaterPipe", 2.6, 0.6, CFrame.new(tankCentre + Vector3.new(-2.9, 7, -0.5)), { color = METAL, material = Enum.Material.Metal })
+	local gaugeZ = tankCentre.Z + tankDiameter / 2 + 0.2
+	local gauge = box(hab, "WaterGauge", Vector3.new(tankCentre.X - 0.7, 2.6, gaugeZ - 0.1), Vector3.new(tankCentre.X + 0.7, 3.4, gaugeZ + 0.1), {
 		color = ACCENT_OK,
 		material = Enum.Material.Neon,
 		shadow = false,
 	})
-	-- Water sign on the solid wall above the window band.
-	local sign = box(hab, "WaterSign", v(24, 12, -18), v(26, 14, -17.8), {
+	-- Water sign hanging above the tank, facing the room.
+	local signZ = gaugeZ + 0.1
+	box(hab, "SignHanger", Vector3.new(tankCentre.X - 0.05, 14, signZ - 0.15), Vector3.new(tankCentre.X + 0.05, 18, signZ - 0.05), {
+		color = DARK_METAL,
+		material = Enum.Material.Metal,
+		collide = false,
+		shadow = false,
+	})
+	local sign = box(hab, "WaterSign", Vector3.new(tankCentre.X - 1, 12, signZ - 0.2), Vector3.new(tankCentre.X + 1, 14, signZ), {
 		color = PALETTE.night,
 		material = Enum.Material.SmoothPlastic,
+		collide = false,
 		shadow = false,
 	})
 	local signGui = Instance.new("SurfaceGui")
@@ -1604,20 +1839,20 @@ local function buildHabitat(base: Instance): HabitatRefs
 	signIcon.ImageColor3 = PALETTE.cyan
 	signIcon.Parent = signGui
 
-	-- Greenhouse rack under a grow light.
-	box(hab, "PlantRack", v(-7, 0.5, -17.8), v(7, 3, -15), { color = Color3.fromRGB(235, 235, 240), material = Enum.Material.SmoothPlastic })
+	-- Plant rack under a grow light (north-west, out of the way of the back door).
+	box(hab, "PlantRack", v(-24, 0.5, 11), v(-10, 3, 13.8), { color = Color3.fromRGB(235, 235, 240), material = Enum.Material.SmoothPlastic })
 	local rackPlants: { Part } = {}
 	for i = 0, 3 do
-		local x = -5.5 + i * 3.7
+		local x = -22.5 + i * 3.7
 		table.insert(
 			rackPlants,
-			box(hab, "Plant", v(x - 1.2, 3, -17.3), v(x + 1.2, 4.6, -15.5), {
+			box(hab, "Plant", v(x - 1.2, 3, 11.5), v(x + 1.2, 4.6, 13.3), {
 				color = PLANT_GREEN,
 				material = Enum.Material.Grass,
 			})
 		)
 	end
-	local grow = box(hab, "GrowLight", v(-7, 7.5, -17.4), v(7, 7.9, -15.4), {
+	local grow = box(hab, "GrowLight", v(-24, 7.5, 11.4), v(-10, 7.9, 13.4), {
 		color = GROW_PINK,
 		material = Enum.Material.Neon,
 		shadow = false,
@@ -1628,22 +1863,16 @@ local function buildHabitat(base: Instance): HabitatRefs
 	box(hab, "TableLeg", v(-1, 0.5, -5), v(1, 3, -3), { color = METAL, material = Enum.Material.Metal })
 	box(hab, "TableTop", v(-5, 3, -7), v(5, 3.4, -1), { color = Color3.fromRGB(235, 236, 240), material = Enum.Material.SmoothPlastic })
 
-	local spawnPad = Instance.new("SpawnLocation")
-	spawnPad.Neutral = true
-	spawnPad.Duration = 0
-	spawnPad.Enabled = true
-	spawnPad.AllowTeamChangeOnTouch = false
-	finish(spawnPad, hab, "BaseSpawn", Vector3.new(8, 0.4, 8), CFrame.new(v(0, 0.7, 8)), {
-		color = ACCENT_SYSTEM:Lerp(PALETTE.night, 0.35),
-		material = Enum.Material.SmoothPlastic,
-	})
-
 	-- Air pipe on the outer east wall, where the leak appears.
-	zcylinder(hab, "AirPipe", 24, 1.2, v(31, 4, 0), { color = METAL, material = Enum.Material.Metal })
-	local leakPart = box(hab, "AirPipeJoint", v(30, 3, 3), v(32.2, 5, 5), { color = METAL, material = Enum.Material.Metal })
+	local eastX = o.X + HUB_APOTHEM + HUB_WALL
+	zcylinder(hab, "AirPipe", 11, 1.2, Vector3.new(eastX + 1.2, 4, o.Z), { color = METAL, material = Enum.Material.Metal })
+	local leakPart = box(hab, "AirPipeJoint", Vector3.new(eastX, 3, o.Z + 3), Vector3.new(eastX + 2.4, 5, o.Z + 5), {
+		color = METAL,
+		material = Enum.Material.Metal,
+	})
 	local attachment = Instance.new("Attachment")
 	attachment.Name = "LeakVent"
-	attachment.Position = Vector3.new(1.1, 0, 0)
+	attachment.Position = Vector3.new(1.2, 0, 0)
 	attachment.Parent = leakPart
 	local gas = Instance.new("ParticleEmitter")
 	gas.Name = "LeakGas"
@@ -1674,10 +1903,10 @@ local function buildHabitat(base: Instance): HabitatRefs
 	leakLight.Enabled = false
 	local leakPrompt = makePrompt(leakPart, "prompt.repair", "Fix leak", 2)
 
-	local zonePart = zone(base, "HabitatZone", v(-28, 0.5, -18), v(28, 17.5, 18))
+	local zonePart = zone(base, "HabitatZone", v(-HUB_ZONE_HALF, 0.5, -HUB_ZONE_HALF), v(HUB_ZONE_HALF, 17.5, HUB_ZONE_HALF))
 
 	return {
-		spawn = spawnPad,
+		model = hab,
 		zone = zonePart,
 		console = console,
 		consolePrompt = consolePrompt,
@@ -1707,14 +1936,23 @@ local function buildHabitat(base: Instance): HabitatRefs
 			centre = tankCentre,
 			diameter = fillDiameter,
 		},
+		greenhouseHatch = greenhouseHatch,
 	}
 end
 
 ------------------------------------------------------------------------------------------------
--- Greenhouse module (glass, attached to the habitat's west wall)
+-- Greenhouse: glass domes linked to the hub by a walk-through tube
 ------------------------------------------------------------------------------------------------
 
-type GreenhouseRefs = { model: Model, strips: { Part }, stripLights: { PointLight }, plants: { Part }, centre: Vector3 }
+type GreenhouseRefs = {
+	model: Model, -- level 1: dome A and the tube from the hub's west doorway
+	model2: Model, -- level 2: dome B and the short tube from dome A
+	strips: { Part },
+	stripLights: { PointLight },
+	plants: { Part },
+	centre: Vector3,
+	foodPrompt: ProximityPrompt,
+}
 
 local GREENHOUSE_GLASS: Style = {
 	color = Color3.fromRGB(205, 236, 232),
@@ -1723,110 +1961,225 @@ local GREENHOUSE_GLASS: Style = {
 	shadow = false,
 }
 
-local function buildGreenhouse(base: Instance): GreenhouseRefs
-	local gh = model(base, "Greenhouse")
-	local o = HABITAT_CENTRE
-	local function v(x: number, y: number, z: number): Vector3
-		return o + Vector3.new(x, y, z)
-	end
-	-- Own random stream so the rest of the base keeps its layout.
-	local rng = Random.new(2015)
-	local x0, x1 = -44, -30 -- x1 is the habitat's outer west wall
-	local z0, z1 = -12, 12
-	local eaveY, ridgeY = 9, 12.5
-	local ridgeX = (x0 + x1) / 2
-	local halfSpan = (x1 - x0) / 2
-	local rise = ridgeY - eaveY
+-- A pressurized walk-through tube from a to b (ground points): an octagon of hull slats around an axis
+-- at TUBE_AXIS_Y with glass windows on the upper sides, a floor with cyan guide strips and a blue
+-- solar strip on top.
+function Geo.walkTube(parent: Instance, a: Vector3, b: Vector3)
+	local dir = flatUnit(b - a, Vector3.xAxis)
+	local length = (Vector3.new(b.X, 0, b.Z) - Vector3.new(a.X, 0, a.Z)).Magnitude
+	local mid = (a + b) / 2
+	local axis = Vector3.new(mid.X, TUBE_AXIS_Y, mid.Z)
+	local side = Vector3.new(-dir.Z, 0, dir.X)
 	local hull: Style = { color = WHITE_HULL, material = Enum.Material.SmoothPlastic }
-	local frame: Style = { color = METAL, material = Enum.Material.Metal }
-
-	box(gh, "Floor", v(x0, 0, z0), v(x1, 0.5, z1), { color = Color3.fromRGB(176, 180, 186), material = Enum.Material.DiamondPlate })
-	box(gh, "KerbWest", v(x0, 0.5, z0), v(x0 + 0.6, 2, z1), hull)
-	box(gh, "KerbSouth", v(x0 + 0.6, 0.5, z0), v(x1, 2, z0 + 0.6), hull)
-	box(gh, "KerbNorth", v(x0 + 0.6, 0.5, z1 - 0.6), v(x1, 2, z1), hull)
-	box(gh, "GlassWest", v(x0 + 0.1, 2, z0 + 0.6), v(x0 + 0.5, eaveY, z1 - 0.6), GREENHOUSE_GLASS)
-	box(gh, "GlassSouth", v(x0 + 0.6, 2, z0 + 0.1), v(x1, eaveY, z0 + 0.5), GREENHOUSE_GLASS)
-	box(gh, "GlassNorth", v(x0 + 0.6, 2, z1 - 0.5), v(x1, eaveY, z1 - 0.1), GREENHOUSE_GLASS)
-
-	local posts = {
-		Vector2.new(x0 + 0.3, z0 + 0.3),
-		Vector2.new(x0 + 0.3, z1 - 0.3),
-		Vector2.new(x0 + 0.3, -6),
-		Vector2.new(x0 + 0.3, 0),
-		Vector2.new(x0 + 0.3, 6),
-		Vector2.new(ridgeX, z0 + 0.3),
-		Vector2.new(ridgeX, z1 - 0.3),
-	}
-	for _, post in posts do
-		box(gh, "Post", v(post.X - 0.3, 0.5, post.Y - 0.3), v(post.X + 0.3, eaveY, post.Y + 0.3), frame)
-	end
-	box(gh, "Eave", v(x0, eaveY - 0.3, z0), v(x0 + 0.8, eaveY + 0.3, z1), frame)
-	box(gh, "WallTop", v(x0, eaveY - 0.3, z0), v(x1, eaveY + 0.3, z0 + 0.6), frame)
-	box(gh, "WallTop", v(x0, eaveY - 0.3, z1 - 0.6), v(x1, eaveY + 0.3, z1), frame)
-	box(gh, "RidgeBeam", v(ridgeX - 0.3, ridgeY - 0.2, z0), v(ridgeX + 0.3, ridgeY + 0.3, z1), frame)
-
-	-- Pitched glass roof and its two triangular gable ends.
-	local slopeLength = math.sqrt(halfSpan * halfSpan + rise * rise)
-	local tilt = math.atan2(rise, halfSpan)
-	local roofSize = Vector3.new(slopeLength, 0.3, z1 - z0)
-	part(gh, "RoofWest", roofSize, CFrame.new(v(x0 + halfSpan / 2, eaveY + rise / 2, 0)) * CFrame.Angles(0, 0, tilt), GREENHOUSE_GLASS)
-	part(gh, "RoofEast", roofSize, CFrame.new(v(x1 - halfSpan / 2, eaveY + rise / 2, 0)) * CFrame.Angles(0, 0, -tilt), GREENHOUSE_GLASS)
-	for _, gz in { z0 + 0.15, z1 - 0.15 } do
-		local westPos = v(x0 + halfSpan / 2, eaveY + rise / 2, gz)
-		wedge(gh, "Gable", Vector3.new(0.3, rise, halfSpan), CFrame.lookAt(westPos, westPos - Vector3.xAxis), GREENHOUSE_GLASS)
-		local eastPos = v(x1 - halfSpan / 2, eaveY + rise / 2, gz)
-		wedge(gh, "Gable", Vector3.new(0.3, rise, halfSpan), CFrame.lookAt(eastPos, eastPos + Vector3.xAxis), GREENHOUSE_GLASS)
-	end
-
-	-- Three planter rows, each under a hanging grow light.
-	local strips: { Part } = {}
-	local stripLights: { PointLight } = {}
-	local plants: { Part } = {}
-	local function roofHeightAt(x: number): number
-		return eaveY + rise * (1 - math.abs(x - ridgeX) / halfSpan)
-	end
-	for _, bx in { x0 + 3.2, ridgeX, x1 - 3.2 } do
-		box(gh, "Planter", v(bx - 1.3, 0.5, -10), v(bx + 1.3, 1.6, 10), {
-			color = Color3.fromRGB(236, 236, 240),
-			material = Enum.Material.SmoothPlastic,
-		})
-		box(gh, "Soil", v(bx - 1.1, 1.6, -9.8), v(bx + 1.1, 1.8, 9.8), {
-			color = Color3.fromRGB(92, 70, 52),
-			material = Enum.Material.Ground,
-		})
-		for i = 0, 5 do
-			local d = rng:NextNumber(1.5, 1.95)
-			local pz = -8.4 + i * 3.36 + rng:NextNumber(-0.3, 0.3)
-			table.insert(
-				plants,
-				ball(gh, "Plant", d, v(bx + rng:NextNumber(-0.2, 0.2), 1.8 + d * 0.32, pz), {
-					color = PLANT_GREEN,
-					material = Enum.Material.Grass,
-					collide = false,
-				})
-			)
+	local slatWidth = 2 * (TUBE_APOTHEM + 0.3) * math.tan(math.pi / 8) + 0.15
+	for k = 0, 7 do
+		if k == 4 then
+			continue -- the bottom side is the floor plate
 		end
-		local stripY = 7.6
-		local strip = box(gh, "GrowLight", v(bx - 0.35, stripY, -9.5), v(bx + 0.35, stripY + 0.3, 9.5), {
-			color = GROW_PINK,
-			material = Enum.Material.Neon,
+		local alpha = k * math.pi / 4
+		local normal = Vector3.yAxis * math.cos(alpha) + side * math.sin(alpha)
+		local tangent = Vector3.yAxis * -math.sin(alpha) + side * math.cos(alpha)
+		local centre = axis + normal * (TUBE_APOTHEM + 0.3)
+		local style = if k == 1 or k == 7 then GREENHOUSE_GLASS else hull
+		part(parent, "TubeShell", Vector3.new(length, slatWidth, 0.6), CFrame.fromMatrix(centre, dir, tangent), style)
+	end
+	part(parent, "TubeFloor", Vector3.new(length, 0.5, 10.6), CFrame.fromMatrix(Vector3.new(mid.X, 0.25, mid.Z), dir, Vector3.yAxis), {
+		color = Color3.fromRGB(176, 180, 186),
+		material = Enum.Material.DiamondPlate,
+	})
+	local guide: Style = { color = ACCENT_SYSTEM, material = Enum.Material.Neon, collide = false, shadow = false }
+	for _, s in { -4.6, 4.6 } do
+		part(parent, "TubeGuide", Vector3.new(length - 1, 0.06, 0.3), CFrame.fromMatrix(Vector3.new(mid.X, 0.53, mid.Z) + side * s, dir, Vector3.yAxis), guide)
+	end
+	part(parent, "TubeSolar", Vector3.new(length - 1, 0.15, 3.4), CFrame.fromMatrix(axis + Vector3.yAxis * (TUBE_APOTHEM + 0.7), dir, Vector3.yAxis), {
+		color = PANEL_CLEAN,
+		material = Enum.Material.Glass,
+		reflectance = 0.12,
+		collide = false,
+		shadow = false,
+	})
+	local lamp = part(parent, "TubeLight", Vector3.new(length - 4, 0.2, 0.8), CFrame.fromMatrix(axis + Vector3.yAxis * (TUBE_APOTHEM - 0.1), dir, Vector3.yAxis), {
+		color = Color3.fromRGB(255, 240, 215),
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	pointLight(lamp, INTERIOR_LIGHT, 14, 0.6, true)
+end
+
+-- Height of a dome's inside above its floor at horizontal distance d from its centre.
+function Geo.domeHeightAt(rx: number, ry: number, d: number): number
+	local t = math.clamp(d / rx, 0, 1)
+	return ry * math.sqrt(1 - t * t)
+end
+
+type PlanterRefs = { strips: { Part }, lights: { PointLight }, plants: { Part } }
+
+-- A planter row along world Z (x, from z0 to z1) on a dome floor, under a hanging grow light.
+function Geo.planterRow(parent: Instance, rng: Random, dome: Vector3, rx: number, ry: number, x: number, z0: number, z1: number, refs: PlanterRefs)
+	box(parent, "Planter", Vector3.new(x - 1.3, 0.5, z0), Vector3.new(x + 1.3, 1.6, z1), {
+		color = Color3.fromRGB(236, 236, 240),
+		material = Enum.Material.SmoothPlastic,
+	})
+	box(parent, "Soil", Vector3.new(x - 1.1, 1.6, z0 + 0.2), Vector3.new(x + 1.1, 1.8, z1 - 0.2), {
+		color = Color3.fromRGB(92, 70, 52),
+		material = Enum.Material.Ground,
+	})
+	local count = math.max(2, math.floor((z1 - z0) / 3.3))
+	for i = 0, count - 1 do
+		local d = rng:NextNumber(1.5, 1.95)
+		local pz = z0 + (i + 0.5) * (z1 - z0) / count + rng:NextNumber(-0.3, 0.3)
+		table.insert(
+			refs.plants,
+			ball(parent, "Plant", d, Vector3.new(x + rng:NextNumber(-0.2, 0.2), 1.8 + d * 0.32, pz), {
+				color = PLANT_GREEN,
+				material = Enum.Material.Grass,
+				collide = false,
+			})
+		)
+	end
+	local stripY = 7
+	local strip = box(parent, "GrowLight", Vector3.new(x - 0.35, stripY, z0 + 0.5), Vector3.new(x + 0.35, stripY + 0.3, z1 - 0.5), {
+		color = GROW_PINK,
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	table.insert(refs.strips, strip)
+	table.insert(refs.lights, pointLight(strip, GROW_PINK, GROW_RANGE[3], GROW_BRIGHTNESS[3], false))
+	for _, hz in { z0 + 2, z1 - 2 } do
+		local d = (Vector3.new(x, 0, hz) - Vector3.new(dome.X, 0, dome.Z)).Magnitude
+		local top = math.max(stripY + 0.6, Geo.domeHeightAt(rx, ry, d) - 0.4)
+		box(parent, "Hanger", Vector3.new(x - 0.05, stripY + 0.3, hz - 0.05), Vector3.new(x + 0.05, top, hz + 0.05), {
+			color = DARK_METAL,
+			material = Enum.Material.Metal,
 			collide = false,
 			shadow = false,
 		})
-		table.insert(strips, strip)
-		table.insert(stripLights, pointLight(strip, GROW_PINK, GROW_RANGE[3], GROW_BRIGHTNESS[3], false))
-		local top = roofHeightAt(bx) - 0.1
-		for _, hz in { -6, 6 } do
-			box(gh, "Hanger", v(bx - 0.05, stripY + 0.3, hz - 0.05), v(bx + 0.05, top, hz + 0.05), {
-				color = DARK_METAL,
-				material = Enum.Material.Metal,
-				collide = false,
-				shadow = false,
-			})
+	end
+end
+
+local function buildGreenhouse(base: Instance): GreenhouseRefs
+	local gh = model(base, "Greenhouse")
+	local gh2 = model(base, "GreenhouseDome2")
+	-- Own random stream so the rest of the base keeps its layout.
+	local rng = Random.new(2015)
+	local refs: PlanterRefs = { strips = {}, lights = {}, plants = {} }
+	local metal: Style = { color = METAL, material = Enum.Material.Metal }
+	local floorStyle: Style = { color = Color3.fromRGB(176, 180, 186), material = Enum.Material.DiamondPlate }
+
+	-- Dome A and the walk-through tube from the hub's west doorway (along the hub's centre line).
+	local a = S7.GREENHOUSE_A
+	local lineZ = HABITAT_CENTRE.Z
+	local hubX = HABITAT_CENTRE.X - (HUB_APOTHEM + HUB_WALL / 2)
+	local entryX = a.X + math.sqrt(GREENHOUSE_A_RX * GREENHOUSE_A_RX - (lineZ - a.Z) * (lineZ - a.Z))
+	Geo.walkTube(gh, Vector3.new(hubX, 0, lineZ), Vector3.new(entryX - 3, 0, lineZ))
+	vcylinder(gh, "Floor", 0.5, GREENHOUSE_A_RX * 2, a + Vector3.new(0, 0.25, 0), floorStyle)
+	local entryAngle = math.atan2(entryX - a.X, lineZ - a.Z)
+	local segmentsA = 14
+	local _, capA = Geo.domeShell(gh, "DomeGlass", a, GREENHOUSE_A_RX, GREENHOUSE_A_RY, GREENHOUSE_GLASS, {
+		bands = 5,
+		segments = segmentsA,
+		thickness = 0.4,
+		rotation = entryAngle + math.pi / segmentsA,
+		capAngle = math.rad(75),
+		skip = Geo.domeDoorway(segmentsA, 4),
+		capStyle = metal,
+	})
+	ball(gh, "DomeBeacon", 0.9, capA.Position + Vector3.new(0, 0.6, 0), {
+		color = ACCENT_SECRET,
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	-- Planter rows; the third row is short so the path from the tube stays open.
+	Geo.planterRow(gh, rng, a, GREENHOUSE_A_RX, GREENHOUSE_A_RY, a.X - 8, a.Z - 9, a.Z + 9, refs)
+	Geo.planterRow(gh, rng, a, GREENHOUSE_A_RX, GREENHOUSE_A_RY, a.X - 3.5, a.Z - 9, a.Z + 9, refs)
+	Geo.planterRow(gh, rng, a, GREENHOUSE_A_RX, GREENHOUSE_A_RY, a.X + 1, a.Z - 1, a.Z + 9, refs)
+
+	-- Harvest table: fresh salad heads on a tray. Players pick food here (ToolService, BaseService).
+	local tableAt = a + Vector3.new(7, 0, 5)
+	for _, dx in { -1.6, 1.6 } do
+		for _, dz in { -0.9, 0.9 } do
+			box(gh, "TableLeg", tableAt + Vector3.new(dx - 0.15, 0.5, dz - 0.15), tableAt + Vector3.new(dx + 0.15, 3, dz + 0.15), metal)
 		end
 	end
+	box(gh, "HarvestTable", tableAt + Vector3.new(-2, 3, -1.2), tableAt + Vector3.new(2, 3.3, 1.2), {
+		color = Color3.fromRGB(236, 236, 240),
+		material = Enum.Material.SmoothPlastic,
+	})
+	local tray = box(gh, "HarvestTray", tableAt + Vector3.new(-1.5, 3.3, -0.8), tableAt + Vector3.new(1.5, 3.6, 0.8), {
+		color = ACCENT_OK,
+		material = Enum.Material.SmoothPlastic,
+		shadow = false,
+	})
+	for i, dx in { -0.9, 0, 0.9 } do
+		ball(gh, "Lettuce", 0.9 + i * 0.05, tableAt + Vector3.new(dx, 4, (i - 2) * 0.25), {
+			color = PLANT_GREEN:Lerp(ACCENT_OK, 0.3),
+			material = Enum.Material.Grass,
+			collide = false,
+			shadow = false,
+		})
+	end
+	local foodPrompt = Instance.new("ProximityPrompt")
+	foodPrompt.Name = "FoodPrompt"
+	foodPrompt.ActionText = "Pick food"
+	foodPrompt.ObjectText = ""
+	foodPrompt.HoldDuration = 0.5
+	foodPrompt.MaxActivationDistance = PROMPT_DISTANCE
+	foodPrompt.RequiresLineOfSight = false
+	foodPrompt.Enabled = false
+	foodPrompt:SetAttribute("TextKey", "prompt.pick_food")
+	foodPrompt.Parent = tray
+	-- A small nutrient tank by the wall (plants drink water too).
+	local tankAt = a + Vector3.new(-2, 0, -11)
+	vcylinder(gh, "NutrientTank", 4, 2.4, tankAt + Vector3.new(0, 2.5, 0), {
+		color = WATER_COLOUR,
+		material = Enum.Material.Glass,
+		transparency = 0.3,
+		shadow = false,
+	})
+	vcylinder(gh, "NutrientCap", 0.4, 2.8, tankAt + Vector3.new(0, 4.7, 0), metal)
 
-	return { model = gh, strips = strips, stripLights = stripLights, plants = plants, centre = v(ridgeX, 3, 0) }
+	-- Level 2: dome B north of dome A, joined by a short sealed tube (seen through the glass).
+	local b = S7.GREENHOUSE_B
+	vcylinder(gh2, "Floor", 0.5, GREENHOUSE_B_RX * 2, b + Vector3.new(0, 0.25, 0), floorStyle)
+	local _, capB = Geo.domeShell(gh2, "DomeGlass", b, GREENHOUSE_B_RX, GREENHOUSE_B_RY, GREENHOUSE_GLASS, {
+		bands = 5,
+		segments = 12,
+		thickness = 0.4,
+		capAngle = math.rad(75),
+		capStyle = metal,
+	})
+	ball(gh2, "DomeBeacon", 0.9, capB.Position + Vector3.new(0, 0.6, 0), {
+		color = ACCENT_SECRET,
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	Geo.planterRow(gh2, rng, b, GREENHOUSE_B_RX, GREENHOUSE_B_RY, b.X - 4, b.Z - 7, b.Z + 7, refs)
+	Geo.planterRow(gh2, rng, b, GREENHOUSE_B_RX, GREENHOUSE_B_RY, b.X + 3, b.Z - 7, b.Z + 7, refs)
+	local toB = flatUnit(b - a, Vector3.zAxis)
+	local linkA = a + toB * (GREENHOUSE_A_RX - 2) + Vector3.new(0, 4, 0)
+	local linkB = b - toB * (GREENHOUSE_B_RX - 2) + Vector3.new(0, 4, 0)
+	pipe(gh2, "LinkTube", linkA, linkB, 8, { color = WHITE_HULL, material = Enum.Material.SmoothPlastic })
+	for _, t in { 0.3, 0.7 } do
+		pipe(gh2, "LinkBand", linkA:Lerp(linkB, t) - toB * 0.3, linkA:Lerp(linkB, t) + toB * 0.3, 8.4, {
+			color = ACCENT_SECRET,
+			material = Enum.Material.SmoothPlastic,
+			shadow = false,
+		})
+	end
+
+	return {
+		model = gh,
+		model2 = gh2,
+		strips = refs.strips,
+		stripLights = refs.lights,
+		plants = refs.plants,
+		centre = a + Vector3.new(0, 3, 0),
+		foodPrompt = foodPrompt,
+	}
 end
 
 ------------------------------------------------------------------------------------------------
@@ -2009,11 +2362,29 @@ local function buildShelter(base: Instance): ShelterRefs
 		material = Enum.Material.Sand,
 		collide = false,
 	})
+	-- Stage 7 look: regolith bags piled around the foot of the mound and two lumps on top, so it reads
+	-- as a pile of Moon dirt (the shelter protects by its mass, not by power).
+	local bagRng = Random.new(1972)
+	local footR = math.sqrt(moundRadius * moundRadius - 12 * 12) + 0.6
+	for k = 1, 17 do -- leave the tunnel side (+Z) open
+		local angle = k * math.rad(20)
+		local n = dirFromAngle(angle)
+		local at = Vector3.new(o.X, 0.7, o.Z) + n * footR
+		cylinder(shelter, "RegolithBag", 5.6, 1.6, CFrame.lookAt(at, at + n), {
+			color = regolith(bagRng, 112, 6),
+			material = Enum.Material.Sand,
+			collide = false,
+			shadow = false,
+		})
+	end
+	for _, lump in { Vector3.new(-9, 13.5, -6), Vector3.new(8, 14.5, 4) } do
+		ball(shelter, "RegolithLump", 11, o + lump, { color = regolith(bagRng, 118, 5), material = Enum.Material.Sand, collide = false })
+	end
 	local ringR = 26
-	local ringSegments = 20
-	local stepAngle = math.rad(360 / ringSegments)
+	local ringCount = 20
+	local stepAngle = math.rad(360 / ringCount)
 	local ringWidth = 2 * ringR * math.tan(stepAngle / 2) + 0.2
-	for k = 1, ringSegments - 1 do -- k = 0 points along +Z where the tunnel leaves the mound
+	for k = 1, ringCount - 1 do -- k = 0 points along +Z where the tunnel leaves the mound
 		local n = dirFromAngle(k * stepAngle)
 		local pos = Vector3.new(o.X, 11, o.Z) + n * ringR
 		local blocker = Instance.new("Part")
@@ -2036,9 +2407,16 @@ end
 -- Solar arrays and antenna
 ------------------------------------------------------------------------------------------------
 
-type ArrayVisual = { panel: Part, lines: { Part } }
--- Each array turns around its mast to follow the Sun as it circles the horizon.
+type ArrayVisual = { panels: { Part }, lines: { Part } }
+-- Each panel section turns around its mast to follow the Sun as it circles the horizon.
 type ArrayTrack = { panel: BasePart, pivot: Vector3, offset: CFrame, baseAngle: number, yaw: number }
+
+-- Stage 7 look: the arrays stand in tidy rows on the ridge top. Array i (solar build level i) is one
+-- row of ARRAY_SECTIONS panel sections; each section tracks the Sun on its own mast. The middle
+-- section carries the cleaning prompt; a dusty array greys every section of its row.
+local ARRAY_SECTIONS = 3
+local ARRAY_SECTION_SPACING = 15 -- along a row (world X); a panel needs 12 to turn
+local ARRAY_ROW_SPACING = 14 -- between rows (world Z)
 
 local function buildArrays(base: Instance, data: any): ({ ArrayRef }, { ArrayVisual }, { ArrayTrack })
 	local arraysFolder = folder(base, "SolarArrays")
@@ -2046,50 +2424,79 @@ local function buildArrays(base: Instance, data: any): ({ ArrayRef }, { ArrayVis
 	local sunH = flatUnit(sun, Vector3.new(0, 0, -1))
 	local face = if sun.Y > 0 then sun else sunH
 	face = Vector3.new(face.X, math.clamp(face.Y, 0, math.sin(math.rad(30))), face.Z).Unit
-	local perp = Vector3.new(-sunH.Z, 0, sunH.X)
 	local count: number = data.POWER.ARRAYS
-	local spacing = if count > 1 then math.min(16, 44 / (count - 1)) else 0
-	local centre = Vector3.new(RIDGE_CENTRE.X - 2, RIDGE_TOP_Y, RIDGE_CENTRE.Z)
+	local centre = Vector3.new(RIDGE_CENTRE.X - 6, RIDGE_TOP_Y, RIDGE_CENTRE.Z)
 
 	local refs: { ArrayRef } = {}
 	local visuals: { ArrayVisual } = {}
 	local tracks: { ArrayTrack } = {}
 	local baseAngle = math.atan2(sunH.X, sunH.Z)
+	local lineStyle: Style = { color = Color3.fromRGB(190, 195, 205), material = Enum.Material.Metal, collide = false, shadow = false }
 	for i = 1, count do
 		local m = model(arraysFolder, "SolarArray" .. i)
-		local footPos = centre + perp * ((i - (count + 1) / 2) * spacing)
-		box(m, "Foot", footPos + Vector3.new(-1.5, 0, -1.5), footPos + Vector3.new(1.5, 0.6, 1.5), {
+		local rowZ = centre.Z + (i - (count + 1) / 2) * ARRAY_ROW_SPACING
+		local visual: ArrayVisual = { panels = {}, lines = {} }
+		local mainPanel: Part? = nil
+		local mainPrompt: ProximityPrompt? = nil
+		local firstX, lastX = math.huge, -math.huge
+		for s = 1, ARRAY_SECTIONS do
+			local footPos = Vector3.new(centre.X + (s - (ARRAY_SECTIONS + 1) / 2) * ARRAY_SECTION_SPACING, centre.Y, rowZ)
+			firstX = math.min(firstX, footPos.X)
+			lastX = math.max(lastX, footPos.X)
+			box(m, "Foot", footPos + Vector3.new(-1.5, 0, -1.5), footPos + Vector3.new(1.5, 0.6, 1.5), {
+				color = DARK_METAL,
+				material = Enum.Material.Metal,
+			})
+			local panelCentre = footPos + Vector3.new(0, 6, 0)
+			local mast = vcylinder(m, "Mast", 6, 0.7, footPos - sunH * 0.6 + Vector3.new(0, 3, 0), { color = METAL, material = Enum.Material.Metal })
+			local panelCf = CFrame.lookAt(panelCentre, panelCentre + face)
+			local frame = part(m, "Frame", Vector3.new(12.6, 8.6, 0.3), panelCf * CFrame.new(0, 0, 0.35), { color = METAL, material = Enum.Material.Metal })
+			local panel = part(m, "Panel", Vector3.new(12, 8, 0.4), panelCf, {
+				color = PANEL_CLEAN,
+				material = Enum.Material.Glass,
+				reflectance = 0.1,
+			})
+			local lineH = part(m, "GridLine", Vector3.new(12, 0.15, 0.1), panelCf * CFrame.new(0, 0, -0.22), lineStyle)
+			local lineV = part(m, "GridLine", Vector3.new(0.15, 8, 0.1), panelCf * CFrame.new(0, 0, -0.22), lineStyle)
+			-- The panel stays the anchored root; mast, frame and grid lines turn with it.
+			weldTo(panel, { mast, frame, lineH, lineV })
+			table.insert(visual.panels, panel)
+			table.insert(visual.lines, lineH)
+			table.insert(visual.lines, lineV)
+			table.insert(tracks, {
+				panel = panel :: BasePart,
+				pivot = panelCentre,
+				offset = CFrame.new(-panelCentre) * panelCf,
+				baseAngle = baseAngle,
+				yaw = 0,
+			})
+			if s == math.ceil(ARRAY_SECTIONS / 2) then
+				local attachment = Instance.new("Attachment")
+				attachment.Name = "PromptPoint"
+				attachment.Position = Vector3.new(0, -3.6, -0.4)
+				attachment.Parent = panel
+				mainPanel = panel
+				mainPrompt = makePrompt(attachment, "prompt.clean", "Clean panel", 1.5)
+			end
+		end
+		-- A cable tray along the row and a power box at its end with a cyan status light.
+		box(m, "CableTray", Vector3.new(firstX, centre.Y, rowZ - 0.4), Vector3.new(lastX + 6, centre.Y + 0.35, rowZ + 0.4), {
 			color = DARK_METAL,
 			material = Enum.Material.Metal,
+			shadow = false,
 		})
-		local panelCentre = footPos + Vector3.new(0, 6, 0)
-		local mast = vcylinder(m, "Mast", 6, 0.7, footPos - sunH * 0.6 + Vector3.new(0, 3, 0), { color = METAL, material = Enum.Material.Metal })
-		local panelCf = CFrame.lookAt(panelCentre, panelCentre + face)
-		local frame = part(m, "Frame", Vector3.new(12.6, 8.6, 0.3), panelCf * CFrame.new(0, 0, 0.35), { color = METAL, material = Enum.Material.Metal })
-		local panel = part(m, "Panel", Vector3.new(12, 8, 0.4), panelCf, {
-			color = PANEL_CLEAN,
-			material = Enum.Material.Glass,
-			reflectance = 0.1,
+		box(m, "PowerBox", Vector3.new(lastX + 6, centre.Y, rowZ - 1), Vector3.new(lastX + 8, centre.Y + 2.4, rowZ + 1), {
+			color = WHITE_HULL,
+			material = Enum.Material.SmoothPlastic,
 		})
-		local lineStyle: Style = { color = Color3.fromRGB(190, 195, 205), material = Enum.Material.Metal, collide = false, shadow = false }
-		local lineH = part(m, "GridLine", Vector3.new(12, 0.15, 0.1), panelCf * CFrame.new(0, 0, -0.22), lineStyle)
-		local lineV = part(m, "GridLine", Vector3.new(0.15, 8, 0.1), panelCf * CFrame.new(0, 0, -0.22), lineStyle)
-		local attachment = Instance.new("Attachment")
-		attachment.Name = "PromptPoint"
-		attachment.Position = Vector3.new(0, -3.6, -0.4)
-		attachment.Parent = panel
-		local prompt = makePrompt(attachment, "prompt.clean", "Clean panel", 1.5)
-		-- The panel stays the anchored root; mast, frame and grid lines turn with it.
-		weldTo(panel, { mast, frame, lineH, lineV })
-		table.insert(refs, { model = m, panel = panel :: BasePart, prompt = prompt })
-		table.insert(visuals, { panel = panel, lines = { lineH, lineV } })
-		table.insert(tracks, {
-			panel = panel :: BasePart,
-			pivot = panelCentre,
-			offset = CFrame.new(-panelCentre) * panelCf,
-			baseAngle = baseAngle,
-			yaw = 0,
+		box(m, "PowerLight", Vector3.new(lastX + 8, centre.Y + 1.6, rowZ - 0.4), Vector3.new(lastX + 8.15, centre.Y + 2.1, rowZ + 0.4), {
+			color = ACCENT_SYSTEM,
+			material = Enum.Material.Neon,
+			collide = false,
+			shadow = false,
 		})
+		table.insert(refs, { model = m, panel = mainPanel :: Part, prompt = mainPrompt :: ProximityPrompt })
+		table.insert(visuals, visual)
 	end
 	return refs, visuals, tracks
 end
@@ -2247,21 +2654,21 @@ local HIDDEN_FOLDER = "SBO_HiddenBuilds"
 type Keepout6 = { x: number, z: number, r: number }
 
 -- A point around the crater: angle (see dirFromAngle), distance from its centre, height.
-local function craterPoint(angle: number, radius: number, y: number): Vector3
+function Six.craterPoint(angle: number, radius: number, y: number): Vector3
 	return CRATER_CENTRE + dirFromAngle(angle) * radius + Vector3.new(0, y, 0)
 end
 
 -- Angle of the rim segment that hides the cheese niche (same rule as buildCrater: 36 segments).
-local function nicheAngle(rampAngle: number): number
+function Six.nicheAngle(rampAngle: number): number
 	local step = math.rad(10)
 	return (math.floor((rampAngle + CHEESE_NICHE_OFFSET) / step + 0.5) % 36) * step
 end
 
 -- The drills stand on the base's side of the crater, clear of the ramp, the cheese niche and the
 -- science rover's loop. Returns the angle of the middle drill.
-local function chooseDrillAngle(rampAngle: number): number
+function Six.chooseDrillAngle(rampAngle: number): number
 	local rover = roverSideAngle(rampAngle)
-	local niche = nicheAngle(rampAngle)
+	local niche = Six.nicheAngle(rampAngle)
 	local sign = if rover > math.pi then -1 else 1 -- try the side away from the rover first
 	for _, offset in { 0, 0.55, -0.55, 0.9, -0.9, 1.25, -1.25 } do
 		local angle = math.pi + offset * sign
@@ -2272,42 +2679,52 @@ local function chooseDrillAngle(rampAngle: number): number
 	return math.pi + 1.25 * sign
 end
 
--- Build pad spots: near each structure, beside (not on) the paths and doors.
-local function padSpots(drillAngle: number): { [string]: Vector3 }
+-- Build pad spots: near each structure, beside (not on) the paths and doors. The world sites (lab,
+-- garage, landing pad, ship) bring their own pad spots; these are the fallbacks.
+function Six.padSpots(drillAngle: number): { [string]: Vector3 }
 	return {
+		habitat = HABITAT_CENTRE + Vector3.new(-12, 0, -46), -- behind the hub, beside the path from the lander
 		solar = Vector3.new(RIDGE_CENTRE.X + 29, RIDGE_TOP_Y, RIDGE_CENTRE.Z + 11), -- ridge top, beside the ramp
 		greenhouse = HABITAT_CENTRE + Vector3.new(-37, 0, 18), -- in front of the greenhouse module
 		antenna = ANTENNA_BASE + Vector3.new(11, 0, -10), -- between the path and the tower
 		shelter = SHELTER_CENTRE + Vector3.new(13, 0, 35), -- beside the tunnel mouth
-		drill_1 = craterPoint(drillAngle - DRILL_SPREAD, DRILL_PAD_RADIUS, CRATER_RIM_Y), -- rim, above each drill
-		drill_2 = craterPoint(drillAngle + 0.09, DRILL_PAD_RADIUS, CRATER_RIM_Y), -- (next to the rim belt)
-		drill_3 = craterPoint(drillAngle + DRILL_SPREAD, DRILL_PAD_RADIUS, CRATER_RIM_Y),
-		cargo_bot = SILO_CENTRE + Vector3.new(-14, 0, 2), -- beside the silo and the robot's dock
+		drill_1 = Six.craterPoint(drillAngle - DRILL_SPREAD, DRILL_PAD_RADIUS, CRATER_RIM_Y), -- rim, above each drill
+		drill_2 = Six.craterPoint(drillAngle + 0.09, DRILL_PAD_RADIUS, CRATER_RIM_Y), -- (next to the rim belt)
+		drill_3 = Six.craterPoint(drillAngle + DRILL_SPREAD, DRILL_PAD_RADIUS, CRATER_RIM_Y),
+		cargo_bot = SILO_CENTRE + Vector3.new(2, 0, -19), -- behind the silo, off the robot's route
+		lab = S7.LAB_CENTRE + Vector3.new(18, 0, -16),
+		garage = S7.GARAGE_CENTRE + Vector3.new(-26, 0, -22),
+		landing_pad = S7.LANDING_PAD_CENTRE + Vector3.new(36, 0, 14),
+		ship = S7.LANDING_PAD_CENTRE + Vector3.new(36, 0, -6),
 	}
 end
 
--- The cargo robot's route from its dock by the silo to the conveyor's foot at the crater: behind the
--- habitat, past the greenhouse, out to the crater, then around it on flat ground (r = 140).
-local function cargoRoutePoints(drillAngle: number): { Vector3 }
+-- The cargo robot's route from its dock by the silo to the conveyor's foot at the crater: east of
+-- the hub, through the gap between the crawl-space vent and the shelter mound, out to the crater, then
+-- around it on flat ground (r = 140). (Stage 7: the lab now stands west of the hub.)
+function Six.cargoRoutePoints(drillAngle: number): { Vector3 }
 	local y = CARGO_RIDE_HEIGHT
 	local points: { Vector3 } = {
 		Vector3.new(CARGO_DOCK.X, y, CARGO_DOCK.Z),
-		Vector3.new(-48, y, -35),
-		Vector3.new(-50, y, 26),
+		Vector3.new(24, y, -42),
+		Vector3.new(38, y, -36),
+		Vector3.new(44.8, y, -24),
+		Vector3.new(46, y, -6),
+		Vector3.new(36, y, 40),
 	}
 	local arcRadius = 140
 	local steps = math.ceil(math.abs(drillAngle - math.pi) / 0.2)
 	for k = 0, steps do
 		local angle = if steps > 0 then math.pi + (drillAngle - math.pi) * k / steps else math.pi
-		table.insert(points, craterPoint(angle, arcRadius, y))
+		table.insert(points, Six.craterPoint(angle, arcRadius, y))
 	end
 	local outward = dirFromAngle(drillAngle)
 	local side = Vector3.new(-outward.Z, 0, outward.X)
-	table.insert(points, craterPoint(drillAngle, CONVEYOR_FOOT_RADIUS + 4.5, y) + side * 3.5)
+	table.insert(points, Six.craterPoint(drillAngle, CONVEYOR_FOOT_RADIUS + 4.5, y) + side * 3.5)
 	return points
 end
 
-local function keepoutsAlong(points: { Vector3 }, radius: number, spacing: number, into: { Keepout6 })
+function Six.keepoutsAlong(points: { Vector3 }, radius: number, spacing: number, into: { Keepout6 })
 	for i = 1, #points - 1 do
 		local a, b = points[i], points[i + 1]
 		local n = math.max(1, math.ceil((b - a).Magnitude / spacing))
@@ -2321,7 +2738,7 @@ end
 -- A path made of straight pieces, walked by distance.
 type Polyline = { points: { Vector3 }, lengths: { number }, total: number }
 
-local function polyline(points: { Vector3 }): Polyline
+function Six.polyline(points: { Vector3 }): Polyline
 	local lengths: { number } = {}
 	local total = 0
 	for i = 1, #points - 1 do
@@ -2333,7 +2750,7 @@ local function polyline(points: { Vector3 }): Polyline
 end
 
 -- Position and unit direction at `distance` along the path.
-local function alongPolyline(line: Polyline, distance: number): (Vector3, Vector3)
+function Six.alongPolyline(line: Polyline, distance: number): (Vector3, Vector3)
 	local d = math.clamp(distance, 0, line.total)
 	for i, length in line.lengths do
 		if d <= length or i == #line.lengths then
@@ -2352,9 +2769,9 @@ type DrillRefs = { model: Model, bits: { DrillBit } }
 
 -- One automatic ice drill on the crater floor. Its lift belt carries the ice up the rim wall to
 -- `beltEnd`. Level 2 adds a taller rig and a second light, level 3 a second bit and a power pack.
-local function buildDrill(parent: Instance, index: number, angle: number, beltEnd: Vector3): DrillRefs
+function Six.buildDrill(parent: Instance, index: number, angle: number, beltEnd: Vector3): DrillRefs
 	local m = model(parent, "IceDrill" .. index)
-	local floorPos = craterPoint(angle, DRILL_FLOOR_RADIUS, CRATER_FLOOR_Y)
+	local floorPos = Six.craterPoint(angle, DRILL_FLOOR_RADIUS, CRATER_FLOOR_Y)
 	local cf = CFrame.lookAt(floorPos, floorPos + dirFromAngle(angle)) -- local -Z faces the rim wall
 	local function at(x: number, y: number, z: number): CFrame
 		return cf * CFrame.new(x, y, z)
@@ -2443,28 +2860,28 @@ type ConveyorRefs = { model: Model, cubes: { BasePart }, cubeLine: Polyline, pip
 
 -- The rim hopper, the open belt over the rim and down its outer slope, and the half-buried ice pipe
 -- from there to the silo behind the habitat (it runs under the habitat floor).
-local function buildConveyor(base: Instance, angle: number): ConveyorRefs
+function Six.buildConveyor(base: Instance, angle: number): ConveyorRefs
 	local m = model(base, "IceConveyor")
 	local outward = dirFromAngle(angle)
 	local dark: Style = { color = DARK_METAL, material = Enum.Material.Metal }
 	local beltStyle: Style = { color = DARK_METAL, material = Enum.Material.Metal, collide = false }
 	local stripe: Style = { color = ACCENT_SYSTEM, material = Enum.Material.Neon, collide = false, shadow = false }
 
-	local hopperPos = craterPoint(angle, HOPPER_RADIUS, CRATER_RIM_Y + 1.3)
+	local hopperPos = Six.craterPoint(angle, HOPPER_RADIUS, CRATER_RIM_Y + 1.3)
 	part(m, "RimHopper", Vector3.new(3.4, 2.6, 3.4), CFrame.lookAt(hopperPos, hopperPos + outward), dark)
 	local trimPos = hopperPos + Vector3.new(0, 0.95, 0)
 	part(m, "RimHopperTrim", Vector3.new(3.5, 0.35, 3.5), CFrame.lookAt(trimPos, trimPos + outward), stripe)
 
-	local a = craterPoint(angle, HOPPER_RADIUS + 1.7, CRATER_RIM_Y + 0.2)
-	local b = craterPoint(angle, 100, CRATER_RIM_Y + 0.2)
-	local c = craterPoint(angle, 116.5, 0.2)
+	local a = Six.craterPoint(angle, HOPPER_RADIUS + 1.7, CRATER_RIM_Y + 0.2)
+	local b = Six.craterPoint(angle, 100, CRATER_RIM_Y + 0.2)
+	local c = Six.craterPoint(angle, 116.5, 0.2)
 	local up = Vector3.new(0, 0.22, 0)
 	belt(m, "RimBelt", a, b, 2, 0.4, beltStyle)
 	belt(m, "SlopeBelt", b, c, 2, 0.4, beltStyle)
 	belt(m, "BeltStripe", a + up, b + up, 0.3, 0.05, stripe)
 	belt(m, "BeltStripe", b + up, c + up, 0.3, 0.05, stripe)
 
-	local foot = craterPoint(angle, CONVEYOR_FOOT_RADIUS, 0)
+	local foot = Six.craterPoint(angle, CONVEYOR_FOOT_RADIUS, 0)
 	local inletPos = foot + Vector3.new(0, 0.7, 0)
 	part(m, "PipeInlet", Vector3.new(1.8, 1.4, 1.8), CFrame.lookAt(inletPos, inletPos + outward), dark)
 	local towardFoot = flatUnit(foot - SILO_CENTRE, Vector3.zAxis)
@@ -2478,10 +2895,10 @@ local function buildConveyor(base: Instance, angle: number): ConveyorRefs
 
 	-- Ice cubes riding the open belt (a small pool, moved only while someone is near).
 	local lift = Vector3.new(0, 0.65, 0)
-	local cubeLine = polyline({ a + lift, b + lift, c + lift })
+	local cubeLine = Six.polyline({ a + lift, b + lift, c + lift })
 	local cubes: { BasePart } = {}
 	for k = 1, ICE_CUBE_COUNT do
-		local position, dir = alongPolyline(cubeLine, (k - 1) * cubeLine.total / ICE_CUBE_COUNT)
+		local position, dir = Six.alongPolyline(cubeLine, (k - 1) * cubeLine.total / ICE_CUBE_COUNT)
 		table.insert(
 			cubes,
 			part(m, "IceCube", Vector3.new(0.9, 0.9, 0.9), CFrame.lookAt(position, position + dir), {
@@ -2508,7 +2925,7 @@ type SiloRefs = {
 
 -- The ice silo behind the habitat: a glass column that shows how much ice the drills have stored,
 -- a lift pipe from the conveyor, and a pipe through the back wall into the water tank.
-local function buildSilo(base: Instance, pipeEnd: Vector3): SiloRefs
+function Six.buildSilo(base: Instance, pipeEnd: Vector3): SiloRefs
 	local m = model(base, "IceSilo")
 	local c = SILO_CENTRE
 	local metal: Style = { color = METAL, material = Enum.Material.Metal }
@@ -2555,7 +2972,7 @@ local function buildSilo(base: Instance, pipeEnd: Vector3): SiloRefs
 	pipe(m, "IceLiftTop", liftAt + Vector3.new(0, top + 0.9, 0), c + Vector3.new(0, top + 0.9, 0), 0.8, metal)
 
 	-- Melted ice goes on to the water tank inside (habitat corner), through the back wall up high.
-	local tankTop = HABITAT_CENTRE + Vector3.new(25, 9.1, -15)
+	local tankTop = HABITAT_CENTRE + S7.TANK_OFFSET + Vector3.new(0, 9.1, 0)
 	local pipeY = 16.6
 	local pipeStyle: Style = { color = METAL, material = Enum.Material.Metal, collide = false, shadow = false }
 	local capTop = top + 0.8
@@ -2619,7 +3036,7 @@ end
 type CargoRefs = { model: Model, root: Part, load: Part, route: Polyline }
 
 -- The cargo robot: a small wheeled cart with an ice bin, parked at its dock by the silo.
-local function buildCargoBot(base: Instance, route: Polyline): CargoRefs
+function Six.buildCargoBot(base: Instance, route: Polyline): CargoRefs
 	local m = model(base, "CargoRobot")
 	local start = route.points[1]
 	local cf = CFrame.lookAt(start, start + flatUnit(route.points[2] - start, -Vector3.xAxis))
@@ -2662,7 +3079,7 @@ type PadRefs = { pad: Part, prompt: ProximityPrompt }
 -- A round glowing build pad with the structure's icon and a hold prompt. BaseService sets the
 -- prompt text and the pad attributes SBO_Level, SBO_Cost (nil at the top level) and SBO_Locked;
 -- the pad dims while locked and shrinks once the structure is at its top level.
-local function buildPad(parent: Instance, id: string, position: Vector3, icon: string): PadRefs
+function Six.buildPad(parent: Instance, id: string, position: Vector3, icon: string): PadRefs
 	local pad = vcylinder(parent, id, PAD_HEIGHT, PAD_DIAMETER, position + Vector3.new(0, PAD_HEIGHT / 2, 0), {
 		color = PALETTE.night,
 		material = Enum.Material.SmoothPlastic,
@@ -2725,7 +3142,7 @@ end
 
 -- Blueprint of a structure: the same shape in see-through cyan force field. Nothing in it works:
 -- no collisions, lights, prompts, GUIs, effects or joints; tiny parts and upgrade parts are left out.
-local function makeHologram(source: Instance, parent: Instance): Instance
+function Six.makeHologram(source: Instance, parent: Instance): Instance
 	local copy = source:Clone()
 	copy.Name = source.Name .. "Blueprint"
 	for _, item in copy:GetDescendants() do
@@ -2771,7 +3188,7 @@ local function makeHologram(source: Instance, parent: Instance): Instance
 end
 
 -- Anchored parts in these instances (and their descendants) that the rise-in animation may move.
-local function risableParts(roots: { Instance }): { BasePart }
+function Six.risableParts(roots: { Instance }): { BasePart }
 	local list: { BasePart } = {}
 	local function consider(item: Instance)
 		if item:IsA("BasePart") and item.Anchored and item:GetAttribute(NO_RISE_ATTRIBUTE) ~= true and not risingParts[item] then
@@ -2789,7 +3206,7 @@ end
 
 -- Lifts parts up out of the ground into place over RISE_SECONDS (CFrames sent at most every
 -- PULSE_UPDATE_SECONDS). onStep(offsetY) moves anything that has its own animation.
-local function riseIn(parts: { BasePart }, drop: number, onStep: ((offset: number) -> ())?, onDone: (() -> ())?)
+function Six.riseIn(parts: { BasePart }, drop: number, onStep: ((offset: number) -> ())?, onDone: (() -> ())?)
 	local finals: { CFrame } = table.create(#parts)
 	for i, p in parts do
 		finals[i] = p.CFrame
@@ -2834,7 +3251,7 @@ end
 
 -- Dust kicked up where something is built. With no air on the Moon, the dust flies out in arcs and
 -- falls straight back down instead of hanging in a cloud.
-local function dustPuff(parent: Instance, position: Vector3)
+function Six.dustPuff(parent: Instance, position: Vector3)
 	local holder = Instance.new("Part")
 	holder.Name = "BuildDust"
 	holder.Anchored = true
@@ -2866,7 +3283,7 @@ local function dustPuff(parent: Instance, position: Vector3)
 	end)
 end
 
-local function hiddenStore(): Folder
+function Six.hiddenStore(): Folder
 	local old = ServerStorage:FindFirstChild(HIDDEN_FOLDER)
 	if old then
 		old:Destroy()
@@ -2878,6 +3295,478 @@ local function hiddenStore(): Folder
 end
 
 ------------------------------------------------------------------------------------------------
+-- Stage 7: the arrival lander (spawn), ground tracks, building in steps, the carried crate
+------------------------------------------------------------------------------------------------
+
+type LanderRefs = {
+	model: Model,
+	spawn: SpawnLocation,
+	zone: Part,
+	cratePrompt: ProximityPrompt,
+	cratePosition: Vector3,
+	door: Vector3, -- ground point at the foot of the ramp
+}
+
+-- The lander the crew arrived in: a gold-foil descent stage on four legs with an engine bell, a round
+-- crew cabin with a hatch, a porch and a ramp down to the ground. Players spawn inside (its zone
+-- always counts as inside: suits refill there). The parts crates for every build wait on a pallet at
+-- its cargo bay, on the side facing the base. Built in the lander's own frame: -Z faces the hub.
+function Geo.buildLander(base: Instance): LanderRefs
+	local m = model(base, "Lander")
+	local lc = CFrame.lookAt(S7.LANDER_CENTRE, Vector3.new(HABITAT_CENTRE.X, S7.LANDER_CENTRE.Y, HABITAT_CENTRE.Z))
+	local function at(x: number, y: number, z: number): CFrame
+		return lc * CFrame.new(x, y, z)
+	end
+	local function upright(x: number, y: number, z: number): CFrame
+		return at(x, y, z) * CFrame.Angles(0, 0, math.rad(90))
+	end
+	local function lb(name: string, a: Vector3, b: Vector3, style: Style): Part
+		return Geo.framedBox(m, name, lc, a, b, style)
+	end
+	local foil: Style = { color = PALETTE.gold:Lerp(Color3.fromRGB(150, 110, 40), 0.35), material = Enum.Material.Foil }
+	local hull: Style = { color = WHITE_HULL, material = Enum.Material.SmoothPlastic }
+	local dark: Style = { color = DARK_METAL, material = Enum.Material.Metal }
+	local metal: Style = { color = METAL, material = Enum.Material.Metal }
+	local plate: Style = { color = Color3.fromRGB(150, 154, 160), material = Enum.Material.DiamondPlate }
+	local cyan: Style = { color = ACCENT_SYSTEM, material = Enum.Material.SmoothPlastic, collide = false, shadow = false }
+	local glow: Style = { color = ACCENT_SYSTEM, material = Enum.Material.Neon, collide = false, shadow = false }
+	local floorY = 10.6
+
+	-- The rocket exhaust blew the dust away when it landed: a darker swept patch inside a brighter ring.
+	cylinder(m, "BlastRing", 0.1, 72, upright(0, 0.05, 0), { color = Color3.fromRGB(150, 147, 141), material = Enum.Material.Sand, collide = false, shadow = false })
+	cylinder(m, "BlastZone", 0.1, 56, upright(0, 0.08, 0), { color = Color3.fromRGB(102, 100, 96), material = Enum.Material.Sand, collide = false, shadow = false })
+
+	-- Descent stage, deck and engine bell.
+	cylinder(m, "DescentStage", 6, 26, upright(0, 7, 0), foil)
+	cylinder(m, "Deck", 0.6, 27, upright(0, 10.3, 0), dark)
+	cylinder(m, "BottomPlate", 0.4, 24, upright(0, 3.8, 0), dark)
+	cylinder(m, "EngineThroat", 1.2, 4.5, upright(0, 3, 0), dark)
+	cylinder(m, "EngineBell", 1, 6, upright(0, 1.9, 0), dark)
+	cylinder(m, "EngineSkirt", 0.8, 7.5, upright(0, 1, 0), { color = Color3.fromRGB(58, 60, 66), material = Enum.Material.Metal })
+	for k = 0, 3 do
+		local angle = k * math.pi / 2
+		local d = Vector3.new(math.sin(angle), 0, math.cos(angle))
+		lb("Thruster", d * 13 + Vector3.new(-0.6, 8.2, -0.6), d * 13.6 + Vector3.new(0.6, 9.4, 0.6), dark)
+	end
+
+	-- Four legs with shock struts and round foot pads.
+	for k = 0, 3 do
+		local angle = math.pi / 4 + k * math.pi / 2
+		local d = Vector3.new(math.sin(angle), 0, math.cos(angle))
+		local top = (lc * CFrame.new(d * 12.5 + Vector3.new(0, 8, 0))).Position
+		local foot = (lc * CFrame.new(d * 19 + Vector3.new(0, 0.9, 0))).Position
+		pipe(m, "Leg", top, foot, 0.9, metal)
+		local strutTop = (lc * CFrame.new(d * 12 + Vector3.new(0, 4.5, 0))).Position
+		local strutFoot = (lc * CFrame.new(d * 18.4 + Vector3.new(0, 1.2, 0))).Position
+		pipe(m, "LegStrut", strutTop, strutFoot, 0.6, dark)
+		cylinder(m, "FootPad", 0.6, 3.6, upright(d.X * 19, 0.3, d.Z * 19), foil)
+	end
+
+	-- Crew cabin: ten wall segments (side windows, a blue solar band), a hatch facing the hub (k = 5).
+	local cabinFrame = lc * CFrame.new(0, floorY, 0)
+	local segments = Geo.ringSegments(cabinFrame, 11, 1.2, 10, 0)
+	local doorSeg = segments[6]
+	for _, seg in segments do
+		local k = seg.index
+		if k == 5 then
+			Geo.doorSegment(m, seg, 7, 8.6, 10, 1.2, hull)
+		elseif k == 2 or k == 3 or k == 7 or k == 8 then
+			Geo.windowSegment(m, seg, 10, 1.2, 4.2, 6.6, hull, GLASS)
+		else
+			part(m, "Wall", Vector3.new(seg.width, 10, 1.2), seg.cf * CFrame.new(0, 5, 0), hull)
+		end
+		if k ~= 5 then
+			part(m, "SolarBand", Vector3.new(seg.width - 0.5, 1.6, 0.2), seg.cf * CFrame.new(0, 8.4, -0.7), {
+				color = PANEL_CLEAN,
+				material = Enum.Material.Glass,
+				reflectance = 0.12,
+				collide = false,
+				shadow = false,
+			})
+		end
+	end
+	Geo.doorDressing(m, doorSeg, 7, 8.6, 1.2)
+	-- The hatch stands open: a door panel swung out on its hinge.
+	local hinge = at(-3.5, floorY + 4.3, -12.4)
+	part(m, "HatchDoor", Vector3.new(7, 8.6, 0.4), hinge * CFrame.Angles(0, math.rad(100), 0) * CFrame.new(3.5, 0, 0), {
+		color = WHITE_HULL,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+	})
+	cylinder(m, "CabinRoof", 0.8, 25, upright(0, floorY + 10.4, 0), { color = Color3.fromRGB(205, 208, 214), material = Enum.Material.SmoothPlastic })
+	local _, cabinCap = Geo.domeShell(m, "CabinDome", at(0, floorY + 10.8, 0).Position, 11.5, 5, hull, {
+		bands = 3,
+		segments = 10,
+		thickness = 0.6,
+		capAngle = math.rad(70),
+	})
+	local capTop = cabinCap.Position.Y + 0.3
+	local mastFoot = at(4, 0, 3).Position
+	vcylinder(m, "AntennaMast", 4, 0.35, Vector3.new(mastFoot.X, capTop + 1.5, mastFoot.Z), metal)
+	cylinder(m, "AntennaDish", 0.3, 2.6, CFrame.new(Vector3.new(mastFoot.X, capTop + 3.6, mastFoot.Z)) * CFrame.Angles(0, 0, math.rad(60)), {
+		color = WHITE_HULL,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+		shadow = false,
+	})
+	ball(m, "Beacon", 0.8, at(-3, 0, -2).Position + Vector3.new(0, capTop + 0.4, 0), glow)
+
+	-- Porch, rails and the ramp down to the ground (a wedge: low end away from the lander).
+	lb("Porch", Vector3.new(-4.5, floorY - 0.6, -16.6), Vector3.new(4.5, floorY, -11.4), plate)
+	for _, sx in { -4.3, 4.3 } do
+		lb("RailPost", Vector3.new(sx - 0.2, floorY, -16.6), Vector3.new(sx + 0.2, floorY + 3, -16.2), cyan)
+		lb("Rail", Vector3.new(sx - 0.2, floorY + 2.6, -16.6), Vector3.new(sx + 0.2, floorY + 3, -12.6), cyan)
+	end
+	wedge(m, "Ramp", Vector3.new(8, floorY, 20), at(0, floorY / 2, -26.6), plate)
+	for _, sx in { -4.2, 4.2 } do
+		belt(m, "RampRail", at(sx, floorY + 1.2, -16.6).Position, at(sx, 1.2, -36.4).Position, 0.25, 0.25, cyan)
+		for i = 1, 3 do
+			local z = -16.6 - i * 5
+			local y = floorY * (1 - (i * 5) / 20) + 0.15
+			part(m, "RampLight", Vector3.new(0.4, 0.2, 0.8), at(sx * 0.93, y, z), glow)
+		end
+	end
+
+	-- Inside: spawn pad, seats, a console, the suit station (suits refill in here), lockers, a light.
+	local spawnPad = Instance.new("SpawnLocation")
+	spawnPad.Neutral = true
+	spawnPad.Duration = 0
+	spawnPad.Enabled = true
+	spawnPad.AllowTeamChangeOnTouch = false
+	finish(spawnPad, m, "LanderSpawn", Vector3.new(6, 0.4, 6), at(0, floorY + 0.2, 3.5), {
+		color = ACCENT_SYSTEM:Lerp(PALETTE.night, 0.35),
+		material = Enum.Material.SmoothPlastic,
+	})
+	for _, sx in { -5.5, 5.5 } do
+		lb("Seat", Vector3.new(sx - 1.2, floorY, 5), Vector3.new(sx + 1.2, floorY + 1.6, 7.4), { color = PALETTE.nightLight, material = Enum.Material.Fabric })
+		lb("SeatBack", Vector3.new(sx - 1.2, floorY + 1.6, 7), Vector3.new(sx + 1.2, floorY + 4.6, 7.5), { color = PALETTE.nightLight, material = Enum.Material.Fabric })
+	end
+	lb("CabinConsole", Vector3.new(-8.5, floorY, -5), Vector3.new(-5.5, floorY + 2.8, -1), dark)
+	lb("CabinScreen", Vector3.new(-5.6, floorY + 2.8, -4.6), Vector3.new(-5.4, floorY + 4.6, -1.4), glow)
+	lb("SuitStation", Vector3.new(5.8, floorY, -6), Vector3.new(8.4, floorY + 5.4, -2.5), hull)
+	lb("SuitStationGlow", Vector3.new(5.6, floorY + 1.4, -5.5), Vector3.new(5.8, floorY + 4.9, -3), glow)
+	lb("Locker", Vector3.new(-3, floorY, 8.6), Vector3.new(3, floorY + 5.9, 10.2), metal)
+	lb("LockerStripe", Vector3.new(-3.05, floorY + 4.6, 8.5), Vector3.new(3.05, floorY + 5, 8.6), { color = ACCENT_WARNING, material = Enum.Material.SmoothPlastic, collide = false, shadow = false })
+	local cabinLight = lb("CabinLight", Vector3.new(-3, floorY + 9.5, -0.6), Vector3.new(3, floorY + 10, 0.6), {
+		color = Color3.fromRGB(255, 240, 215),
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	pointLight(cabinLight, INTERIOR_LIGHT, 16, 0.9, true)
+
+	-- Inside zone (rotated with the lander; WorldBuilder.isInZone handles that).
+	local zonePart = Instance.new("Part")
+	zonePart.Name = "LanderZone"
+	zonePart.Anchored = true
+	zonePart.CanCollide = false
+	zonePart.CanQuery = false
+	zonePart.CanTouch = false
+	zonePart.CastShadow = false
+	zonePart.Transparency = 1
+	zonePart.Size = Vector3.new(16, 9.4, 16)
+	zonePart.CFrame = at(0, floorY + 0.2 + 4.7, 0)
+	zonePart.Parent = base
+
+	-- Cargo bay: the parts crates on a pallet beside the ramp, a small crane arm and a floodlight.
+	local pallet = lb("DepotPallet", Vector3.new(10.5, 0, -24.5), Vector3.new(17.5, 0.6, -17.5), dark)
+	for _, cx in { 10.7, 17.3 } do
+		for _, cz in { -24.3, -17.7 } do
+			lb("DepotPost", Vector3.new(cx - 0.25, 0.6, cz - 0.25), Vector3.new(cx + 0.25, 6.6, cz + 0.25), metal)
+		end
+	end
+	lb("DepotBeam", Vector3.new(10.45, 6.6, -24.55), Vector3.new(17.55, 7.1, -24.05), metal)
+	lb("DepotBeam", Vector3.new(10.45, 6.6, -17.95), Vector3.new(17.55, 7.1, -17.45), metal)
+	local crateStyle: Style = { color = Color3.fromRGB(90, 96, 108), material = Enum.Material.Metal }
+	local crateStripe: Style = { color = ACCENT_SYSTEM, material = Enum.Material.SmoothPlastic, shadow = false }
+	local crateSpots = {
+		Vector3.new(12, 0.6, -23), Vector3.new(14.2, 0.6, -23), Vector3.new(16.2, 0.6, -21.6),
+		Vector3.new(12.4, 0.6, -20.4), Vector3.new(13.1, 2.6, -22.4), Vector3.new(15.4, 2.6, -21.8),
+	}
+	for i, spot in crateSpots do
+		local turn = CFrame.Angles(0, math.rad((i * 23) % 40 - 20), 0)
+		part(m, "PartsCrate", Vector3.new(1.9, 1.9, 1.9), at(spot.X, spot.Y + 0.95, spot.Z) * turn, crateStyle)
+		part(m, "CrateStripe", Vector3.new(1.95, 0.35, 1.95), at(spot.X, spot.Y + 1.3, spot.Z) * turn, crateStripe)
+	end
+	belt(m, "CraneArm", at(9, 9.6, -9).Position, at(14, 9.6, -21).Position, 0.6, 0.6, metal)
+	lb("CraneCable", Vector3.new(13.95, 6.6, -21.05), Vector3.new(14.05, 9.4, -20.95), { color = DARK_METAL, material = Enum.Material.Metal, collide = false, shadow = false })
+	local sign = part(m, "DepotSign", Vector3.new(2.4, 2.4, 0.2), at(14, 8.4, -24.7), {
+		color = PALETTE.night,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+		shadow = false,
+	})
+	local signGui = Instance.new("SurfaceGui")
+	signGui.Name = "CrateIcon"
+	signGui.Face = Enum.NormalId.Front
+	signGui.LightInfluence = 0
+	signGui.CanvasSize = Vector2.new(64, 64)
+	signGui.Parent = sign
+	local signIcon = Instance.new("ImageLabel")
+	signIcon.BackgroundTransparency = 1
+	signIcon.Size = UDim2.fromScale(0.8, 0.8)
+	signIcon.Position = UDim2.fromScale(0.1, 0.1)
+	signIcon.Image = Icons.crate
+	signIcon.ImageColor3 = ACCENT_SYSTEM
+	signIcon.Parent = signGui
+	local palletCentre = at(14, 0.6, -21).Position
+	local lampPos = at(19, 8, -26).Position
+	lb("FloodPole", Vector3.new(18.8, 0, -26.2), Vector3.new(19.2, 7.6, -25.8), metal)
+	local flood = part(m, "FloodLamp", Vector3.new(1.2, 0.8, 0.6), CFrame.lookAt(lampPos, palletCentre), {
+		color = Color3.fromRGB(255, 240, 215),
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	local floodLight = Instance.new("SpotLight")
+	floodLight.Face = Enum.NormalId.Front
+	floodLight.Range = 22
+	floodLight.Angle = 70
+	floodLight.Brightness = 1.4
+	floodLight.Color = Color3.fromRGB(255, 240, 215)
+	floodLight.Shadows = false
+	floodLight.Parent = flood
+
+	-- Take-a-crate prompt (BaseService gives the crate; it is always on).
+	local promptPoint = Instance.new("Attachment")
+	promptPoint.Name = "PromptPoint"
+	promptPoint.Position = Vector3.new(0, 2.4, 0)
+	promptPoint.Parent = pallet
+	local cratePrompt = Instance.new("ProximityPrompt")
+	cratePrompt.Name = "CratePrompt"
+	cratePrompt.ActionText = "Take parts"
+	cratePrompt.ObjectText = ""
+	cratePrompt.HoldDuration = 0.5
+	cratePrompt.MaxActivationDistance = PROMPT_DISTANCE
+	cratePrompt.RequiresLineOfSight = false
+	cratePrompt.Enabled = true
+	cratePrompt:SetAttribute("TextKey", "prompt.take_crate")
+	cratePrompt.Parent = promptPoint
+
+	for _, item in m:GetDescendants() do
+		if item:IsA("SpotLight") and item ~= floodLight then
+			item.Brightness = math.min(item.Brightness, 1.2)
+		end
+	end
+
+	return {
+		model = m,
+		spawn = spawnPad,
+		zone = zonePart,
+		cratePrompt = cratePrompt,
+		cratePosition = palletCentre,
+		door = at(0, 0, -38).Position,
+	}
+end
+
+-- Rover tracks on the ground between buildings: two dusty ruts along each path (no collisions).
+function Geo.buildTracks(base: Instance, paths: { { Vector3 } }, lightPaths: { [number]: boolean })
+	local tracks = folder(base, "Tracks")
+	local rut: Style = { color = Color3.fromRGB(100, 98, 94), material = Enum.Material.Sand, collide = false, shadow = false }
+	local pole: Style = { color = DARK_METAL, material = Enum.Material.Metal, shadow = false }
+	local cap: Style = { color = ACCENT_SYSTEM, material = Enum.Material.Neon, collide = false, shadow = false }
+	for index, points in paths do
+		local sinceLight = 0
+		for i = 1, #points - 1 do
+			local a = Vector3.new(points[i].X, 0.16, points[i].Z)
+			local b = Vector3.new(points[i + 1].X, 0.16, points[i + 1].Z)
+			local dir = flatUnit(b - a, Vector3.zAxis)
+			local side = Vector3.new(-dir.Z, 0, dir.X)
+			for _, s in { -1.9, 1.9 } do
+				belt(tracks, "Track", a + side * s, b + side * s, 1, 0.06, rut)
+			end
+			-- Small path lights beside the busy paths (neon caps, no light sources).
+			if lightPaths[index] then
+				local length = (b - a).Magnitude
+				local d = 24 - sinceLight
+				while d < length do
+					local spot = a + dir * d + side * 4.5
+					vcylinder(tracks, "PathLightPole", 2, 0.3, Vector3.new(spot.X, 1, spot.Z), pole)
+					box(tracks, "PathLight", Vector3.new(spot.X - 0.3, 2, spot.Z - 0.3), Vector3.new(spot.X + 0.3, 2.4, spot.Z + 0.3), cap)
+					d += 24
+				end
+				sinceLight = length - (d - 24)
+			end
+		end
+	end
+end
+
+-- Construction copy of a structure for a build in progress: the real look (colours and materials)
+-- with nothing that works (no collisions, lights, prompts, GUIs, effects, joints). Upgrade parts and
+-- invisible parts are left out. Returns the copy, its parts with their own transparency and their
+-- bottom height, and the copy's lowest and highest points.
+type CopyPart = { part: BasePart, alpha: number, bottom: number, shown: boolean }
+type ConstructionCopy = { instance: Instance, parts: { CopyPart }, minY: number, maxY: number, minV: Vector3, maxV: Vector3 }
+
+function Geo.makeConstructionCopy(source: Instance, parent: Instance): ConstructionCopy
+	local copy = source:Clone()
+	copy.Name = source.Name .. "Construction"
+	local parts: { CopyPart } = {}
+	local minV = Vector3.new(math.huge, math.huge, math.huge)
+	local maxV = -minV
+	local candidates: { Instance } = copy:GetDescendants()
+	table.insert(candidates, copy)
+	for _, item in candidates do
+		if item.Parent == nil and item ~= copy then
+			continue
+		end
+		if item:IsA("BasePart") then
+			local upgradeLevel = item:GetAttribute(UPGRADE_ATTRIBUTE)
+			local isUpgrade = type(upgradeLevel) == "number" and upgradeLevel > 1
+			local invisible = upgradeLevel == nil and item.Transparency >= 0.95
+			if isUpgrade or invisible then
+				item:Destroy()
+			else
+				item.Anchored = true
+				item.CanCollide = false
+				item.CanQuery = false
+				item.CanTouch = false
+				item.CastShadow = false
+				local lo, hi = Geo.partBounds(item)
+				minV = minV:Min(lo)
+				maxV = maxV:Max(hi)
+				table.insert(parts, { part = item, alpha = item.Transparency, bottom = lo.Y, shown = false })
+				item.Transparency = 1
+			end
+		elseif
+			item:IsA("Light")
+			or item:IsA("ProximityPrompt")
+			or item:IsA("ParticleEmitter")
+			or item:IsA("Beam")
+			or item:IsA("SurfaceGui")
+			or item:IsA("BillboardGui")
+			or item:IsA("Decal")
+			or item:IsA("JointInstance")
+			or item:IsA("WeldConstraint")
+			or item:IsA("Constraint")
+			or item:IsA("LuaSourceContainer")
+			or item:IsA("Sound")
+		then
+			item:Destroy()
+		end
+	end
+	copy.Parent = parent
+	if #parts == 0 then
+		minV, maxV = Vector3.zero, Vector3.zero
+	end
+	return { instance = copy, parts = parts, minY = minV.Y, maxY = maxV.Y, minV = minV, maxV = maxV }
+end
+
+-- Foundation outline of a build in progress: construction-orange strips around its footprint and a
+-- short post at each corner.
+function Geo.constructionOutline(parent: Instance, minV: Vector3, maxV: Vector3, y: number)
+	local tape: Style = { color = PALETTE.orange, material = Enum.Material.Neon, collide = false, shadow = false }
+	local post: Style = { color = DARK_METAL, material = Enum.Material.Metal, collide = false, shadow = false }
+	local x0, x1, z0, z1 = minV.X - 0.6, maxV.X + 0.6, minV.Z - 0.6, maxV.Z + 0.6
+	local w = 0.45
+	box(parent, "Outline", Vector3.new(x0, y, z0), Vector3.new(x1, y + 0.12, z0 + w), tape)
+	box(parent, "Outline", Vector3.new(x0, y, z1 - w), Vector3.new(x1, y + 0.12, z1), tape)
+	box(parent, "Outline", Vector3.new(x0, y, z0), Vector3.new(x0 + w, y + 0.12, z1), tape)
+	box(parent, "Outline", Vector3.new(x1 - w, y, z0), Vector3.new(x1, y + 0.12, z1), tape)
+	for _, cx in { x0, x1 } do
+		for _, cz in { z0, z1 } do
+			box(parent, "OutlinePost", Vector3.new(cx - 0.3, y, cz - 0.3), Vector3.new(cx + 0.3, y + 3, cz + 0.3), post)
+			box(parent, "OutlineTop", Vector3.new(cx - 0.35, y + 3, cz - 0.35), Vector3.new(cx + 0.35, y + 3.5, cz + 0.35), tape)
+		end
+	end
+end
+
+-- Fallback meteorite crater when WorldSites is missing: a dark bowl inside bright fresh ejecta with
+-- rays, a hot glowing rock and a scan prompt. No fiery streak: the Moon has no air to burn the rock.
+function Geo.fallbackImpact(impacts: Instance, position: Vector3): (Model, ProximityPrompt)
+	local m = Instance.new("Model")
+	m.Name = "Impact"
+	local ground = Vector3.new(position.X, 0, position.Z)
+	local flat = CFrame.Angles(0, 0, math.rad(90))
+	local fresh: Style = { color = Color3.fromRGB(196, 194, 188), material = Enum.Material.Sand, collide = false, shadow = false }
+	cylinder(m, "Ejecta", 0.12, 22, CFrame.new(ground + Vector3.new(0, 0.2, 0)) * flat, fresh)
+	cylinder(m, "Bowl", 0.14, 11, CFrame.new(ground + Vector3.new(0, 0.24, 0)) * flat, {
+		color = Color3.fromRGB(78, 76, 72),
+		material = Enum.Material.Sand,
+		collide = false,
+		shadow = false,
+	})
+	for k = 0, 5 do
+		local dir = dirFromAngle(k * math.pi / 3 + 0.3)
+		belt(m, "Ray", ground + dir * 9 + Vector3.new(0, 0.18, 0), ground + dir * (20 + k % 3 * 5) + Vector3.new(0, 0.18, 0), 1.4, 0.08, fresh)
+	end
+	local rock = ball(m, "HotRock", 2.2, ground + Vector3.new(0, 0.9, 0), {
+		color = PALETTE.orange,
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	local glowLight = pointLight(rock, PALETTE.orange, 14, 1.6, false)
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "ScanPrompt"
+	prompt.ActionText = "Scan"
+	prompt.ObjectText = ""
+	prompt.HoldDuration = 1.5
+	prompt.MaxActivationDistance = PROMPT_DISTANCE
+	prompt.RequiresLineOfSight = false
+	prompt.Enabled = true
+	prompt:SetAttribute("TextKey", "prompt.scan")
+	prompt.Parent = rock
+	m.PrimaryPart = rock
+	m.Parent = impacts
+	-- The flash when it hits, then dust that flies out and falls straight back down (no air).
+	glowLight.Brightness = 8
+	glowLight.Range = 40
+	TweenService:Create(glowLight, TweenInfo.new(1.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Brightness = 1.6, Range = 14 }):Play()
+	Six.dustPuff(m, ground)
+	return m, prompt
+end
+
+-- The parts crate a player carries from the lander to a build pad: a small Massless model welded in
+-- front of the character (no collisions, so it never trips anyone).
+function Geo.carriedCrate(character: Model, rootPart: BasePart)
+	local m = Instance.new("Model")
+	m.Name = CARRY_CRATE_NAME
+	local cf = rootPart.CFrame * CFrame.new(0, 0.2, -1.9)
+	local list: { BasePart } = {}
+	local function piece(name: string, size: Vector3, offset: CFrame, color: Color3, material: Enum.Material)
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Size = size
+		p.CFrame = cf * offset
+		p.Color = color
+		p.Material = material
+		p.Anchored = true
+		p.CanCollide = false
+		p.CanQuery = false
+		p.CanTouch = false
+		p.CastShadow = false
+		p.Massless = true
+		p.TopSurface = Enum.SurfaceType.Smooth
+		p.BottomSurface = Enum.SurfaceType.Smooth
+		p.Parent = m
+		table.insert(list, p)
+	end
+	piece("Crate", Vector3.new(2, 1.6, 1.6), CFrame.new(), Color3.fromRGB(90, 96, 108), Enum.Material.Metal)
+	piece("Stripe", Vector3.new(2.05, 0.3, 1.65), CFrame.new(0, 0.3, 0), ACCENT_SYSTEM, Enum.Material.SmoothPlastic)
+	piece("Lid", Vector3.new(1.8, 0.15, 1.4), CFrame.new(0, 0.85, 0), METAL, Enum.Material.Metal)
+	for _, x in { -1.08, 1.08 } do
+		piece("Handle", Vector3.new(0.15, 0.3, 0.9), CFrame.new(x, 0.1, 0), DARK_METAL, Enum.Material.Metal)
+	end
+	piece("Label", Vector3.new(0.7, 0.5, 0.05), CFrame.new(0, -0.25, -0.81), PALETTE.gold, Enum.Material.SmoothPlastic)
+	m.PrimaryPart = list[1]
+	m.Parent = character
+	for i = 2, #list do
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = list[1]
+		weld.Part1 = list[i]
+		weld.Parent = list[i]
+	end
+	local holdWeld = Instance.new("WeldConstraint")
+	holdWeld.Part0 = rootPart
+	holdWeld.Part1 = list[1]
+	holdWeld.Parent = list[1]
+	for _, p in list do
+		p.Anchored = false
+	end
+end
+
+------------------------------------------------------------------------------------------------
 -- Secrets: four hidden collectibles, the sealed observatory and the team flag
 ------------------------------------------------------------------------------------------------
 
@@ -2886,7 +3775,7 @@ end
 -- marker (players took the old magenta pebbles for a bug); magenta still means "secret" on the items.
 
 -- Cuts a rectangular hole (in X and Z) out of the ground tiles, keeping each tile's colour.
-local function carveGround(ground: Instance, x0: number, x1: number, z0: number, z1: number)
+function Secret.carveGround(ground: Instance, x0: number, x1: number, z0: number, z1: number)
 	for _, child in ground:GetChildren() do
 		if child:IsA("BasePart") then
 			local half = child.Size / 2
@@ -2915,13 +3804,13 @@ end
 
 -- mars_potato: a maintenance crawl space under the habitat. A vent hatch on the shelter side (east)
 -- opens onto a shaft; the room runs west under the habitat floor, out of sight of the hatch.
-local function buildCrawlSpace(base: Instance, ground: Instance): CFrame
+function Secret.buildCrawlSpace(base: Instance, ground: Instance): CFrame
 	local crawl = model(base, "CrawlSpace")
 	local o = HABITAT_CENTRE
 	local function v(x: number, y: number, z: number): Vector3
 		return o + Vector3.new(x, y, z)
 	end
-	carveGround(ground, o.X + 8, o.X + 42, o.Z - 24, o.Z - 8)
+	Secret.carveGround(ground, o.X + 8, o.X + 42, o.Z - 24, o.Z - 8)
 
 	-- Room: x 12..38, z -20..-12, floor at -12, ceiling at -4 (4 thick, then the habitat floor).
 	local fill: Style = { color = Color3.fromRGB(128, 124, 116), material = Enum.Material.Concrete }
@@ -2934,7 +3823,9 @@ local function buildCrawlSpace(base: Instance, ground: Instance): CFrame
 
 	-- Vent housing against the habitat's east wall. Its roof stays below the window band.
 	local hull: Style = { color = WHITE_HULL, material = Enum.Material.SmoothPlastic }
-	box(crawl, "VentHousing", v(30, 0, -12), v(42, 11, -8), hull)
+	box(crawl, "VentHousing", v(31, 0, -12), v(42, 11, -8), hull) -- starts at 31: the round hub wall
+	-- Stage 7: the hub is round, so this slab closes the shaft's west side (also before the hub stands).
+	box(crawl, "VentHousing", v(29.5, 0, -20), v(31, 11, -12), hull)
 	box(crawl, "VentHousing", v(30, 0, -24), v(42, 11, -20), hull)
 	box(crawl, "VentHousing", v(30, 7, -20), v(38, 11, -12), hull)
 	box(crawl, "VentHousing", v(38, 0, -20), v(42, 11, -19), hull)
@@ -2974,7 +3865,7 @@ end
 
 -- mini_earth: a rock spire behind the antenna. A chain of ledges on its far side leads up to a
 -- niche at height 24; the niche faces away from the base, the paths and the crater.
-local function buildLookoutRock(base: Instance): CFrame
+function Secret.buildLookoutRock(base: Instance): CFrame
 	local rockModel = model(base, "LookoutRock")
 	local rng = Random.new(1961)
 	local away = flatUnit(ANTENNA_BASE - HABITAT_CENTRE, Vector3.new(0, 0, 1))
@@ -3014,7 +3905,7 @@ end
 -- laika: a small lava tube (LRO has imaged pits that open into lunar lava tubes). A narrow crack in
 -- the hill's west cliff, hidden behind boulders, opens into a dark chamber. The dog sits in a
 -- corner that cannot be seen through the crack.
-local function buildLavaTube(base: Instance): CFrame
+function Secret.buildLavaTube(base: Instance): CFrame
 	local hill = model(base, "LavaTubeHill")
 	local rng = Random.new(2009)
 	local lo, hi = LAVA_TUBE_MIN, LAVA_TUBE_MAX
@@ -3061,7 +3952,7 @@ type ObservatoryRefs = { model: Model, door: Part }
 
 -- The observatory: a small sealed dome on a far hill. Its door only opens (on the client) for a
 -- player who found all four secrets. Inside, a telescope points at Mars and a sign shows the teaser.
-local function buildObservatory(base: Instance): ObservatoryRefs
+function Secret.buildObservatory(base: Instance): ObservatoryRefs
 	local obs = model(base, "Observatory")
 	-- Always streamed in, so a client can open the door as soon as it joins.
 	obs.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
@@ -3223,9 +4114,11 @@ local function buildObservatory(base: Instance): ObservatoryRefs
 end
 
 -- The team flag on the habitat roof (reward for the Mars potato). Built hidden, out of the world.
-local function buildTeamFlag(base: Instance): Model
+function Secret.buildTeamFlag(base: Instance): Model
 	local flag = model(base, "TeamFlag")
-	local foot = HABITAT_CENTRE + Vector3.new(24, 19.5, 12)
+	-- Stage 7: on the hub's dome (its surface height at this spot, a little sunk in).
+	local spot = Vector3.new(10, 0, 6)
+	local foot = HABITAT_CENTRE + spot + Vector3.new(0, HUB_ROOF_Y + Geo.domeHeightAt(HUB_DOME_RX, HUB_DOME_RY, spot.Magnitude) - 0.6, 0)
 	vcylinder(flag, "FlagPole", 12, 0.5, foot + Vector3.new(0, 6, 0), { color = METAL, material = Enum.Material.Metal })
 	ball(flag, "FlagTop", 0.9, foot + Vector3.new(0, 12.3, 0), {
 		color = ACCENT_OK,
@@ -3274,7 +4167,7 @@ local function uniform(d: number): Vector3
 	return Vector3.new(d, d, d)
 end
 
-local function shapesFor(id: string): { Shape }
+function Secret.shapesFor(id: string): { Shape }
 	local black = Color3.fromRGB(28, 28, 34)
 	if id == "mini_earth" then
 		local land = Color3.fromRGB(96, 160, 84)
@@ -3340,7 +4233,7 @@ end
 
 type CollectibleItem = { ref: CollectibleRef, root: Part, home: CFrame, phase: number }
 
-local function buildCollectible(parent: Instance, id: string, spot: CFrame, phase: number): CollectibleItem
+function Secret.buildCollectible(parent: Instance, id: string, spot: CFrame, phase: number): CollectibleItem
 	local m = model(parent, id)
 	m.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
 	m:SetAttribute("CollectibleId", id)
@@ -3361,7 +4254,7 @@ local function buildCollectible(parent: Instance, id: string, spot: CFrame, phas
 	m.PrimaryPart = root
 
 	local pieces: { BasePart } = {}
-	for i, s in shapesFor(id) do
+	for i, s in Secret.shapesFor(id) do
 		local p: BasePart
 		if s.kind == "wedge" then
 			p = Instance.new("WedgePart")
@@ -3619,7 +4512,7 @@ function WorldBuilder.build(data: any): World
 
 	risingParts = {}
 	extraKeepouts = {}
-	local hidden = hiddenStore()
+	local hidden = Six.hiddenStore()
 
 	local rng = Random.new(42)
 	local ground = buildGround(base, rng)
@@ -3629,22 +4522,160 @@ function WorldBuilder.build(data: any): World
 	buildRidge(base, rng)
 	local arrays, arrayVisuals, arrayTracks = buildArrays(base, data)
 	local antenna = buildAntenna(base)
+	local lander = Geo.buildLander(base)
 
 	-- Stage 6 layout first, so random boulders keep clear of the pipe, the robot's route and the pads.
-	local drillAngle = chooseDrillAngle(rampAngle)
-	local conveyorFoot = craterPoint(drillAngle, CONVEYOR_FOOT_RADIUS, 0)
-	local cargoPoints = cargoRoutePoints(drillAngle)
-	local pads = padSpots(drillAngle)
-	keepoutsAlong({ conveyorFoot, SILO_CENTRE }, 5, 12, extraKeepouts)
-	keepoutsAlong(cargoPoints, 6, 12, extraKeepouts)
+	local drillAngle = Six.chooseDrillAngle(rampAngle)
+	local conveyorFoot = Six.craterPoint(drillAngle, CONVEYOR_FOOT_RADIUS, 0)
+	local cargoPoints = Six.cargoRoutePoints(drillAngle)
+	local pads = Six.padSpots(drillAngle)
+	Six.keepoutsAlong({ conveyorFoot, SILO_CENTRE }, 5, 12, extraKeepouts)
+	Six.keepoutsAlong(cargoPoints, 6, 12, extraKeepouts)
 	table.insert(extraKeepouts, { x = SILO_CENTRE.X, z = SILO_CENTRE.Z, r = 9 })
+	-- Stage 7: the lander, the greenhouse domes and every world site keep their surroundings clear.
+	for _, keep in {
+		{ at = S7.LANDER_CENTRE, r = 45 },
+		{ at = S7.GREENHOUSE_A, r = GREENHOUSE_A_RX + 8 },
+		{ at = S7.GREENHOUSE_B, r = GREENHOUSE_B_RX + 8 },
+		{ at = S7.LAB_CENTRE, r = 32 },
+		{ at = S7.GARAGE_CENTRE, r = 42 },
+		{ at = S7.LANDING_PAD_CENTRE, r = 46 },
+	} do
+		table.insert(extraKeepouts, { x = keep.at.X, z = keep.at.Z, r = keep.r })
+	end
+	for _, spot in S7.SITE_SPOTS do
+		table.insert(extraKeepouts, { x = spot.X, z = spot.Z, r = 50 })
+	end
+
+	-- Stage 7: the world sites (lab, garage, landing pad, ship, exploration sites, meteorite craters)
+	-- live in WorldSites.luau. A missing or broken module never stops the world: those builds are
+	-- left out and a simple crater stands in for the meteorite event.
+	local sites: any = nil
+	local sitesHelpers = {
+		-- WorldSites calls onPart for every part it makes: the shared counter yields now and then.
+		onPart = function(_: BasePart)
+			counted()
+		end,
+		addKeepout = function(x: number, z: number, r: number)
+			table.insert(extraKeepouts, { x = x, z = z, r = r })
+		end,
+		isClear = isClear,
+		dustPuff = function(position: Vector3)
+			Six.dustPuff(base, position)
+		end,
+		theme = Theme,
+		icons = Icons,
+	}
+	local sitesModule = script.Parent:FindFirstChild("WorldSites")
+	if sitesModule and sitesModule:IsA("ModuleScript") then
+		local okRequire, loaded = pcall(function()
+			return (require :: any)(sitesModule)
+		end)
+		if okRequire and type(loaded) == "table" and type(loaded.build) == "function" then
+			local okBuild, result = pcall(loaded.build, base, sitesHelpers)
+			if okBuild and type(result) == "table" then
+				sites = result
+			else
+				warn(`[SpaceBaseOdyssey] WorldSites.build failed: {result}`)
+			end
+		else
+			warn(`[SpaceBaseOdyssey] WorldSites could not load: {loaded}`)
+		end
+	else
+		warn("[SpaceBaseOdyssey] WorldSites module missing: no lab, garage, landing pad or ship")
+	end
+	if sites and type(sites.keepouts) == "table" then
+		for _, keep in sites.keepouts do
+			if type(keep) == "table" and type(keep.x) == "number" and type(keep.z) == "number" and type(keep.r) == "number" then
+				table.insert(extraKeepouts, { x = keep.x, z = keep.z, r = keep.r })
+			end
+		end
+	end
+	local siteBuilds: { [string]: { model: Instance, padPosition: Vector3? } } = {}
+	if sites and type(sites.builds) == "table" then
+		for _, id in { "lab", "garage", "landing_pad", "ship" } do
+			local entry = sites.builds[id]
+			if type(entry) == "table" and typeof(entry.model) == "Instance" then
+				local padPosition = if typeof(entry.padPosition) == "Vector3" then entry.padPosition else nil
+				siteBuilds[id] = { model = entry.model, padPosition = padPosition }
+				if padPosition then
+					pads[id] = padPosition
+				end
+			end
+		end
+	end
+	for id in pads do
+		if (id == "lab" or id == "garage" or id == "landing_pad" or id == "ship") and siteBuilds[id] == nil then
+			pads[id] = nil -- no structure, no pad
+		end
+	end
 	for _, spot in pads do
 		table.insert(extraKeepouts, { x = spot.X, z = spot.Z, r = 7 })
+	end
+	-- Rover tracks between the buildings: lander -> hub, hub -> crater, garage, shelter, lander ->
+	-- landing pad, hub -> ridge ramp (past the lab).
+	local trackPaths: { { Vector3 } } = {
+		{ lander.door, Vector3.new(8, 0, -60), HABITAT_CENTRE + Vector3.new(0, 0, -38) },
+		{ HABITAT_CENTRE + Vector3.new(0, 0, 38), Vector3.new(8, 0, 60), Vector3.new(8, 0, 108) },
+		{ HABITAT_CENTRE + Vector3.new(10, 0, 44), Vector3.new(60, 0, 62), S7.GARAGE_CENTRE + Vector3.new(-26, 0, 0) },
+		{ HABITAT_CENTRE + Vector3.new(14, 0, 37), Vector3.new(45, 0, 16), SHELTER_CENTRE + Vector3.new(0, 0, 36) },
+		{ lander.door, S7.LANDING_PAD_CENTRE + flatUnit(HABITAT_CENTRE - S7.LANDING_PAD_CENTRE, Vector3.zAxis) * 44 },
+		{ HABITAT_CENTRE + Vector3.new(-4, 0, -40), Vector3.new(-30, 0, -60), Vector3.new(-78, 0, -66), Vector3.new(-92, 0, -60) },
+	}
+	for _, path in trackPaths do
+		Six.keepoutsAlong(path, 6, 12, extraKeepouts)
 	end
 
 	buildDecor(base, rng)
 	local greenhouse = buildGreenhouse(base)
 	local rover = buildRover(base, rampAngle)
+
+	-- The tube corridor from the hub to the lab's docking collar (shown with the lab). Without a dock
+	-- from WorldSites it stops LAB_TUBE_INSET from the lab centre.
+	local labTube: Model? = nil
+	if siteBuilds.lab then
+		local tube = model(base, "LabTube")
+		local dockCf = if sites and typeof(sites.labDock) == "CFrame" then sites.labDock :: CFrame else nil
+		local tubeY = 4.6
+		local diameter = 9
+		local to: Vector3
+		if dockCf then
+			tubeY = dockCf.Position.Y
+			diameter = 7.4
+			to = dockCf.Position
+		else
+			local toLab = flatUnit(S7.LAB_CENTRE - HABITAT_CENTRE, -Vector3.xAxis)
+			local labDistance = (Vector3.new(S7.LAB_CENTRE.X, 0, S7.LAB_CENTRE.Z) - Vector3.new(HABITAT_CENTRE.X, 0, HABITAT_CENTRE.Z)).Magnitude
+			to = HABITAT_CENTRE + toLab * (labDistance - LAB_TUBE_INSET) + Vector3.new(0, tubeY, 0)
+		end
+		local toLab = flatUnit(to - HABITAT_CENTRE, -Vector3.xAxis)
+		local from = HABITAT_CENTRE + toLab * (HUB_APOTHEM + 0.5) + Vector3.new(0, tubeY, 0)
+		pipe(tube, "Corridor", from, to, diameter, { color = WHITE_HULL, material = Enum.Material.SmoothPlastic })
+		local top = Vector3.new(0, diameter / 2 - 0.25, 0)
+		pipe(tube, "CorridorSolar", from + top + toLab * 2, to + top - toLab * 2, 2.2, {
+			color = PANEL_CLEAN,
+			material = Enum.Material.Glass,
+			reflectance = 0.12,
+			collide = false,
+			shadow = false,
+		})
+		for _, t in { 0.2, 0.5, 0.8 } do
+			local c = from:Lerp(to, t)
+			pipe(tube, "CorridorRib", c - toLab * 0.4, c + toLab * 0.4, diameter + 0.6, {
+				color = HULL_TRIM,
+				material = Enum.Material.SmoothPlastic,
+				shadow = false,
+			})
+			local footY = c.Y - diameter / 2
+			if footY > 0.3 then
+				vcylinder(tube, "CorridorLeg", footY, 0.8, Vector3.new(c.X, footY / 2, c.Z), { color = METAL, material = Enum.Material.Metal })
+			end
+		end
+		labTube = tube
+	end
+
+	-- Rover tracks between the buildings (laid out above, so boulders keep off them).
+	Geo.buildTracks(base, trackPaths, { [1] = true, [5] = true })
 
 	-- Stage 6: automatic ice drills on the crater floor, the conveyor, the silo and the cargo robot.
 	local outward = dirFromAngle(drillAngle)
@@ -3652,28 +4683,28 @@ function WorldBuilder.build(data: any): World
 	local drillsFolder = folder(base, "IceDrills")
 	local drills: { DrillRefs } = {}
 	for i = 1, 3 do
-		local beltEnd = craterPoint(drillAngle, HOPPER_RADIUS - 2, CRATER_RIM_Y + 0.6) + across * ((i - 2) * 0.9)
-		table.insert(drills, buildDrill(drillsFolder, i, drillAngle + (i - 2) * DRILL_SPREAD, beltEnd))
+		local beltEnd = Six.craterPoint(drillAngle, HOPPER_RADIUS - 2, CRATER_RIM_Y + 0.6) + across * ((i - 2) * 0.9)
+		table.insert(drills, Six.buildDrill(drillsFolder, i, drillAngle + (i - 2) * DRILL_SPREAD, beltEnd))
 	end
-	local conveyor = buildConveyor(base, drillAngle)
-	local silo = buildSilo(base, conveyor.pipeEnd)
-	local cargo = buildCargoBot(base, polyline(cargoPoints))
-	local drillCentre = craterPoint(drillAngle, DRILL_FLOOR_RADIUS, 0)
+	local conveyor = Six.buildConveyor(base, drillAngle)
+	local silo = Six.buildSilo(base, conveyor.pipeEnd)
+	local cargo = Six.buildCargoBot(base, Six.polyline(cargoPoints))
+	local drillCentre = Six.craterPoint(drillAngle, DRILL_FLOOR_RADIUS, 0)
 
 	-- Secrets come last and use their own random streams, so the rest of the base keeps its layout.
 	local secretSpots: { [string]: CFrame } = {
-		mars_potato = buildCrawlSpace(base, ground),
-		mini_earth = buildLookoutRock(base),
-		laika = buildLavaTube(base),
+		mars_potato = Secret.buildCrawlSpace(base, ground),
+		mini_earth = Secret.buildLookoutRock(base),
+		laika = Secret.buildLavaTube(base),
 		cheese = cheeseSpot,
 	}
-	local observatory = buildObservatory(base)
-	local teamFlag = buildTeamFlag(base)
+	local observatory = Secret.buildObservatory(base)
+	local teamFlag = Secret.buildTeamFlag(base)
 	local collectiblesFolder = folder(base, "Collectibles")
 	local collectibleItems: { CollectibleItem } = {}
 	local collectibleRefs: { CollectibleRef } = {}
 	for i, id in COLLECTIBLE_IDS do
-		local item = buildCollectible(collectiblesFolder, id, secretSpots[id], i * 1.7)
+		local item = Secret.buildCollectible(collectiblesFolder, id, secretSpots[id], i * 1.7)
 		table.insert(collectibleItems, item)
 		table.insert(collectibleRefs, item.ref)
 	end
@@ -3699,7 +4730,7 @@ function WorldBuilder.build(data: any): World
 	markers.Name = "Markers"
 	local markerPositions: { [string]: Vector3 } = {
 		ShelterDoor = SHELTER_CENTRE + Vector3.new(0, 3, 33), -- tunnel mouth is at +30
-		HabitatDoor = HABITAT_CENTRE + Vector3.new(0, 3, 23),
+		HabitatDoor = HABITAT_CENTRE + Vector3.new(0, 3, HUB_APOTHEM + HUB_WALL + 3),
 		Antenna = ANTENNA_BASE + Vector3.new(0, 1, 0),
 		IceSite = CRATER_CENTRE + Vector3.new(0, CRATER_FLOOR_Y + 1, 0),
 		Processor = habitat.processorInlet.Position + Vector3.new(0, 0, 1.5),
@@ -3708,6 +4739,8 @@ function WorldBuilder.build(data: any): World
 		Greenhouse = greenhouse.centre,
 		Arrays = Vector3.new(RIDGE_CENTRE.X, RIDGE_TOP_Y + 1, RIDGE_CENTRE.Z),
 		Silo = SILO_CENTRE + Vector3.new(0, 3, -(SILO_GLASS_DIAMETER / 2 + 2)),
+		LanderDoor = lander.door + Vector3.new(0, 3, 0),
+		CrateDepot = lander.cratePosition + Vector3.new(0, 2, 0),
 	}
 	for _, name in MARKER_NAMES do
 		markerPart(markers, name, markerPositions[name])
@@ -3754,14 +4787,16 @@ function WorldBuilder.build(data: any): World
 			return
 		end
 		dusty[index] = isDusty
-		if isDusty then
-			visual.panel.Color = PANEL_DUSTY
-			visual.panel.Material = Enum.Material.Sand
-			visual.panel.Reflectance = 0
-		else
-			visual.panel.Color = PANEL_CLEAN
-			visual.panel.Material = Enum.Material.Glass
-			visual.panel.Reflectance = 0.1
+		for _, panel in visual.panels do
+			if isDusty then
+				panel.Color = PANEL_DUSTY
+				panel.Material = Enum.Material.Sand
+				panel.Reflectance = 0
+			else
+				panel.Color = PANEL_CLEAN
+				panel.Material = Enum.Material.Glass
+				panel.Reflectance = 0.1
+			end
 		end
 		for _, line in visual.lines do
 			line.Transparency = if isDusty then 1 else 0
@@ -3933,8 +4968,15 @@ function WorldBuilder.build(data: any): World
 		end
 	end
 
+	-- The flag stands on the hub's dome, so it only shows while the habitat is built (Stage 7).
+	local teamFlagWanted = false
+	local habitatStanding = false
+	local function refreshTeamFlag()
+		teamFlag.Parent = if teamFlagWanted and habitatStanding then base else nil
+	end
 	local function setTeamFlag(visible: boolean)
-		teamFlag.Parent = if visible then base else nil
+		teamFlagWanted = visible == true
+		refreshTeamFlag()
 	end
 
 	-- Water tank level: the water column grows or shrinks, and the gauge turns orange, then red.
@@ -3979,7 +5021,8 @@ function WorldBuilder.build(data: any): World
 
 	-- Stage 6: build levels. Every structure was built above; each build id lists the models it shows
 	-- from which level, and its blueprint copies. setBuildLevel(id, 0) is applied to all of them below,
-	-- so the base starts with only the habitat, its water tank and blueprints.
+	-- so the base starts with only the lander, the blueprints and their pads (Stage 7: the habitat is a
+	-- build too).
 	type BuildUnit = { level: number, instance: Instance, home: Instance, hologram: Instance, shown: boolean, dust: Vector3? }
 	type UpgradeEntry = { part: BasePart, level: number, alpha: number }
 	type UpgradeLight = { light: Light, level: number }
@@ -3997,6 +5040,7 @@ function WorldBuilder.build(data: any): World
 	type UnitSpec = { level: number, instance: Instance, dust: Vector3? }
 
 	local blueprints = folder(base, "Blueprints")
+	local constructionFolder = folder(base, "Construction")
 	local entries: { [string]: BuildEntry } = {}
 	local buildData = if type(data) == "table" and type(data.BASE) == "table" then data.BASE.BUILDS else nil
 	local function maxLevelOf(id: string, fallback: number): number
@@ -4010,6 +5054,27 @@ function WorldBuilder.build(data: any): World
 		return fallback
 	end
 
+	-- SBO_MinLevel convention (WorldSites, and any model): a part, or every part in a model or folder,
+	-- with the attribute SBO_MinLevel = n (n >= 2) only shows from build level n on, like upgrade().
+	local function applyMinLevel(root: Instance)
+		local function tag(item: Instance, level: number)
+			if item:IsA("BasePart") and item:GetAttribute(UPGRADE_ATTRIBUTE) == nil then
+				upgrade(item, level)
+			end
+		end
+		local all = root:GetDescendants()
+		table.insert(all, root)
+		for _, item in all do
+			local level = item:GetAttribute(MIN_LEVEL_ATTRIBUTE)
+			if type(level) == "number" and level >= 2 then
+				tag(item, math.floor(level))
+				for _, inner in item:GetDescendants() do
+					tag(inner, math.floor(level))
+				end
+			end
+		end
+	end
+
 	local function register(id: string, fallbackMax: number, specs: { UnitSpec }): BuildEntry
 		local entry: BuildEntry = {
 			units = {},
@@ -4019,12 +5084,16 @@ function WorldBuilder.build(data: any): World
 			maxLevel = maxLevelOf(id, fallbackMax),
 		}
 		for _, spec in specs do
+			if spec.instance.Parent == nil then
+				spec.instance.Parent = base
+			end
+			applyMinLevel(spec.instance)
 			local home = spec.instance.Parent :: Instance
 			table.insert(entry.units, {
 				level = spec.level,
 				instance = spec.instance,
 				home = home,
-				hologram = makeHologram(spec.instance, hidden),
+				hologram = Six.makeHologram(spec.instance, hidden),
 				shown = true,
 				dust = spec.dust,
 			})
@@ -4045,16 +5114,20 @@ function WorldBuilder.build(data: any): World
 		return entry
 	end
 
+	local habitatEntry = register("habitat", 1, { { level = 1, instance = habitat.model, dust = HABITAT_CENTRE } })
 	local solarSpecs: { UnitSpec } = {}
 	for i, ref in arrays do
 		table.insert(solarSpecs, { level = i, instance = ref.model })
 	end
 	register("solar", #arrays, solarSpecs)
-	register("greenhouse", 1, { { level = 1, instance = greenhouse.model } })
+	local greenhouseEntry = register("greenhouse", 2, {
+		{ level = 1, instance = greenhouse.model, dust = S7.GREENHOUSE_A },
+		{ level = 2, instance = greenhouse.model2, dust = S7.GREENHOUSE_B },
+	})
 	local antennaEntry = register("antenna", 3, { { level = 1, instance = antenna.model, dust = ANTENNA_BASE } })
 	local shelterEntry = register("shelter", 1, { { level = 1, instance = shelter.model, dust = SHELTER_CENTRE + Vector3.new(0, 0, 31) } })
 	local function drillFloor(i: number): Vector3
-		return craterPoint(drillAngle + (i - 2) * DRILL_SPREAD, DRILL_FLOOR_RADIUS, CRATER_FLOOR_Y)
+		return Six.craterPoint(drillAngle + (i - 2) * DRILL_SPREAD, DRILL_FLOOR_RADIUS, CRATER_FLOOR_Y)
 	end
 	register("drill_1", 3, {
 		{ level = 1, instance = drills[1].model, dust = drillFloor(1) },
@@ -4064,6 +5137,62 @@ function WorldBuilder.build(data: any): World
 	register("drill_2", 3, { { level = 1, instance = drills[2].model, dust = drillFloor(2) } })
 	register("drill_3", 3, { { level = 1, instance = drills[3].model, dust = drillFloor(3) } })
 	register("cargo_bot", 1, { { level = 1, instance = cargo.model } })
+
+	-- Stage 7: the world sites' structures (each model fully built by WorldSites).
+	local fallbackMax: { [string]: number } = { lab = 1, garage = 2, landing_pad = 1, ship = 1 }
+	local labEntry: BuildEntry? = nil
+	for _, id in { "lab", "garage", "landing_pad", "ship" } do
+		local site = siteBuilds[id]
+		if site then
+			local specs: { UnitSpec } = { { level = 1, instance = site.model } }
+			if id == "lab" and labTube then
+				table.insert(specs, { level = 1, instance = labTube })
+			end
+			local ok, result = pcall(register, id, fallbackMax[id], specs)
+			if ok then
+				if id == "lab" then
+					labEntry = result
+				end
+			else
+				warn(`[SpaceBaseOdyssey] could not register the {id} build: {result}`)
+			end
+		end
+	end
+	local labPrompt: ProximityPrompt? = nil
+	if sites and typeof(sites.labPrompt) == "Instance" and sites.labPrompt:IsA("ProximityPrompt") then
+		labPrompt = sites.labPrompt
+	end
+	if labEntry then
+		labEntry.onLevel = function(level: number)
+			if labPrompt then
+				labPrompt.Enabled = level >= 1
+			end
+		end
+	elseif labPrompt then
+		labPrompt.Enabled = false
+	end
+
+	-- The habitat only counts as inside once it stands: its zone moves far below the ground until
+	-- then (CrewService reads the zone's CFrame through WorldBuilder.isInZone). The team flag rides
+	-- on its dome.
+	local habitatZoneHome = habitat.zone.CFrame
+	habitatEntry.onLevel = function(level: number)
+		habitatStanding = level >= 1
+		habitat.zone.CFrame = if habitatStanding then habitatZoneHome else habitatZoneHome - Vector3.new(0, 2000, 0)
+		refreshTeamFlag()
+	end
+
+	-- The greenhouse: its glass hatch closes the hub's west doorway until the dome and tube stand, and
+	-- fresh food can only be picked once it is built.
+	local hatch = habitat.greenhouseHatch
+	local hatchAlpha = hatch.Transparency
+	greenhouseEntry.onLevel = function(level: number)
+		local open = level >= 1
+		hatch.Transparency = if open then 1 else hatchAlpha
+		hatch.CanCollide = not open
+		hatch.CanQuery = not open
+		greenhouse.foodPrompt.Enabled = open
+	end
 
 	-- A blueprint shelter has no mass, so it protects nobody: its zone moves far below the ground
 	-- until the shelter is built (CrewService reads the zone's CFrame through WorldBuilder.isInZone).
@@ -4092,14 +5221,19 @@ function WorldBuilder.build(data: any): World
 	local buildPads: { [string]: BasePart } = {}
 	local buildPrompts: { [string]: ProximityPrompt } = {}
 	local padIcons: { [string]: string } = {
+		habitat = "home",
 		solar = "solar",
 		greenhouse = "plant",
+		lab = "flask",
 		antenna = "antenna",
 		shelter = "shield",
 		drill_1 = "drill",
 		drill_2 = "drill",
 		drill_3 = "drill",
 		cargo_bot = "robot",
+		garage = "car",
+		landing_pad = "flag",
+		ship = "rocket",
 	}
 	if type(buildData) == "table" then
 		for _, def in buildData do
@@ -4113,7 +5247,7 @@ function WorldBuilder.build(data: any): World
 		if spot then
 			local iconName = padIcons[id] or "build"
 			local icon = (Icons :: any)[iconName] or Icons.build
-			local refs = buildPad(padsFolder, id, spot, icon)
+			local refs = Six.buildPad(padsFolder, id, spot, icon)
 			buildPads[id] = refs.pad
 			buildPrompts[id] = refs.prompt
 			entry.pad = refs.pad
@@ -4132,12 +5266,182 @@ function WorldBuilder.build(data: any): World
 		return nil
 	end
 
+	-- Stage 7: builds in progress (one per build id; shared by the server, see BaseService).
+	type ProgressUpgrade = { up: UpgradeEntry, ghost: BasePart?, bottom: number, shown: boolean }
+	type ProgressState = {
+		level: number,
+		fraction: number,
+		copies: { ConstructionCopy },
+		upgrades: { ProgressUpgrade },
+		upMinY: number,
+		upMaxY: number,
+		extras: { Instance }, -- outlines and blueprint ghosts, removed with the state
+	}
+	local progressStates: { [string]: ProgressState } = {}
+
+	local function clearBuildProgress(id: string)
+		local state = if type(id) == "string" then progressStates[id] else nil
+		if state == nil then
+			return
+		end
+		progressStates[id] = nil
+		for _, copy in state.copies do
+			copy.instance:Destroy()
+		end
+		for _, extra in state.extras do
+			extra:Destroy()
+		end
+		local entry = entries[id]
+		for _, item in state.upgrades do
+			if entry == nil or entry.level < item.up.level then
+				item.up.part.Transparency = 1
+			end
+		end
+	end
+
+	local function newProgressState(id: string, entry: BuildEntry, level: number): ProgressState
+		local state: ProgressState = {
+			level = level,
+			fraction = -1,
+			copies = {},
+			upgrades = {},
+			upMinY = math.huge,
+			upMaxY = -math.huge,
+			extras = {},
+		}
+		local holder = folder(constructionFolder, id)
+		table.insert(state.extras, holder)
+		-- New structures at this level: a construction copy over the blueprint, and a foundation outline.
+		for _, unit in entry.units do
+			if unit.level == level and not unit.shown then
+				local copy = Geo.makeConstructionCopy(unit.instance, holder)
+				table.insert(state.copies, copy)
+				local span = math.max(copy.maxV.X - copy.minV.X, copy.maxV.Z - copy.minV.Z)
+				if #copy.parts > 0 and span <= OUTLINE_MAX_SPAN then
+					Geo.constructionOutline(holder, copy.minV, copy.maxV, copy.minY + 0.05)
+				end
+			end
+		end
+		-- Upgrade parts of this level: a cyan ghost until their step reveals the real part.
+		for _, up in entry.upgrades do
+			if up.level == level then
+				local lo, hi = Geo.partBounds(up.part)
+				state.upMinY = math.min(state.upMinY, lo.Y)
+				state.upMaxY = math.max(state.upMaxY, hi.Y)
+				local ghost: BasePart? = nil
+				if math.max(up.part.Size.X, up.part.Size.Y, up.part.Size.Z) >= HOLOGRAM_MIN_PART then
+					local clone = up.part:Clone()
+					clone:ClearAllChildren()
+					clone.Anchored = true
+					clone.CanCollide = false
+					clone.CanQuery = false
+					clone.CanTouch = false
+					clone.CastShadow = false
+					clone.Material = Enum.Material.ForceField
+					clone.Color = ACCENT_SYSTEM
+					clone.Transparency = HOLOGRAM_TRANSPARENCY
+					clone.Reflectance = 0
+					clone.Parent = holder
+					ghost = clone
+				end
+				table.insert(state.upgrades, { up = up, ghost = ghost, bottom = lo.Y, shown = false })
+			end
+		end
+		return state
+	end
+
+	local function setBuildProgress(id: string, level: number, stage: number, stages: number)
+		local entry = if type(id) == "string" then entries[id] else nil
+		if entry == nil or type(level) ~= "number" or level ~= level then
+			return
+		end
+		local target = math.floor(level)
+		if target <= entry.level or target > entry.maxLevel then
+			clearBuildProgress(id)
+			return
+		end
+		local total = if type(stages) == "number" and stages == stages and stages >= 1 then stages else 1
+		local done = if type(stage) == "number" and stage == stage then math.clamp(stage, 0, total) else 0
+		local fraction = done / total
+		local state = progressStates[id]
+		if state and state.level ~= target then
+			clearBuildProgress(id)
+			state = nil
+		end
+		local fresh = state == nil
+		local current: ProgressState = state or newProgressState(id, entry, target)
+		progressStates[id] = current
+		if not fresh and math.abs(fraction - current.fraction) < 1e-6 then
+			return
+		end
+		local advanced = fraction > current.fraction
+		current.fraction = fraction
+
+		-- Real parts from the bottom up: a part shows once the step height passes its lowest point.
+		local risen: { BasePart } = {}
+		for _, copy in current.copies do
+			local threshold = copy.minY + fraction * (copy.maxY - copy.minY) + 1e-3
+			for _, item in copy.parts do
+				local show = fraction > 0 and item.bottom <= threshold
+				if show ~= item.shown then
+					item.shown = show
+					item.part.Transparency = if show then item.alpha else 1
+					if show and not fresh then
+						table.insert(risen, item.part)
+					end
+				end
+			end
+		end
+		local upThreshold = current.upMinY + fraction * (current.upMaxY - current.upMinY) + 1e-3
+		for _, item in current.upgrades do
+			local show = fraction > 0 and item.bottom <= upThreshold
+			if show ~= item.shown then
+				item.shown = show
+				item.up.part.Transparency = if show then item.up.alpha else 1
+				local ghost = item.ghost
+				if ghost then
+					ghost.Transparency = if show then 1 else HOLOGRAM_TRANSPARENCY
+				end
+			end
+		end
+		if #risen > 0 then
+			Six.riseIn(risen, CONSTRUCTION_DROP, nil, nil)
+		end
+		if advanced or fresh then
+			-- Dust where the work happens: the unit's dust spot, else the middle of the new parts, else the pad.
+			local spot: Vector3? = nil
+			for _, unit in entry.units do
+				if unit.level == target and unit.dust then
+					spot = unit.dust
+					break
+				end
+			end
+			local first = current.copies[1]
+			if spot == nil and first and #first.parts > 0 then
+				spot = Vector3.new((first.minV.X + first.maxV.X) / 2, first.minY, (first.minV.Z + first.maxV.Z) / 2)
+			end
+			local pad = entry.pad
+			if spot == nil and pad then
+				spot = pad.Position
+			end
+			if spot then
+				Six.dustPuff(base, spot)
+			end
+		end
+	end
+
 	local function setBuildLevel(id: string, level: number, animate: boolean)
 		local entry = if type(id) == "string" then entries[id] else nil
 		if entry == nil or type(level) ~= "number" or level ~= level then
 			return
 		end
 		local newLevel = math.clamp(math.floor(level), 0, entry.maxLevel)
+		-- A finished (or reset) level ends its build in progress; restores the upgrade parts first so
+		-- they rise in below like any upgrade.
+		local progress = progressStates[id]
+		if progress and (newLevel >= progress.level or newLevel ~= entry.level) then
+			clearBuildProgress(id)
+		end
 		local raised: { Instance } = {}
 		local raisedUnits: { BuildUnit } = {}
 		for _, unit in entry.units do
@@ -4177,19 +5481,19 @@ function WorldBuilder.build(data: any): World
 			return
 		end
 		if #raised > 0 then
-			riseIn(risableParts(raised), RISE_DROP, entry.onRiseStep, entry.onRiseDone)
+			Six.riseIn(Six.risableParts(raised), RISE_DROP, entry.onRiseStep, entry.onRiseDone)
 			for _, unit in raisedUnits do
 				local spot = dustSpot(unit)
 				if spot then
-					dustPuff(base, spot)
+					Six.dustPuff(base, spot)
 				end
 			end
 		end
 		if #upgraded > 0 then
-			riseIn(risableParts(upgraded), UPGRADE_DROP, nil, nil)
+			Six.riseIn(Six.risableParts(upgraded), UPGRADE_DROP, nil, nil)
 			local pad = entry.pad
 			if pad and #raised == 0 then
-				dustPuff(base, pad.Position)
+				Six.dustPuff(base, pad.Position)
 			end
 		end
 	end
@@ -4201,6 +5505,76 @@ function WorldBuilder.build(data: any): World
 
 	local function isBuilt(id: string): boolean
 		return buildLevel(id) >= 1
+	end
+
+	-- Stage 7: the parts crate a player carries (BaseService decides who carries one).
+	local function setCarryCrate(character: Model, carrying: boolean)
+		if typeof(character) ~= "Instance" or not character:IsA("Model") then
+			return
+		end
+		local existing = character:FindFirstChild(CARRY_CRATE_NAME)
+		if carrying ~= true then
+			if existing then
+				existing:Destroy()
+			end
+			return
+		end
+		if existing then
+			return
+		end
+		local rootPart = character:FindFirstChild("HumanoidRootPart")
+		if rootPart and rootPart:IsA("BasePart") then
+			Geo.carriedCrate(character, rootPart)
+		end
+	end
+
+	-- Stage 7: meteorite craters (WorldSites, or the simple fallback) in Workspace.Base.Impacts.
+	local impactsFolder = base:FindFirstChild("Impacts") or folder(base, "Impacts")
+	local sitesSpawnImpact = if sites and type(sites.spawnImpact) == "function" then sites.spawnImpact else nil
+	local sitesClearImpact = if sites and type(sites.clearImpact) == "function" then sites.clearImpact else nil
+	local fallbackCraters: { [Instance]: boolean } = {}
+	local function spawnImpact(position: Vector3): (Model, ProximityPrompt)
+		if sitesSpawnImpact then
+			local ok, impactModel, impactPrompt = pcall(sitesSpawnImpact, position)
+			if ok and typeof(impactModel) == "Instance" and typeof(impactPrompt) == "Instance" then
+				return impactModel :: any, impactPrompt :: any
+			end
+			warn(`[SpaceBaseOdyssey] WorldSites.spawnImpact failed, using the simple crater: {impactModel}`)
+		end
+		local crater, cratePrompt = Geo.fallbackImpact(impactsFolder, position)
+		fallbackCraters[crater] = true
+		return crater, cratePrompt
+	end
+	local function clearImpact(impact: Model)
+		if typeof(impact) ~= "Instance" then
+			return
+		end
+		if fallbackCraters[impact] then
+			fallbackCraters[impact] = nil
+		elseif sitesClearImpact then
+			local ok, err = pcall(sitesClearImpact, impact)
+			if ok then
+				return
+			end
+			warn(`[SpaceBaseOdyssey] WorldSites.clearImpact failed: {err}`)
+		end
+		impact:Destroy()
+	end
+	local garageBays: { CFrame } = {}
+	if sites and type(sites.garageBays) == "table" then
+		for _, bay in sites.garageBays do
+			if typeof(bay) == "CFrame" then
+				table.insert(garageBays, bay)
+			end
+		end
+	end
+	local pois: { { id: string, position: Vector3, prompt: ProximityPrompt } } = {}
+	if sites and type(sites.pois) == "table" then
+		for _, poi in sites.pois do
+			if type(poi) == "table" and type(poi.id) == "string" and typeof(poi.position) == "Vector3" and typeof(poi.prompt) == "Instance" then
+				table.insert(pois, { id = poi.id, position = poi.position, prompt = poi.prompt })
+			end
+		end
 	end
 
 	-- Silo fill: the ice column grows, and the top ring turns lime when the silo is full.
@@ -4233,7 +5607,7 @@ function WorldBuilder.build(data: any): World
 	local cargoWait = 0
 	local cargoAccumulator = 0
 	local function cargoPose(distance: number, direction: number, smooth: boolean): CFrame
-		local position, dir = alongPolyline(cargo.route, distance)
+		local position, dir = Six.alongPolyline(cargo.route, distance)
 		local facing = flatUnit(dir * direction, Vector3.zAxis)
 		local target = CFrame.lookAt(position, position + facing)
 		if not smooth then
@@ -4280,7 +5654,7 @@ function WorldBuilder.build(data: any): World
 			for k, cube in conveyor.cubes do
 				if not risingParts[cube] then
 					local d = (cubeClock * ICE_CUBE_SPEED + (k - 1) * cubeSpacing) % conveyor.cubeLine.total
-					local position, dir = alongPolyline(conveyor.cubeLine, d)
+					local position, dir = Six.alongPolyline(conveyor.cubeLine, d)
 					cube.CFrame = CFrame.lookAt(position, position + dir)
 				end
 			end
@@ -4407,14 +5781,14 @@ function WorldBuilder.build(data: any): World
 	refreshPrompts()
 	setSystemVisuals({ LifeSupport = 0, Greenhouse = 0, Science = 0 })
 	startSky(base, arrayTracks)
-	-- Start from an almost empty base: only the habitat and its water tank stand (BaseService then
-	-- applies the builds of the players present).
+	-- Start from an empty base: only the lander and the blueprints stand (BaseService then applies
+	-- the builds of the players present).
 	for id in entries do
 		setBuildLevel(id, 0, false)
 	end
 
 	return {
-		spawn = habitat.spawn,
+		spawn = lander.spawn,
 		habitatZone = habitat.zone,
 		shelterZone = shelter.zone,
 		arrays = arrays,
@@ -4446,6 +5820,18 @@ function WorldBuilder.build(data: any): World
 		siloPrompt = silo.prompt,
 		setSilo = setSilo,
 		setCargoActive = setCargoActive,
+		setBuildProgress = setBuildProgress,
+		clearBuildProgress = clearBuildProgress,
+		landerZone = lander.zone :: BasePart,
+		crateDepot = { prompt = lander.cratePrompt, position = lander.cratePosition },
+		setCarryCrate = setCarryCrate,
+		greenhouseFoodPrompt = greenhouse.foodPrompt,
+		labPrompt = labPrompt,
+		garageBays = garageBays,
+		pois = pois,
+		spawnImpact = spawnImpact,
+		clearImpact = clearImpact,
+		sitesLoaded = sites ~= nil,
 	}
 end
 

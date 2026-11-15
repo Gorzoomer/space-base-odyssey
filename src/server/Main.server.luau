@@ -1,9 +1,11 @@
 --!strict
 -- Space Base Odyssey - server entry point: builds the Moon base, starts services, spawns players
 -- (their own avatar with the astronaut helmet and backpack).
--- Start order: world, remotes, CrewService, ProgressService, BaseService (Stage 6 build and grow),
--- MissionService, SuitService, PetService. Each later service is started inside pcall so a missing
--- or broken piece is reported with warn and never stops the server.
+-- Start order: world, remotes, CrewService, ProgressService, BaseService (build and grow, building in
+-- steps), MissionService, ToolService (Stage 7 tools in hand), VehicleService (Stage 7 garage
+-- vehicles), ExploreService (Stage 7 exploration sites and meteorites), SuitService, PetService.
+-- Each later service is started inside pcall so a missing or broken piece is reported with warn and
+-- never stops the server. Players arrive (spawn) in the lander (world.spawn).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -58,17 +60,30 @@ local function startStep(label: string, step: () -> ())
 	end
 end
 
--- Stage 6: Remotes.BASE_STATE lives in the same folder MissionService.createRemotes made.
-local function baseStateRemote(): RemoteEvent
+-- Stage 6 / 7 remotes (Remotes.BASE_STATE, Remotes.EXPLORE) live in the same folder
+-- MissionService.createRemotes made.
+local function extraRemote(name: string): RemoteEvent
 	local folder = ReplicatedStorage:WaitForChild(Types.Remotes.FOLDER)
-	local existing = folder:FindFirstChild(Types.Remotes.BASE_STATE)
+	local existing = folder:FindFirstChild(name)
 	if existing and existing:IsA("RemoteEvent") then
 		return existing
 	end
 	local event = Instance.new("RemoteEvent")
-	event.Name = Types.Remotes.BASE_STATE
+	event.Name = name
 	event.Parent = folder
 	return event
+end
+local baseStateEvent = extraRemote(Types.Remotes.BASE_STATE)
+local exploreEvent = extraRemote(Types.Remotes.EXPLORE)
+
+-- An optional server module (Stage 7 services may be missing while the game is being built).
+local function optionalModule(name: string): any?
+	local module = script.Parent:FindFirstChild(name)
+	if module == nil or not module:IsA("ModuleScript") then
+		warn(`[SpaceBaseOdyssey] {name} not found; it is off`)
+		return nil
+	end
+	return (require :: any)(module)
 end
 
 CrewService.start(world, { playerStats = remotes.playerStats, message = remotes.message })
@@ -77,10 +92,33 @@ CrewService.start(world, { playerStats = remotes.playerStats, message = remotes.
 ProgressService.start(world, { progress = remotes.progress, collected = remotes.collected, message = remotes.message })
 -- Build and grow the base: credits, XP, builds, skills, pets, wardrobe (saved by ProgressService).
 startStep("BaseService", function()
-	BaseService.start(world, { baseState = baseStateRemote(), message = remotes.message }, ProgressService)
+	BaseService.start(world, { baseState = baseStateEvent, message = remotes.message }, ProgressService, CrewService)
 end)
 startStep("MissionService", function()
 	MissionService.start(world, CrewService, ProgressService, BaseService)
+end)
+-- Stage 7: tools in hand (wrench, ice drill, brush, repair kit, tablet, greenhouse food).
+local ToolService: any = nil
+startStep("ToolService", function()
+	local module = optionalModule("ToolService")
+	if module then
+		module.start(world, BaseService, CrewService, { message = remotes.message })
+		ToolService = module
+	end
+end)
+-- Stage 7: drivable garage vehicles (buggy, ice hauler).
+startStep("VehicleService", function()
+	local module = optionalModule("VehicleService")
+	if module then
+		module.start(world, BaseService, MissionService, CrewService)
+	end
+end)
+-- Stage 7: exploration sites and meteorite impacts (scanned with the tablet).
+startStep("ExploreService", function()
+	local module = optionalModule("ExploreService")
+	if module then
+		module.start(world, BaseService, ToolService, { message = remotes.message, explore = exploreEvent })
+	end
 end)
 -- Every character keeps its own avatar and gets the astronaut helmet and backpack; rewards, event
 -- codes and the wardrobe choose their look.
@@ -89,13 +127,10 @@ startStep("SuitService", function()
 end)
 -- Pets follow their owners (PetService is optional: the server runs without it).
 startStep("PetService", function()
-	local module = script.Parent:FindFirstChild("PetService")
-	if module == nil or not module:IsA("ModuleScript") then
-		warn("[SpaceBaseOdyssey] PetService not found; pets are off")
-		return
+	local module = optionalModule("PetService")
+	if module then
+		module.start(BaseService)
 	end
-	local PetService: any = (require :: any)(module)
-	PetService.start(BaseService)
 end)
 
 -- When the Earth hides the Sun (an eclipse seen from the Moon), C.A.R.L. explains it.

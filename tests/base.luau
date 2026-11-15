@@ -1,15 +1,18 @@
 --!strict
--- Space Base Odyssey - build-and-grow rules tests (Stage 6). Run with: lune run tests/base
+-- Space Base Odyssey - build-and-grow rules tests (Stages 6 and 7). Run with: lune run tests/base
 -- Checks MissionData.BASE is well formed and that src/shared/BaseBuild.luau follows it:
 --   A. data: build / skill / pet ids unique, levels match their lists, requirements point to real
---      builds and never to themselves, icons exist, rewards are positive;
---   B. player level from XP, skill points;
+--      builds and never to themselves, icons exist, rewards give something; the habitat comes first;
+--   B. player level from XP (15 levels), skill points;
 --   C. build costs, requirements, level gates and the "max" stop;
 --   D. effective builds take the highest level of every present player;
---   E. skills: points, level gates, effects (speed, suit, jump, drill);
+--   E. skills: points, level gates, effects (speed, suit, jump); the drill is a tool now;
 --   F. pets: collectible pets are found, never bought; bought pets need level and credits;
 --   G. automatic drills: ice per minute, silo pay;
---   H. a new player can reach the first builds with START_CREDITS and simple work (no dead end).
+--   H. a new player can reach the first builds with START_CREDITS and simple work (no dead end);
+--   I. building in steps: steps per level, assemble hold;
+--   J. tools: unlocks, the drill tool upgrade (hold time, costs, gates);
+--   K. food, meteorites and vehicles data.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local BaseBuild = require("../src/shared/BaseBuild")
@@ -52,8 +55,23 @@ end
 ----------------------------------------------------------------------------------------------------
 -- A. Data
 
-local EXPECTED_BUILDS = { "solar", "greenhouse", "antenna", "shelter", "drill_1", "drill_2", "drill_3", "cargo_bot" }
-local EXPECTED_SKILLS = { "speed", "tank", "jump", "drill" }
+local EXPECTED_BUILDS = {
+	"habitat",
+	"solar",
+	"greenhouse",
+	"lab",
+	"antenna",
+	"shelter",
+	"drill_1",
+	"drill_2",
+	"drill_3",
+	"cargo_bot",
+	"garage",
+	"landing_pad",
+	"ship",
+}
+local EXPECTED_SKILLS = { "speed", "tank", "jump" }
+local EXPECTED_TOOLS = { "wrench", "drill", "brush", "repair_kit", "tablet", "food" }
 
 do
 	local seen: { [string]: boolean } = {}
@@ -104,7 +122,9 @@ do
 	for _, id in EXPECTED_SKILLS do
 		check(skillSeen[id] == true, `A: skill {id} exists`)
 	end
-	check(#BASE.JUMP_POWER_BONUS >= 3 and #BASE.DRILL_HOLD_FACTOR >= 3, "A: jump and drill tables cover 3 levels")
+	check(skillSeen.drill == nil, "A: the drill is a tool now, not a skill")
+	check(#BASE.JUMP_POWER_BONUS >= 3 and #BASE.TOOL_UPGRADES.drill.holdFactor >= 3, "A: jump and drill tables cover 3 levels")
+	check((BASE :: any).DRILL_HOLD_FACTOR == nil, "A: DRILL_HOLD_FACTOR moved to TOOL_UPGRADES.drill")
 	check(#BASE.DRILL_ICE_PER_MINUTE >= 3, "A: drill ice table covers 3 levels")
 
 	local petSeen: { [string]: boolean } = {}
@@ -115,8 +135,37 @@ do
 	end
 
 	for kind, reward in BASE.REWARDS do
-		check(isWhole(reward.credits, 1) and isWhole(reward.xp, 1), `A: reward {kind} gives credits and XP`)
+		check(isWhole(reward.credits, 0) and isWhole(reward.xp, 1), `A: reward {kind} gives XP (and credits >= 0)`)
 	end
+	for _, kind in { "crate_delivered", "stage_done", "food_eaten", "poi_scanned", "meteor_scanned" } do
+		check((BASE.REWARDS :: any)[kind] ~= nil, `A: Stage 7 reward {kind} exists`)
+	end
+
+	-- The habitat is the first build: free, needs nothing, and every other build needs it (directly or
+	-- through what it needs), because the game starts in the lander.
+	local habitat = BaseBuild.buildDef(MissionData, "habitat")
+	check(habitat ~= nil and habitat.costs[1] == 0 and next(habitat.requires) == nil, "A: habitat is free and needs nothing")
+	check(habitat ~= nil and habitat.minLevel[1] == 1, "A: habitat at player level 1")
+	check(BASE.BUILDS[1].id == "habitat", "A: habitat is listed first")
+	local function needsHabitat(id: string, depth: number): boolean
+		local def = BaseBuild.buildDef(MissionData, id)
+		if def == nil or depth > #BASE.BUILDS then
+			return false
+		end
+		for needId in def.requires do
+			if needId == "habitat" or needsHabitat(needId, depth + 1) then
+				return true
+			end
+		end
+		return false
+	end
+	for _, def in BASE.BUILDS do
+		if def.id ~= "habitat" then
+			check(needsHabitat(def.id, 0), `A: {def.id} needs the habitat first`)
+		end
+	end
+	local garage = BaseBuild.buildDef(MissionData, "garage")
+	check(garage ~= nil and garage.maxLevel == #BASE.VEHICLES, "A: one garage level per vehicle bay")
 	for i = 2, #BASE.LEVEL_XP do
 		check(BASE.LEVEL_XP[i] > BASE.LEVEL_XP[i - 1], `A: LEVEL_XP grows at level {i}`)
 	end
@@ -131,7 +180,7 @@ do
 	check(BaseBuild.levelForXp(MissionData, BASE.LEVEL_XP[2] - 1) == 1, "B: one XP short stays level 1")
 	check(BaseBuild.levelForXp(MissionData, BASE.LEVEL_XP[2]) == 2, "B: LEVEL_XP[2] is level 2")
 	check(BaseBuild.levelForXp(MissionData, 10 ^ 9) == #BASE.LEVEL_XP, "B: huge XP stops at the top level")
-	check(BaseBuild.maxPlayerLevel(MissionData) == 10, "B: player levels 1 to 10")
+	check(BaseBuild.maxPlayerLevel(MissionData) == 15, "B: player levels 1 to 15")
 	check(BaseBuild.xpForLevel(MissionData, 3) == BASE.LEVEL_XP[3], "B: xpForLevel reads LEVEL_XP")
 	check(BaseBuild.xpForLevel(MissionData, #BASE.LEVEL_XP + 1) == nil, "B: no XP for a level above the top")
 	for level = 1, #BASE.LEVEL_XP do
@@ -149,25 +198,36 @@ end
 
 do
 	local empty: BaseBuild.Levels = {}
-	local ok, reason = BaseBuild.canBuild(MissionData, empty, 1, 0, "solar")
-	check(ok and reason == nil, "C: the first solar array is free at level 1")
-	check(BaseBuild.nextCost(MissionData, empty, "solar") == 0, "C: first solar costs 0")
+	local ok, reason = BaseBuild.canBuild(MissionData, empty, 1, 0, "habitat")
+	check(ok and reason == nil, "C: the habitat is free at level 1")
+	check(BaseBuild.nextCost(MissionData, empty, "habitat") == 0, "C: habitat costs 0")
+	ok, reason = BaseBuild.canBuild(MissionData, empty, 10, 10 ^ 6, "solar")
+	check(not ok and reason == "requires", "C: solar needs the habitat first")
 
-	ok, reason = BaseBuild.canBuild(MissionData, empty, 10, 10 ^ 6, "greenhouse")
+	local home: BaseBuild.Levels = { habitat = 1 }
+	ok, reason = BaseBuild.canBuild(MissionData, home, 1, 0, "solar")
+	check(ok and reason == nil, "C: the first solar array is free at level 1")
+	check(BaseBuild.nextCost(MissionData, home, "solar") == 0, "C: first solar costs 0")
+	ok, reason = BaseBuild.canBuild(MissionData, home, 1, 10 ^ 6, "habitat")
+	check(not ok and reason == "max", "C: only one habitat")
+
+	ok, reason = BaseBuild.canBuild(MissionData, home, 10, 10 ^ 6, "greenhouse")
 	check(not ok and reason == "requires", "C: greenhouse needs solar first")
 
-	ok, reason = BaseBuild.canBuild(MissionData, { solar = 1 }, 1, 0, "greenhouse")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1 }, 1, 0, "greenhouse")
 	check(not ok and reason == "credits", "C: greenhouse without credits says credits")
-	ok, reason = BaseBuild.canBuild(MissionData, { solar = 1 }, 1, 15, "greenhouse")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1 }, 1, 15, "greenhouse")
 	check(ok, "C: greenhouse with 15 credits and solar 1")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1, greenhouse = 1 }, 3, 10 ^ 6, "greenhouse")
+	check(not ok and reason == "level", "C: a bigger greenhouse needs level 4")
 
-	ok, reason = BaseBuild.canBuild(MissionData, { solar = 1 }, 1, 10 ^ 6, "solar")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1 }, 1, 10 ^ 6, "solar")
 	check(not ok and reason == "level", "C: a second solar array needs player level 2")
-	ok, reason = BaseBuild.canBuild(MissionData, { solar = 1 }, 2, 30, "solar")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1 }, 2, 30, "solar")
 	check(ok, "C: second solar array at level 2 with 30 credits")
 	check(BaseBuild.nextCost(MissionData, { solar = 2 }, "solar") == 60, "C: third solar array costs 60")
 
-	ok, reason = BaseBuild.canBuild(MissionData, { solar = 3 }, 10, 10 ^ 6, "solar")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 3 }, 10, 10 ^ 6, "solar")
 	check(not ok and reason == "max", "C: no fourth solar array")
 	check(BaseBuild.nextCost(MissionData, { solar = 3 }, "solar") == nil, "C: maxed build has no cost")
 
@@ -176,12 +236,28 @@ do
 	check(BaseBuild.nextCost(MissionData, {}, "rocket_pad") == nil, "C: unknown build has no cost")
 
 	-- Requirements check the EFFECTIVE builds: drill_1 needs the shelter and power.
-	ok, reason = BaseBuild.canBuild(MissionData, { solar = 1, antenna = 1 }, 10, 10 ^ 6, "drill_1")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1, antenna = 1 }, 10, 10 ^ 6, "drill_1")
 	check(not ok and reason == "requires", "C: drill_1 needs the shelter")
-	ok, reason = BaseBuild.canBuild(MissionData, { solar = 1, antenna = 1, shelter = 1 }, 2, 60, "drill_1")
+	local sheltered: BaseBuild.Levels = { habitat = 1, solar = 1, antenna = 1, shelter = 1 }
+	ok, reason = BaseBuild.canBuild(MissionData, sheltered, 2, 60, "drill_1")
 	check(ok, "C: drill_1 at level 2 with 60 credits")
-	ok, reason = BaseBuild.canBuild(MissionData, { solar = 1, antenna = 1, shelter = 1, drill_1 = 1 }, 10, 10 ^ 6, "drill_2")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1, antenna = 1, shelter = 1, drill_1 = 1 }, 10, 10 ^ 6, "drill_2")
 	check(not ok and reason == "requires", "C: drill_2 needs a second solar array")
+
+	-- The Lab, the garage (two bays), the landing pad and the ship.
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1 }, 1, 10 ^ 6, "lab")
+	check(not ok and reason == "level", "C: the Lab needs level 2")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1 }, 2, 40, "lab")
+	check(ok, "C: the Lab at level 2 with 40 credits")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1, lab = 1 }, 10, 10 ^ 6, "garage")
+	check(not ok and reason == "requires", "C: the garage needs the shelter too")
+	ok, reason = BaseBuild.canBuild(MissionData, {}, 15, 10 ^ 9, "ship")
+	check(not ok and reason == "requires", "C: the ship needs the landing pad")
+	local padReady: BaseBuild.Levels = { habitat = 1, solar = 1, lab = 1, antenna = 1, shelter = 1, garage = 1, landing_pad = 1 }
+	ok, reason = BaseBuild.canBuild(MissionData, padReady, 7, 10 ^ 9, "ship")
+	check(not ok and reason == "level", "C: the ship is a late goal (level 8)")
+	ok, reason = BaseBuild.canBuild(MissionData, padReady, 8, 10 ^ 9, "ship")
+	check(ok, "C: the ship at level 8")
 
 	-- Requirement checks come before level and credit checks (the lock shows what to build first).
 	ok, reason = BaseBuild.canBuild(MissionData, {}, 1, 0, "cargo_bot")
@@ -244,8 +320,12 @@ do
 	check(not ok and reason == "max", "E: speed stops at 3")
 	ok, reason = BaseBuild.canLearn(MissionData, {}, 10, "fly")
 	check(not ok and reason == "unknown", "E: unknown skill")
+	ok, reason = BaseBuild.canLearn(MissionData, {}, 10, "drill")
+	check(not ok and reason == "unknown", "E: the old drill skill is gone (it is a tool upgrade)")
 	ok, reason = BaseBuild.canLearn(MissionData, {}, 2, "jump")
 	check(not ok and reason == "level", "E: double jump needs level 3")
+	-- Old saves: ProgressService keeps only known skills, so drill points come back as free points.
+	check(BaseBuild.skillDef(MissionData, "drill") == nil, "E: no drill skill def")
 
 	check(BaseBuild.speedBonus(MissionData, nil) == 0, "E: no speed skill, no bonus")
 	check(BaseBuild.speedBonus(MissionData, { speed = 2 }) == 2 * BASE.SPEED_BONUS_PER_LEVEL, "E: speed bonus per level")
@@ -254,20 +334,19 @@ do
 	check(BaseBuild.jumpPower(MissionData, {}) == MissionData.WORLD.JUMP_POWER, "E: normal Moon jump")
 	check(BaseBuild.jumpPower(MissionData, { jump = 3 }) == MissionData.WORLD.JUMP_POWER + BASE.JUMP_POWER_BONUS[3], "E: jump bonus")
 	check(not BaseBuild.hasDoubleJump({}) and BaseBuild.hasDoubleJump({ jump = 1 }), "E: jump 1 gives the double jump")
-	check(BaseBuild.drillHoldFactor(MissionData, {}) == 1, "E: normal drill time")
-	check(BaseBuild.drillHoldFactor(MissionData, { drill = 2 }) == BASE.DRILL_HOLD_FACTOR[2], "E: faster drill")
-	for i = 2, #BASE.DRILL_HOLD_FACTOR do
-		check(BASE.DRILL_HOLD_FACTOR[i] < BASE.DRILL_HOLD_FACTOR[i - 1], `E: drill level {i} is faster`)
-	end
-	check(BASE.DRILL_HOLD_FACTOR[1] < 1, "E: drill level 1 is faster than none")
 	check(BASE.DOUBLE_JUMP_FRACTION > 0 and BASE.DOUBLE_JUMP_FRACTION <= 1, "E: second jump is smaller")
 
-	-- A player at the top level cannot max every skill: choices cost something.
+	-- Skills are a choice during the game: when the last skill level unlocks, the player still has
+	-- fewer points than every skill level together.
 	local totalSkillLevels = 0
+	local lastUnlock = 1
 	for _, def in BASE.SKILLS do
 		totalSkillLevels += def.maxLevel
+		for _, need in def.minLevel do
+			lastUnlock = math.max(lastUnlock, need)
+		end
 	end
-	check(BaseBuild.skillPoints(#BASE.LEVEL_XP, {}) < totalSkillLevels, "E: not enough points for every skill (choose!)")
+	check(BaseBuild.skillPoints(lastUnlock, {}) < totalSkillLevels, "E: not enough points for every skill yet (choose!)")
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -324,21 +403,27 @@ end
 -- H. A new player is never stuck
 
 do
-	-- Plan: build solar (free), deliver ice by hand, build greenhouse, antenna, shelter.
+	-- Plan: build the habitat and solar (free), deliver ice by hand, build greenhouse, antenna,
+	-- shelter, the first drill. Every step of a build gives its crate and assembly XP.
+	local function stepXp(id: string, level: number): number
+		local stages = BaseBuild.stagesFor(MissionData, id, level)
+		return stages * (BASE.REWARDS.crate_delivered.xp + BASE.REWARDS.stage_done.xp)
+	end
 	local credits = BASE.START_CREDITS
 	local xp = 0
 	local builds: BaseBuild.Levels = {}
 	local deliveries = 0
-	local order = { "solar", "greenhouse", "antenna", "shelter", "drill_1" }
+	local order = { "habitat", "solar", "greenhouse", "antenna", "shelter", "drill_1" }
 	for _, id in order do
 		local guard = 0
 		while true do
 			local ok, reason = BaseBuild.canBuild(MissionData, builds, BaseBuild.levelForXp(MissionData, xp), credits, id)
 			if ok then
 				local cost = BaseBuild.nextCost(MissionData, builds, id) :: number
+				local level = BaseBuild.levelOf(builds, id) + 1
 				credits -= cost
-				xp += BaseBuild.buildXp(MissionData, cost)
-				builds[id] = BaseBuild.levelOf(builds, id) + 1
+				xp += BaseBuild.buildXp(MissionData, cost) + stepXp(id, level)
+				builds[id] = level
 				break
 			end
 			check(reason == "credits" or reason == "level", `H: {id} only waits for credits or XP ({reason})`)
@@ -358,9 +443,147 @@ do
 	end
 	check(builds.drill_1 == 1, "H: the first automatic drill is reachable by hand")
 	check(deliveries <= 40, `H: {deliveries} manual ice deliveries to reach the first drill (at most 40)`)
-	check(BaseBuild.canBuild(MissionData, {}, 1, BASE.START_CREDITS, "solar"), "H: a new player can build solar at once")
-	check(BASE.START_CREDITS >= 15, "H: START_CREDITS pays the greenhouse after the free solar array")
+	check(BaseBuild.canBuild(MissionData, {}, 1, BASE.START_CREDITS, "habitat"), "H: a new player can build the habitat at once")
+	check(BaseBuild.canBuild(MissionData, { habitat = 1 }, 1, BASE.START_CREDITS, "solar"), "H: then solar at once")
+	check(BASE.START_CREDITS >= 15, "H: START_CREDITS pays the greenhouse after the free builds")
 end
+
+----------------------------------------------------------------------------------------------------
+-- I. Building in steps
+
+do
+	check(isWhole(BASE.STAGES_FIRST, 1) and isWhole(BASE.STAGES_UPGRADE, 1), "I: default steps are whole numbers >= 1")
+	check(type(BASE.ASSEMBLE_HOLD_SECONDS) == "number" and BASE.ASSEMBLE_HOLD_SECONDS > 0, "I: assembling takes a hold")
+	for id, stages in BASE.STAGES_BY_ID do
+		check(BaseBuild.buildDef(MissionData, id) ~= nil, `I: STAGES_BY_ID names a real build ({id})`)
+		check(isWhole(stages, 1), `I: {id} steps are a whole number >= 1`)
+	end
+	for _, def in BASE.BUILDS do
+		for level = 1, def.maxLevel do
+			local stages = BaseBuild.stagesFor(MissionData, def.id, level)
+			check(isWhole(stages, 1), `I: {def.id} level {level} has {stages} steps (>= 1)`)
+			check(stages <= 10, `I: {def.id} level {level} is not endless ({stages} steps)`)
+		end
+	end
+	check(BaseBuild.stagesFor(MissionData, "habitat", 1) == BASE.STAGES_BY_ID.habitat, "I: habitat uses its own steps")
+	check(BaseBuild.stagesFor(MissionData, "greenhouse", 1) == BASE.STAGES_FIRST, "I: a new build uses STAGES_FIRST")
+	check(BaseBuild.stagesFor(MissionData, "greenhouse", 2) == BASE.STAGES_UPGRADE, "I: an upgrade uses STAGES_UPGRADE")
+	check(BaseBuild.stagesFor(MissionData, "solar", 2) == BASE.STAGES_UPGRADE, "I: a second array is an upgrade")
+	check(BaseBuild.stagesFor(MissionData, "ship", 1) == BASE.STAGES_BY_ID.ship, "I: the ship is a big project")
+	check(BaseBuild.stagesFor(MissionData, "ship", 1) > BASE.STAGES_FIRST, "I: the ship takes more steps than a normal build")
+	check(BaseBuild.stagesFor(MissionData, "habitat", 1) <= BASE.STAGES_FIRST, "I: the first build is quick")
+end
+
+----------------------------------------------------------------------------------------------------
+-- J. Tools
+
+do
+	local seen: { [string]: boolean } = {}
+	for _, def in BASE.TOOLS do
+		check(not seen[def.id], `J: tool id {def.id} unique`)
+		seen[def.id] = true
+		check(iconExists(def.icon), `J: tool {def.id} icon "{def.icon}" exists in Icons`)
+		if def.unlock ~= nil then
+			check(BaseBuild.buildDef(MissionData, def.unlock) ~= nil, `J: tool {def.id} unlocks with a real build ({def.unlock})`)
+		end
+		check(BaseBuild.toolDef(MissionData, def.id) == def, `J: toolDef finds {def.id}`)
+	end
+	for _, id in EXPECTED_TOOLS do
+		check(seen[id] == true, `J: tool {id} exists`)
+	end
+	check(#BASE.TOOLS == #EXPECTED_TOOLS, `J: {#BASE.TOOLS} tools (expected {#EXPECTED_TOOLS})`)
+	check(BaseBuild.toolDef(MissionData, "laser") == nil, "J: unknown tool")
+
+	-- What each tool waits for (team feedback: no drill = no ice, so the drill comes from the start).
+	local start = BaseBuild.toolsUnlocked(MissionData, {})
+	check(start.wrench == true and start.drill == true, "J: wrench and ice drill from the start")
+	check(start.brush == nil and start.tablet == nil and start.food == nil and start.repair_kit == nil, "J: other tools wait for builds")
+	local home = BaseBuild.toolsUnlocked(MissionData, { habitat = 1 })
+	check(home.repair_kit == true and home.brush == nil, "J: repair kit with the habitat")
+	local powered = BaseBuild.toolsUnlocked(MissionData, { habitat = 1, solar = 1 })
+	check(powered.brush == true, "J: panel brush with the solar arrays")
+	local linked = BaseBuild.toolsUnlocked(MissionData, { habitat = 1, solar = 1, antenna = 1 })
+	check(linked.tablet == true and linked.food == nil, "J: tablet with the antenna")
+	local green = BaseBuild.toolsUnlocked(MissionData, { habitat = 1, solar = 1, greenhouse = 1 })
+	check(green.food == true, "J: food with the greenhouse")
+	local food = BaseBuild.toolDef(MissionData, "food")
+	check(food ~= nil and food.consumable == true, "J: food is eaten (consumable)")
+
+	-- Tool upgrades (the Lab): only tools that exist, level 1 is free and comes with the tool.
+	for id, up in BASE.TOOL_UPGRADES do
+		check(seen[id] == true, `J: upgrade {id} is a real tool`)
+		check(isWhole(up.maxLevel, 2), `J: upgrade {id} has at least 2 levels`)
+		check(#up.costs == up.maxLevel and #up.minLevel == up.maxLevel, `J: upgrade {id} has one cost and level per level`)
+		check(up.costs[1] == 0 and up.minLevel[1] == 1, `J: upgrade {id} level 1 is free`)
+		for i = 2, up.maxLevel do
+			check(up.costs[i] > up.costs[i - 1], `J: upgrade {id} level {i} costs more`)
+			check(up.minLevel[i] >= up.minLevel[i - 1] and up.minLevel[i] <= #BASE.LEVEL_XP, `J: upgrade {id} level {i} gate is real`)
+		end
+	end
+	local drill = BASE.TOOL_UPGRADES.drill
+	check(#drill.holdFactor == drill.maxLevel, "J: one hold factor per drill level")
+	check(drill.holdFactor[1] == 1, "J: the basic drill takes the normal time")
+	for i = 2, #drill.holdFactor do
+		check(drill.holdFactor[i] < drill.holdFactor[i - 1] and drill.holdFactor[i] > 0, `J: drill level {i} is faster`)
+	end
+	check(BaseBuild.drillHoldFactor(MissionData, nil) == 1, "J: no level = basic drill")
+	check(BaseBuild.drillHoldFactor(MissionData, 0) == 1, "J: level 0 counts as basic")
+	check(BaseBuild.drillHoldFactor(MissionData, 2) == drill.holdFactor[2], "J: drill level 2 hold factor")
+	check(BaseBuild.drillHoldFactor(MissionData, 99) == drill.holdFactor[drill.maxLevel], "J: above the top = top level")
+
+	check(BaseBuild.toolUpgradeCost(MissionData, "drill", 1) == drill.costs[2], "J: next drill level cost")
+	check(BaseBuild.toolUpgradeCost(MissionData, "drill", drill.maxLevel) == nil, "J: maxed drill has no cost")
+	check(BaseBuild.toolUpgradeCost(MissionData, "wrench", 1) == nil, "J: the wrench has no upgrades")
+
+	local all = BaseBuild.toolsUnlocked(MissionData, { habitat = 1, solar = 1, antenna = 1, greenhouse = 1 })
+	local ok, reason = BaseBuild.canUpgradeTool(MissionData, "wrench", 1, 15, 10 ^ 6, all)
+	check(not ok and reason == "unknown", "J: no upgrade for the wrench")
+	ok, reason = BaseBuild.canUpgradeTool(MissionData, "drill", 1, 15, 10 ^ 6, {})
+	check(not ok and reason == "requires", "J: a locked tool cannot be upgraded")
+	ok, reason = BaseBuild.canUpgradeTool(MissionData, "drill", 1, drill.minLevel[2] - 1, 10 ^ 6, all)
+	check(not ok and reason == "level", "J: drill level 2 needs the player level")
+	ok, reason = BaseBuild.canUpgradeTool(MissionData, "drill", 1, drill.minLevel[2], drill.costs[2] - 1, all)
+	check(not ok and reason == "credits", "J: drill level 2 needs the credits")
+	ok, reason = BaseBuild.canUpgradeTool(MissionData, "drill", 1, drill.minLevel[2], drill.costs[2], all)
+	check(ok and reason == nil, "J: drill level 2 with level and credits")
+	ok, reason = BaseBuild.canUpgradeTool(MissionData, "drill", drill.maxLevel, 15, 10 ^ 6, all)
+	check(not ok and reason == "max", "J: the drill stops at its top level")
+end
+
+----------------------------------------------------------------------------------------------------
+-- K. Food, meteorites, vehicles
+
+do
+	local food = BASE.FOOD
+	check(food.COOLDOWN_SECONDS > 0 and food.BOOST_SECONDS > 0 and food.BOOST_SPEED > 0, "K: food values are positive")
+	check(food.BOOST_SECONDS < food.COOLDOWN_SECONDS, "K: a food boost ends before the next food grows")
+
+	local meteor = BASE.METEOR
+	check(meteor.MIN_SECONDS > 0 and meteor.MIN_SECONDS <= meteor.MAX_SECONDS, "K: meteorite wait range")
+	check(meteor.LIFETIME_SECONDS > 0, "K: a meteorite crater stays a while")
+	check(meteor.RING_MIN > 0 and meteor.RING_MIN < meteor.RING_MAX, "K: meteorite ring around the habitat")
+	check(meteor.RING_MAX <= 600, "K: meteorites land inside the map")
+
+	local garage = BaseBuild.buildDef(MissionData, "garage")
+	local seen: { [string]: boolean } = {}
+	for _, def in BASE.VEHICLES do
+		check(not seen[def.id], `K: vehicle id {def.id} unique`)
+		seen[def.id] = true
+		check(garage ~= nil and isWhole(def.garage, 1) and def.garage <= garage.maxLevel, `K: {def.id} needs a real garage level`)
+		check(type(def.maxSpeed) == "number" and def.maxSpeed > 0, `K: {def.id} has a top speed`)
+	end
+	check(seen.buggy == true and seen.hauler == true, "K: buggy and hauler exist")
+	local hauler = BASE.VEHICLES[2]
+	check(hauler.id == "hauler" and isWhole(hauler.cargo, 1), "K: the hauler carries ice cores")
+
+	for _, def in BASE.PETS do
+		if def.cost then
+			check(isWhole(def.cost, 1) and isWhole(def.minLevel, 1), `K: adopted pet {def.id} has a cost and a level`)
+		end
+	end
+end
+
+----------------------------------------------------------------------------------------------------
 
 print(`base: {passes} passed, {failures} failed`)
 if failures > 0 then

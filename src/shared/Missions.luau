@@ -9,6 +9,10 @@
 -- Stage 6: the base starts almost empty. A mission can need builds (`needs`: build id -> minimum
 -- level, the ids of MissionData.BASE.BUILDS) and the training missions teach building with the
 -- build_* objectives (done once that structure stands in the server).
+-- Stage 7: a new player lands in the arrival lander and builds the whole base, the habitat first, so
+-- every mission after first steps needs the habitat. Shift tasks need a tool in hand (OBJECTIVE_TOOLS:
+-- ids of MissionData.BASE.TOOLS); MissionService checks it and tests/missions proves each tool is
+-- unlocked by the builds a mission needs or teaches before that task.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 -- Same values as Simulation.EventId (duplicated so this module needs no require).
@@ -32,6 +36,7 @@ export type ObjectiveId =
 	| "complete_days"
 	| "deliver_ice_total"
 	| "stars_at_least"
+	| "build_habitat"
 	| "build_solar"
 	| "build_greenhouse"
 	| "build_antenna"
@@ -73,6 +78,7 @@ local OBJECTIVE_IDS: { ObjectiveId } = {
 	"complete_days",
 	"deliver_ice_total",
 	"stars_at_least",
+	"build_habitat",
 	"build_solar",
 	"build_greenhouse",
 	"build_antenna",
@@ -81,6 +87,7 @@ local OBJECTIVE_IDS: { ObjectiveId } = {
 
 -- build_* objectives and the build each one waits for (progress 1 once its level is at least 1).
 local BUILD_OBJECTIVES: { [string]: string } = {
+	build_habitat = "habitat",
 	build_solar = "solar",
 	build_greenhouse = "greenhouse",
 	build_antenna = "antenna",
@@ -89,7 +96,29 @@ local BUILD_OBJECTIVES: { [string]: string } = {
 
 -- Stable order for "build this first" (same order as MissionData.BASE.BUILDS; duplicated so this
 -- module needs no require). Unknown ids come after these, sorted by name.
-local BUILD_ORDER: { string } = { "solar", "greenhouse", "antenna", "shelter", "drill_1", "drill_2", "drill_3", "cargo_bot" }
+local BUILD_ORDER: { string } = {
+	"habitat",
+	"solar",
+	"greenhouse",
+	"lab",
+	"antenna",
+	"shelter",
+	"drill_1",
+	"drill_2",
+	"drill_3",
+	"cargo_bot",
+	"garage",
+	"landing_pad",
+	"ship",
+}
+
+-- Shift tasks and the tool each one needs in hand (ids of MissionData.BASE.TOOLS).
+local OBJECTIVE_TOOLS: { [string]: string } = {
+	drill_ice = "drill",
+	clean_panel = "brush",
+	align_antenna = "tablet",
+	repair_leak = "repair_kit",
+}
 
 -- Objective texts that show the target as {n} ("Finish {n} days").
 local COUNTED_OBJECTIVES: { [string]: boolean } = {
@@ -114,8 +143,9 @@ local LIST: { Mission } = {
 		icon = "home",
 		days = 1,
 		schedule = { "None" },
-		-- Go out, build the first solar array on its glowing pad, come back in.
-		objectives = { obj("go_outside", 1), obj("build_solar", 1), obj("return_inside", 1) },
+		-- Step out of the lander, build the habitat and the first solar array (crates and the wrench),
+		-- then go inside the new habitat.
+		objectives = { obj("go_outside", 1), obj("build_habitat", 1), obj("build_solar", 1), obj("return_inside", 1) },
 		requires = {},
 		needs = nil,
 		autoComplete = true,
@@ -130,7 +160,7 @@ local LIST: { Mission } = {
 		shiftSeconds = 45, -- GAME: a short first shift
 		objectives = { obj("build_greenhouse", 1), obj("set_power", 1), obj("start_shift", 1), obj("finish_day", 1) },
 		requires = { "t1_steps" },
-		needs = { solar = 1 },
+		needs = { habitat = 1, solar = 1 },
 		autoComplete = true,
 	},
 	{
@@ -148,7 +178,7 @@ local LIST: { Mission } = {
 			obj("deliver_ice", 1),
 		},
 		requires = { "t2_power" },
-		needs = { solar = 1, greenhouse = 1 },
+		needs = { habitat = 1, solar = 1, greenhouse = 1 },
 		autoComplete = true,
 	},
 	{
@@ -162,7 +192,7 @@ local LIST: { Mission } = {
 		flareAtSeconds = 12, -- GAME: the warning comes quickly in training
 		objectives = { obj("build_shelter", 1), obj("reach_shelter", 1), obj("survive_storm", 1) },
 		requires = { "t3_tasks" },
-		needs = { solar = 1, greenhouse = 1, antenna = 1 },
+		needs = { habitat = 1, solar = 1, greenhouse = 1, antenna = 1 },
 		autoComplete = true,
 	},
 	-- Story: three chapters, ending with a partial ending (Mars is next, secrets remain).
@@ -175,7 +205,7 @@ local LIST: { Mission } = {
 		schedule = { "None", "Dust", "None" },
 		objectives = { obj("complete_days", 3), obj("deliver_ice_total", 2) },
 		requires = { "t4_storm" },
-		needs = { solar = 2, greenhouse = 1, antenna = 1, shelter = 1 }, -- more panels, more power
+		needs = { habitat = 1, solar = 2, greenhouse = 1, antenna = 1, shelter = 1 }, -- more panels, more power
 		autoComplete = false,
 	},
 	{
@@ -188,7 +218,7 @@ local LIST: { Mission } = {
 		stormParticles = { true },
 		objectives = { obj("complete_days", 3), obj("survive_storm", 1) },
 		requires = { "c1_arrival" },
-		needs = { solar = 3, greenhouse = 1, antenna = 1, shelter = 1 }, -- the full base
+		needs = { habitat = 1, solar = 3, greenhouse = 1, antenna = 1, shelter = 1 }, -- the full base
 		autoComplete = false,
 	},
 	{
@@ -202,7 +232,7 @@ local LIST: { Mission } = {
 		stormParticles = { true, false },
 		objectives = { obj("complete_days", 4), obj("repair_leak", 1), obj("stars_at_least", 2) },
 		requires = { "c2_storm" },
-		needs = { solar = 3, greenhouse = 1, antenna = 1, shelter = 1 },
+		needs = { habitat = 1, solar = 3, greenhouse = 1, antenna = 1, shelter = 1 },
 		autoComplete = false,
 	},
 	-- Free play: the original random week, unlocked after the story.
@@ -215,7 +245,7 @@ local LIST: { Mission } = {
 		schedule = nil,
 		objectives = { obj("complete_days", 7) },
 		requires = { "c3_failure" },
-		needs = { solar = 3, greenhouse = 1, antenna = 1, shelter = 1 },
+		needs = { habitat = 1, solar = 3, greenhouse = 1, antenna = 1, shelter = 1 },
 		autoComplete = false,
 	},
 }
@@ -246,6 +276,7 @@ Missions.LIST = table.freeze(LIST)
 Missions.OBJECTIVE_IDS = table.freeze(OBJECTIVE_IDS)
 Missions.COLLECTIBLES = table.freeze(COLLECTIBLES)
 Missions.BUILD_ORDER = table.freeze(BUILD_ORDER)
+Missions.OBJECTIVE_TOOLS = table.freeze(OBJECTIVE_TOOLS)
 
 function Missions.get(id: string): Mission?
 	return byId[id]
@@ -288,6 +319,11 @@ end
 -- The build a build_* objective waits for ("build_solar" -> "solar"), or nil for other objectives.
 function Missions.buildForObjective(id: string): string?
 	return BUILD_OBJECTIVES[id]
+end
+
+-- The tool a shift task needs in hand ("drill_ice" -> "drill"), or nil when it needs none.
+function Missions.toolForObjective(id: string): string?
+	return OBJECTIVE_TOOLS[id]
 end
 
 -- True when every build the mission needs stands (same rule as BaseBuild.meetsNeeds).

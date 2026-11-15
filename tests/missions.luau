@@ -6,6 +6,9 @@
 -- day can never empty a meter. Stage 6: every build a mission needs is a real build that can be
 -- built in order, training builds what later missions need, a new player can pay for it all from
 -- mission rewards alone, and each mission is played with only the solar arrays it needs.
+-- Stage 7: first steps builds the habitat (every later mission needs it), BUILD_ORDER follows
+-- MissionData.BASE.BUILDS, and every task that needs a tool in hand comes after the build that
+-- unlocks that tool.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local BaseBuild = require("../src/shared/BaseBuild")
@@ -145,16 +148,34 @@ for index, mission in Missions.LIST do
 		end
 		check(table.find(Missions.BUILD_ORDER, buildId) ~= nil, `mission {id}: needs "{buildId}" is in BUILD_ORDER`)
 	end
+	-- Stage 7: a mission can teach two builds in a row (first steps: habitat, then solar), so each one
+	-- is checked against the needs plus the builds taught before it.
+	local standing: { [string]: number } = table.clone(needs)
 	for _, objective in mission.objectives do
 		local buildId = Missions.buildForObjective(objective.id)
 		if buildId then
 			check(objective.target == 1, `mission {id}: "{objective.id}" target is 1`)
 			check(BaseBuild.buildDef(MissionData, buildId) ~= nil, `mission {id}: "{objective.id}" names a real build`)
 			check((needs[buildId] or 0) < 1, `mission {id}: "{objective.id}" is not already needed`)
-			local ok, reason = BaseBuild.canBuild(MissionData, needs, 1, math.huge, buildId)
-			check(ok, `mission {id}: "{objective.id}" can be built by a level 1 player once the needs stand ({reason})`)
+			local ok, reason = BaseBuild.canBuild(MissionData, standing, 1, math.huge, buildId)
+			check(ok, `mission {id}: "{objective.id}" can be built by a level 1 player once the needs and earlier builds stand ({reason})`)
 			check(mission.kind == "Tutorial", `mission {id}: only training teaches building`)
+			standing[buildId] = math.max(standing[buildId] or 0, 1)
 		end
+		-- Tools (Stage 7): a task that needs a tool in hand comes after the build that unlocks it.
+		local toolId = Missions.toolForObjective(objective.id)
+		if toolId then
+			local tool = BaseBuild.toolDef(MissionData, toolId)
+			check(tool ~= nil, `mission {id}: "{objective.id}" needs a real tool ({toolId})`)
+			check(
+				BaseBuild.toolsUnlocked(MissionData, standing)[toolId] == true,
+				`mission {id}: the {toolId} for "{objective.id}" is unlocked by the builds standing by then`
+			)
+		end
+	end
+	-- Every mission after first steps happens at a standing habitat (Stage 7: the lander comes first).
+	if index > 1 then
+		check((needs.habitat or 0) >= 1, `mission {id}: needs the habitat`)
 	end
 	if mission.kind == "Tutorial" then
 		check(mission.autoComplete, `mission {id}: tutorials end as soon as objectives are done`)
@@ -188,22 +209,37 @@ do
 	local c1 = Missions.get("c1_arrival") :: Mission
 	local c2 = Missions.get("c2_storm") :: Mission
 	local t2 = Missions.get("t2_power") :: Mission
-	check(not Missions.isUnlocked(t2, allDone, {}), "t2 needs the solar panels")
-	check(Missions.isUnlocked(t2, allDone, { solar = 1 }), "t2 opens once solar stands")
+	check(not Missions.isUnlocked(t2, allDone, {}), "t2 needs the habitat and solar panels")
+	check(not Missions.isUnlocked(t2, allDone, { solar = 1 }), "t2 needs the habitat")
+	check(Missions.isUnlocked(t2, allDone, { habitat = 1, solar = 1 }), "t2 opens once the habitat and solar stand")
 	check(Missions.isUnlocked(t2, allDone), "no builds given: needs are not checked")
-	check(Missions.missingBuild(t2, {}) == "solar", "t2 is missing solar")
-	check(Missions.missingBuild(t2, { solar = 1 }) == nil, "t2 is missing nothing")
-	local fullBase = { solar = 3, greenhouse = 1, antenna = 1, shelter = 1 }
-	local twoArrays = { solar = 2, greenhouse = 1, antenna = 1, shelter = 1 }
+	check(Missions.missingBuild(t2, {}) == "habitat", "t2 is missing the habitat first")
+	check(Missions.missingBuild(t2, { habitat = 1 }) == "solar", "t2 is missing solar")
+	check(Missions.missingBuild(t2, { habitat = 1, solar = 1 }) == nil, "t2 is missing nothing")
+	local fullBase = { habitat = 1, solar = 3, greenhouse = 1, antenna = 1, shelter = 1 }
+	local twoArrays = { habitat = 1, solar = 2, greenhouse = 1, antenna = 1, shelter = 1 }
 	check(Missions.isUnlocked(c2, allDone, fullBase), "c2 opens with the full base")
 	check(not Missions.isUnlocked(c2, allDone, twoArrays), "c2 needs three solar arrays")
 	check(Missions.missingBuild(c2, twoArrays) == "solar", "c2 is missing solar")
-	check(Missions.missingBuild(c1, { solar = 2, greenhouse = 1 }) == "antenna", "c1 without antenna is missing antenna")
-	check(Missions.missingBuild(c1, { solar = 1, antenna = 1 }) == "solar", "missingBuild follows BUILD_ORDER")
+	check(Missions.missingBuild(c1, { habitat = 1, solar = 2, greenhouse = 1 }) == "antenna", "c1 without antenna is missing antenna")
+	check(Missions.missingBuild(c1, { habitat = 1, solar = 1, antenna = 1 }) == "solar", "missingBuild follows BUILD_ORDER")
 	check(Missions.meetsNeeds(Missions.LIST[1], {}), "the first mission needs nothing")
+	check(Missions.buildForObjective("build_habitat") == "habitat", "build_habitat waits for the habitat")
+	-- BUILD_ORDER is the order of MissionData.BASE.BUILDS (duplicated so Missions needs no require).
+	check(#Missions.BUILD_ORDER == #MissionData.BASE.BUILDS, `BUILD_ORDER has every build ({#Missions.BUILD_ORDER})`)
+	for i, def in MissionData.BASE.BUILDS do
+		check(Missions.BUILD_ORDER[i] == def.id, `BUILD_ORDER[{i}] is {def.id}`)
+	end
+	-- Tools named by objectives exist; tasks without a tool name none.
+	for objectiveId, toolId in Missions.OBJECTIVE_TOOLS do
+		check(Missions.isObjectiveId(objectiveId), `OBJECTIVE_TOOLS: "{objectiveId}" is an objective`)
+		check(BaseBuild.toolDef(MissionData, toolId) ~= nil, `OBJECTIVE_TOOLS: "{toolId}" is a tool`)
+	end
+	check(Missions.toolForObjective("drill_ice") == "drill", "drilling ice needs the drill")
+	check(Missions.toolForObjective("deliver_ice") == nil, "delivering ice needs no tool")
 	for _, mission in Missions.LIST do
 		-- Same answer as BaseBuild.meetsNeeds (Missions duplicates it to stay require-free).
-		for _, builds in { {}, { solar = 1 }, twoArrays, fullBase } :: { { [string]: number } } do
+		for _, builds in { {}, { solar = 1 }, { habitat = 1, solar = 1 }, twoArrays, fullBase } :: { { [string]: number } } do
 			check(
 				Missions.meetsNeeds(mission, builds) == BaseBuild.meetsNeeds(builds, mission.needs),
 				`mission {mission.id}: meetsNeeds matches BaseBuild`

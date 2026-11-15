@@ -5,6 +5,10 @@
 -- a shift the suit also drains outside while the base is open to roam (Briefing and Planning: building
 -- and manual ice), refills inside and C.A.R.L. still rescues; only shift refills cost base air.
 -- The regolith shelter only counts once it is built (world.isBuilt("shelter")).
+-- Stage 7: players arrive in the lander (world.landerZone, the spawn): it is always a pressurized
+-- room, so suits refill there and C.A.R.L. brings a player with an empty suit back to it. The
+-- habitat is built like everything else and counts as inside only once it stands. zoneOf tells the
+-- rooms apart ("go back inside" in first steps means the habitat).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -21,6 +25,8 @@ type Crew = {
 	suitMax: number, -- SUIT.MAX plus the tank skill, read from the player attribute every tick
 	inside: boolean,
 	sheltered: boolean,
+	inHabitat: boolean,
+	inLander: boolean,
 	carryingIce: boolean,
 	countRefill: boolean, -- suit dropped below the refill threshold; count it when full again
 	rescueTopUp: boolean, -- the next top-up after a rescue is already counted
@@ -51,6 +57,7 @@ local CrewService = {}
 local crews: { [Player]: Crew } = {}
 local habitatZone: BasePart? = nil
 local shelterZone: BasePart? = nil
+local landerZone: BasePart? = nil
 local spawnLocation: SpawnLocation? = nil
 local remotes: Remotes? = nil
 local worldRef: any = nil
@@ -95,23 +102,33 @@ local function suitMaxOf(player: Player): number
 end
 
 -- Running threshold plus the speed skill (attribute SBO_SpeedBonus): a faster walker is not "running".
+-- Stage 7: while a greenhouse food boost lasts (SBO_FoodBoostUntil, set by ToolService) the client
+-- walks FOOD.BOOST_SPEED faster, so the threshold rises by the same amount.
 local function runThresholdOf(player: Player): number
+	local threshold = SUIT.RUN_SPEED_THRESHOLD
 	local bonus = player:GetAttribute("SBO_SpeedBonus")
 	if type(bonus) == "number" and bonus == bonus and bonus >= 0 and bonus < math.huge then
-		return SUIT.RUN_SPEED_THRESHOLD + bonus
+		threshold += bonus
 	end
-	return SUIT.RUN_SPEED_THRESHOLD
+	local boostUntil = player:GetAttribute("SBO_FoodBoostUntil")
+	if type(boostUntil) == "number" and boostUntil > workspace:GetServerTimeNow() then
+		threshold += MissionData.BASE.FOOD.BOOST_SPEED
+	end
+	return threshold
 end
 
--- The shelter protects only once it stands (Stage 6). Worlds without isBuilt keep the old base.
-local function shelterBuilt(): boolean
+-- A structure counts only once it stands (Stage 6: the shelter; Stage 7: the habitat too). Worlds
+-- without isBuilt keep the old, fully built base.
+local function structureBuilt(id: string): boolean
 	local isBuilt = worldRef and worldRef.isBuilt
 	if type(isBuilt) ~= "function" then
 		return true
 	end
-	local ok, built = pcall(isBuilt, "shelter")
+	local ok, built = pcall(isBuilt, id)
 	return not ok or built == true
 end
+
+type BuiltNow = { habitat: boolean, shelter: boolean }
 
 local function sendMessage(player: Player, key: string)
 	if remotes then
@@ -159,6 +176,17 @@ end
 local function rescue(player: Player, crew: Crew)
 	local character = player.Character
 	if character and spawnLocation then
+		-- A seated character is welded to its seat: unseat first so the teleport does not drag a
+		-- garage vehicle into the lander.
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		local seat = if humanoid then humanoid.SeatPart else nil
+		if humanoid and seat then
+			local seatWeld = seat:FindFirstChild("SeatWeld")
+			if seatWeld then
+				seatWeld:Destroy()
+			end
+			humanoid.Sit = false
+		end
 		character:PivotTo(spawnLocation.CFrame + RESCUE_OFFSET)
 		crew.measured = false -- a teleport, not a walk back inside
 	end
@@ -182,13 +210,15 @@ local function notifyZone(player: Player, inside: boolean, sheltered: boolean, w
 	end
 end
 
-local function updateCrew(player: Player, crew: Crew, dt: number)
+local function updateCrew(player: Player, crew: Crew, dt: number, built: BuiltNow)
 	local root = getRoot(player)
 	if root == nil then
 		-- No living character: no reading. The next spawn starts a fresh measurement, so dying or
 		-- respawning is never reported as walking in or out.
 		crew.inside = false
 		crew.sheltered = false
+		crew.inHabitat = false
+		crew.inLander = false
 		crew.measured = false
 		return
 	end
@@ -202,8 +232,10 @@ local function updateCrew(player: Player, crew: Crew, dt: number)
 
 	local position = root.Position
 	local wasInside, wasSheltered = crew.inside, crew.sheltered
-	crew.sheltered = shelterBuilt() and insideBox(shelterZone, position)
-	crew.inside = crew.sheltered or insideBox(habitatZone, position)
+	crew.sheltered = built.shelter and insideBox(shelterZone, position)
+	crew.inHabitat = built.habitat and insideBox(habitatZone, position)
+	crew.inLander = insideBox(landerZone, position)
+	crew.inside = crew.sheltered or crew.inHabitat or crew.inLander
 	if not crew.measured then
 		crew.measured = true
 	elseif wasInside ~= crew.inside or wasSheltered ~= crew.sheltered then
@@ -267,6 +299,8 @@ local function addPlayer(player: Player)
 		suitMax = startMax,
 		inside = false,
 		sheltered = false,
+		inHabitat = false,
+		inLander = false,
 		carryingIce = false,
 		countRefill = false,
 		rescueTopUp = false,
@@ -299,13 +333,19 @@ local function removePlayer(player: Player)
 	crews[player] = nil
 end
 
--- world: WorldBuilder.World (uses habitatZone, shelterZone, spawn, and isBuilt when present).
+-- world: WorldBuilder.World (uses habitatZone, shelterZone, landerZone, spawn, and isBuilt when present).
 function CrewService.start(world: any, remoteEvents: Remotes)
 	assert(not started, "CrewService already started")
 	started = true
 	worldRef = world
 	habitatZone = world.habitatZone
 	shelterZone = world.shelterZone
+	local lander = world.landerZone
+	if typeof(lander) == "Instance" and lander:IsA("BasePart") then
+		landerZone = lander
+	else
+		warn("[SpaceBaseOdyssey] world has no landerZone; only the habitat and shelter are inside")
+	end
 	spawnLocation = world.spawn
 	remotes = remoteEvents
 
@@ -322,11 +362,13 @@ function CrewService.start(world: any, remoteEvents: Remotes)
 			local now = os.clock()
 			local dt = math.min(now - last, 1)
 			last = now
+			-- Asked once per tick for everyone.
+			local built: BuiltNow = { habitat = structureBuilt("habitat"), shelter = structureBuilt("shelter") }
 			for player, crew in crews do
 				if player.Parent == nil then
 					continue
 				end
-				updateCrew(player, crew, dt)
+				updateCrew(player, crew, dt, built)
 				sendStatsIfChanged(player, crew)
 			end
 		end
@@ -373,6 +415,31 @@ end
 function CrewService.isInside(player: Player): boolean
 	local crew = crews[player]
 	return crew ~= nil and crew.inside
+end
+
+-- Stage 7: which room the player is in: "shelter", "habitat", "lander" or "outside".
+function CrewService.zoneOf(player: Player): string
+	local crew = crews[player]
+	if crew == nil or not crew.inside then
+		return "outside"
+	elseif crew.sheltered then
+		return "shelter"
+	elseif crew.inHabitat then
+		return "habitat"
+	elseif crew.inLander then
+		return "lander"
+	end
+	return "outside"
+end
+
+function CrewService.isInHabitat(player: Player): boolean
+	local crew = crews[player]
+	return crew ~= nil and crew.inHabitat
+end
+
+function CrewService.isInLander(player: Player): boolean
+	local crew = crews[player]
+	return crew ~= nil and crew.inLander
 end
 
 function CrewService.isSheltered(player: Player): boolean

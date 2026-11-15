@@ -244,9 +244,73 @@ function BaseBuild.hasDoubleJump(skills: Levels?): boolean
 	return levelOf(skills, "jump") >= 1
 end
 
-function BaseBuild.drillHoldFactor(data: any, skills: Levels?): number
-	local level = levelOf(skills, "drill")
-	return if level > 0 then data.BASE.DRILL_HOLD_FACTOR[level] else 1
+-- Ice drilling hold factor for a drill TOOL level (Stage 7: the drill is a tool upgraded at the Lab).
+function BaseBuild.drillHoldFactor(data: any, toolLevel: number?): number
+	local up = data.BASE.TOOL_UPGRADES.drill
+	local level = math.clamp(toolLevel or 1, 1, up.maxLevel)
+	return up.holdFactor[level]
+end
+
+-- Steps needed to build `level` of build `id` (Stage 7: building happens in steps).
+function BaseBuild.stagesFor(data: any, id: string, level: number): number
+	local byId = data.BASE.STAGES_BY_ID[id]
+	if byId and level == 1 then
+		return byId
+	end
+	if id == "ship" and byId then
+		return byId
+	end
+	return if level <= 1 then data.BASE.STAGES_FIRST else data.BASE.STAGES_UPGRADE
+end
+
+function BaseBuild.toolDef(data: any, id: string): any
+	for _, def in data.BASE.TOOLS do
+		if def.id == id then
+			return def
+		end
+	end
+	return nil
+end
+
+-- Tools the player may carry, given the builds standing in the server (a tool's unlock build).
+function BaseBuild.toolsUnlocked(data: any, effective: Levels): { [string]: boolean }
+	local result: { [string]: boolean } = {}
+	for _, def in data.BASE.TOOLS do
+		if def.unlock == nil or levelOf(effective, def.unlock) >= 1 then
+			result[def.id] = true
+		end
+	end
+	return result
+end
+
+-- Credits for the next level of a tool upgrade (nil when maxed or unknown).
+function BaseBuild.toolUpgradeCost(data: any, id: string, currentLevel: number): number?
+	local up = data.BASE.TOOL_UPGRADES[id]
+	if up == nil or currentLevel + 1 > up.maxLevel then
+		return nil
+	end
+	return up.costs[currentLevel + 1]
+end
+
+function BaseBuild.canUpgradeTool(data: any, id: string, currentLevel: number, playerLevel: number, credits: number, unlocked: { [string]: boolean }): (boolean, Reason?)
+	local up = data.BASE.TOOL_UPGRADES[id]
+	if up == nil then
+		return false, "unknown"
+	end
+	if not unlocked[id] then
+		return false, "requires"
+	end
+	local nextLevel = currentLevel + 1
+	if nextLevel > up.maxLevel then
+		return false, "max"
+	end
+	if playerLevel < up.minLevel[nextLevel] then
+		return false, "level"
+	end
+	if credits < up.costs[nextLevel] then
+		return false, "credits"
+	end
+	return true, nil
 end
 
 -- True when every build a mission needs is standing (needs: build id -> minimum level).

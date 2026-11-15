@@ -10,6 +10,9 @@
 --   H. never linking the antenna earns 1 star: science waits and is sent on the next linked day;
 --   I. live meters during a shift never change the state and end exactly at the endDay values.
 --   K. fewer solar arrays built (Stage 6) means less power: never more stars than more arrays.
+--   L. a full ice hauler load (Stage 7) in one shift never overfills the water tank or the air meter,
+--      and gives exactly what the same cores carried by hand give (the simulation counts cores).
+--   M. fresh greenhouse food (Stage 7) is a short boost: it never lasts until the next tray is ready.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local MissionData = require("../src/shared/MissionData")
@@ -421,6 +424,48 @@ do
 		check(#two.history >= 5, `K seed {seed}: a careful crew with two arrays reaches day {#two.history} (needs >= 5)`)
 		check(s3 == 3, `K seed {seed}: three arrays still allow 3 stars ({s3})`)
 	end
+end
+
+-- L. The ice hauler (Stage 7): several cores in one delivery.
+do
+	local hauler: any = nil
+	for _, vehicle in MissionData.BASE.VEHICLES do
+		if vehicle.id == "hauler" then
+			hauler = vehicle
+		end
+	end
+	check(hauler ~= nil and type(hauler.cargo) == "number" and hauler.cargo >= 1, "L: the hauler carries ice cores")
+	local cargo: number = if hauler then hauler.cargo else 1
+	for _, seed in SEEDS do
+		local byHauler = Simulation.newMission(MissionData, seed)
+		local byHand = Simulation.newMission(MissionData, seed)
+		for _, state in { byHauler, byHand } do
+			Simulation.beginDay(state, MissionData)
+			place(state, { LifeSupport = 2, Greenhouse = 1, Science = 1 })
+		end
+		local loads = idleShift(false)(byHauler)
+		loads.iceCores = cargo * 3 -- three full loads in one shift
+		Simulation.endDay(byHauler, MissionData, loads)
+		local carried = idleShift(false)(byHand)
+		carried.iceCores = cargo * 3
+		Simulation.endDay(byHand, MissionData, carried)
+		check(byHauler.water <= MissionData.WATER.MAX, `L seed {seed}: water {byHauler.water} never above the tank`)
+		check(byHauler.air <= 100, `L seed {seed}: air {byHauler.air} never above 100`)
+		check(byHauler.air == byHand.air and byHauler.water == byHand.water, `L seed {seed}: hauler cores equal cores by hand`)
+	end
+end
+
+-- M. Greenhouse food boost (Stage 7).
+do
+	local food = MissionData.BASE.FOOD
+	check(food.BOOST_SECONDS > 0 and food.BOOST_SPEED > 0, "M: eating food gives a real boost")
+	check(food.BOOST_SECONDS < food.COOLDOWN_SECONDS, "M: the boost ends before the next tray is ready (plants take time)")
+	local fastest = MissionData.WORLD.RUN_SPEED + 3 * MissionData.BASE.SPEED_BONUS_PER_LEVEL + food.BOOST_SPEED
+	local slowestCar = math.huge
+	for _, vehicle in MissionData.BASE.VEHICLES do
+		slowestCar = math.min(slowestCar, vehicle.maxSpeed)
+	end
+	check(fastest < slowestCar, `M: a boosted runner ({fastest}) is still slower than any vehicle ({slowestCar})`)
 end
 
 print(`balance: {passes} passed, {failures} failed; best static allocation earned {bestStatic} stars`)

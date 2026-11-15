@@ -60,6 +60,15 @@ local Icons = {
 	backpack = "rbxassetid://74585032502388", -- backpack
 	silo = "rbxassetid://111195560556445", -- building-warehouse
 	skills = "rbxassetid://124370977697332", -- trending-up
+	-- Stage 7: tools, vehicles, exploring.
+	car = "rbxassetid://129248089646643", -- car
+	flask = "rbxassetid://84574378206316", -- flask: the Lab
+	tablet = "rbxassetid://83474594791656", -- device-tablet
+	brush = "rbxassetid://92142765274700", -- brush
+	crate = "rbxassetid://118825664624545", -- package: parts crate
+	meteor = "rbxassetid://86135352621535", -- meteor
+	truck = "rbxassetid://116616146253941", -- truck: ice hauler
+	explore = "rbxassetid://140628088698623", -- map-search: exploration sites
 }
 
 -- Earth map: NASA Visible Earth "Blue Marble" (public domain, NASA Goddard), 1024x512 equirectangular.

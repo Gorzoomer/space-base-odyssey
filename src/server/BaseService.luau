@@ -1,10 +1,22 @@
 --!strict
--- Space Base Odyssey - build and grow the base (Stage 6), server side.
--- Every player starts with only the habitat and its water tank and builds the rest with credits:
--- solar arrays, greenhouse, antenna, shelter, automatic ice drills and the cargo robot. Builds are
--- SHARED in a server (a structure stands at the highest level any present player has built, see
--- BaseBuild.effective); credits, XP, skills, pets and what each player wears belong to that player
--- and are saved by ProgressService (Record.base).
+-- Space Base Odyssey - build and grow the base (Stages 6 and 7), server side.
+-- Every player arrives in the lander and builds the whole base with credits: first the habitat
+-- (free), then solar arrays, greenhouse, Lab, antenna, shelter, automatic ice drills, the cargo
+-- robot, the garage, the landing pad and the ship. Builds are SHARED in a server (a structure stands
+-- at the highest level any present player has built, see BaseBuild.effective); credits, XP, skills,
+-- tool upgrades, pets, scanned sites and what each player wears belong to that player and are saved
+-- by ProgressService (Record.base).
+--
+-- Stage 7: building happens in STEPS. Triggering a build pad pays the credits and starts the level
+-- (BaseBuild.stagesFor steps). Each step needs a parts crate carried from the lander's cargo bay
+-- (world.crateDepot) to the pad, then "Assemble" (a longer hold) with the wrench IN HAND. The last
+-- step completes the level (it rises in). Progress is per server: anyone present may carry crates
+-- and assemble; the player who paid gets the build in their save. Pad prompt states are written as
+-- attributes (prompt TextKey / TextParams; pad SBO_Phase "idle" | "crate" | "assemble", SBO_Stage,
+-- SBO_Stages). Skills, pets and tool upgrades are only bought at the Lab (built, and standing near
+-- its prompt). Tools the player may carry come from the builds standing (BaseBuild.toolsUnlocked);
+-- ToolService gives them and reports what is in hand through setToolChecker.
+--
 -- The rules live in src/shared/BaseBuild.luau and every number in MissionData.BASE. This module
 -- validates every request (server authoritative), keeps the world (build pads, silo, cargo robot)
 -- in sync, applies skill effects and sends each player their Types.BaseState (Remotes.BASE_STATE).
@@ -27,6 +39,7 @@ type BaseRecord = ProgressServiceModule.BaseRecord
 type Levels = BaseBuild.Levels
 type Equipped = Types.Equipped
 type BaseState = Types.BaseState
+type BuildProgress = Types.BuildProgress
 type Params = { [string]: string | number }
 
 export type Remotes = {
@@ -34,13 +47,32 @@ export type Remotes = {
 	message: RemoteEvent,
 }
 
+-- What BaseService needs from CrewService (optional: without it crates ignore carried ice).
+export type CrewApi = {
+	isCarrying: (player: Player) -> boolean,
+}
+
+-- A build level being built in steps (server only; clients get Types.BuildProgress).
+type Job = {
+	level: number, -- the level being built
+	stage: number, -- steps finished
+	stages: number,
+	crate: boolean, -- the parts crate for the next step is at the pad
+	cost: number, -- credits paid (refunded if someone else's save already has this level)
+	payer: Player?, -- nil while the payer is away (the job stays for the server session)
+	payerId: number,
+}
+
+export type PadPhase = "idle" | "crate" | "assemble"
+
 local BASE = MissionData.BASE
 
 -- Technical settings (not gameplay numbers).
-local ACTION_INTERVAL_SECONDS = 0.2 -- one Stage 6 action per player this often (extra ones are dropped)
+local ACTION_INTERVAL_SECONDS = 0.2 -- one base action per player this often (extra ones are dropped)
 local STATE_PUSH_SECONDS = 0.25 -- at most four BaseState messages per second per player
 local SILO_TICK_SECONDS = 1
 local PROMPT_EXTRA_RANGE = 8 -- studs beyond the prompt's own range (lag), checked on the server
+local LAB_RANGE_STUDS = 30 -- Lab purchases need the player this close to the Lab prompt (the panel closes at 30)
 local DEBUG_MAX_GRANT = 100000
 
 -- Action types this module handles (MissionService routes them here).
@@ -50,6 +82,8 @@ local ACTION_TYPES: { [string]: boolean } = {
 	Equip = true,
 	BuyPet = true,
 	ClaimSilo = true,
+	UpgradeTool = true,
+	DebugMeteor = true,
 	DebugGrantCredits = true,
 	DebugResetBase = true,
 }
@@ -60,6 +94,7 @@ local started = false
 local world: any = nil
 local remotes: Remotes? = nil
 local progress: ProgressApi? = nil
+local crew: CrewApi? = nil
 
 local effective: Levels = {} -- builds standing in this server
 local applied: { [string]: number } = {} -- build levels the world shows
@@ -70,6 +105,15 @@ local siloSent = -1 -- floor(silo) last sent to clients
 local cargoTimer = 0
 local cargoTurn = 0 -- rotates the cargo robot between several owners
 
+local jobs: { [string]: Job } = {} -- build id -> level being built (shared by the server)
+local pendingOwner: { [number]: Levels } = {} -- UserId -> builds finished by others while they were away
+local promptHold: { [string]: number } = {} -- each pad prompt's own HoldDuration (idle and crate phases)
+local carrying: { [Player]: boolean } = {} -- players carrying a parts crate
+local foodReady: { [Player]: number } = {} -- server time when the greenhouse has food for the player
+local toolsSent: { [Player]: string } = {} -- last tool set announced to onToolsChanged listeners
+local toolChecker: ((Player, string) -> boolean)? = nil
+local debugMeteorHook: ((Player, boolean?) -> ())? = nil
+
 local present: { [Player]: boolean } = {}
 local connections: { [Player]: { RBXScriptConnection } } = {}
 local lastActionAt: { [Player]: number } = {}
@@ -78,6 +122,7 @@ local sendScheduled: { [Player]: boolean } = {}
 
 local buildListeners: { (Levels) -> () } = {}
 local equippedListeners: { (Player) -> () } = {}
+local toolsListeners: { (Player) -> () } = {}
 
 ----------------------------------------------------------------------------------------------------
 -- Helpers
@@ -105,6 +150,17 @@ local function worldCall(name: string, ...: any)
 	end
 end
 
+local function fireListeners(list: { (any) -> () }, value: any, label: string)
+	for _, listener in list do
+		task.spawn(function()
+			local ok, err = pcall(listener, value)
+			if not ok then
+				warn(`[SpaceBaseOdyssey] {label} listener failed: {err}`)
+			end
+		end)
+	end
+end
+
 local function fireBuilds()
 	for _, listener in buildListeners do
 		local copy = table.clone(effective)
@@ -118,14 +174,7 @@ local function fireBuilds()
 end
 
 local function fireEquipped(player: Player)
-	for _, listener in equippedListeners do
-		task.spawn(function()
-			local ok, err = pcall(listener, player)
-			if not ok then
-				warn(`[SpaceBaseOdyssey] equipped listener failed: {err}`)
-			end
-		end)
-	end
+	fireListeners(equippedListeners, player, "equipped")
 end
 
 local function isDebugAllowed(player: Player, trusted: boolean): boolean
@@ -162,6 +211,10 @@ local function levelOf(base: BaseRecord): number
 	return BaseBuild.levelForXp(MissionData, base.xp)
 end
 
+local function serverNow(): number
+	return workspace:GetServerTimeNow()
+end
+
 local function promptPosition(prompt: ProximityPrompt): Vector3?
 	local parent = prompt.Parent
 	if parent and parent:IsA("BasePart") then
@@ -174,12 +227,20 @@ local function promptPosition(prompt: ProximityPrompt): Vector3?
 	return nil
 end
 
--- Prompts are triggered by the client; check the character really stands next to it.
-local function closeEnough(player: Player, prompt: ProximityPrompt): boolean
+local function rootOf(player: Player): BasePart?
 	local character = player.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if root and root:IsA("BasePart") then
+		return root
+	end
+	return nil
+end
+
+-- Prompts are triggered by the client; check the character really stands next to it.
+local function closeEnough(player: Player, prompt: ProximityPrompt): boolean
+	local root = rootOf(player)
 	local position = promptPosition(prompt)
-	if root == nil or not root:IsA("BasePart") or position == nil then
+	if root == nil or position == nil then
 		return false
 	end
 	return (root.Position - position).Magnitude <= prompt.MaxActivationDistance + PROMPT_EXTRA_RANGE
@@ -190,6 +251,11 @@ local function asPrompt(value: any): ProximityPrompt?
 		return value :: ProximityPrompt
 	end
 	return nil
+end
+
+local function buildPromptOf(id: string): ProximityPrompt?
+	local prompts = world and world.buildPrompts
+	return if type(prompts) == "table" then asPrompt(prompts[id]) else nil
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -270,7 +336,92 @@ local function equippedOf(player: Player, base: BaseRecord): Equipped
 end
 
 ----------------------------------------------------------------------------------------------------
+-- Tools (Stage 7)
+
+-- Tools this player may carry right now -> tool level (1 = basic; upgrades from the Lab).
+local function toolLevelsOf(player: Player): { [string]: number }
+	local result: { [string]: number } = {}
+	if not present[player] then
+		return result
+	end
+	local base = baseOf(player)
+	local saved = if base then base.tools else nil
+	for id in BaseBuild.toolsUnlocked(MissionData, effective) do
+		local upgrade = (BASE.TOOL_UPGRADES :: any)[id]
+		if upgrade then
+			result[id] = math.clamp(BaseBuild.levelOf(saved, id), 1, upgrade.maxLevel)
+		else
+			result[id] = 1
+		end
+	end
+	return result
+end
+
+local function toolSignature(levels: { [string]: number }): string
+	local parts: { string } = {}
+	for id, level in levels do
+		table.insert(parts, `{id}={level}`)
+	end
+	table.sort(parts)
+	return table.concat(parts, ",")
+end
+
+-- Tells onToolsChanged listeners when the tools a player may carry (or their levels) changed.
+local function refreshTools(player: Player)
+	if not present[player] then
+		return
+	end
+	local signature = toolSignature(toolLevelsOf(player))
+	if toolsSent[player] == signature then
+		return
+	end
+	toolsSent[player] = signature
+	fireListeners(toolsListeners, player, "tools")
+end
+
+local function refreshToolsAll()
+	for player in present do
+		refreshTools(player)
+	end
+end
+
+-- True when the player holds tool `id` (no checker = ToolService is off: never block the game).
+local function isHolding(player: Player, id: string): boolean
+	local checker = toolChecker
+	if checker == nil then
+		return true
+	end
+	local ok, result = pcall(checker, player, id)
+	if not ok then
+		warn(`[SpaceBaseOdyssey] tool checker failed: {result}`)
+		return true
+	end
+	return result == true
+end
+
+----------------------------------------------------------------------------------------------------
 -- BaseState to each player
+
+local function progressState(): { [string]: BuildProgress }
+	local result: { [string]: BuildProgress } = {}
+	for id, job in jobs do
+		result[id] = { level = job.level, stage = job.stage, stages = job.stages, crate = job.crate }
+	end
+	return result
+end
+
+-- Scanned keys as saved ("poi:old_lander") plus the bare site id for "poi:" keys ("old_lander").
+local function scannedState(base: BaseRecord): { [string]: boolean }
+	local result: { [string]: boolean } = {}
+	for key in base.scanned or {} do
+		result[key] = true
+		local site = string.match(key, "^poi:(.+)$")
+		if site then
+			result[site] = true
+		end
+	end
+	return result
+end
 
 local function buildState(player: Player): BaseState?
 	local base = baseOf(player)
@@ -278,6 +429,7 @@ local function buildState(player: Player): BaseState?
 		return nil
 	end
 	local level = levelOf(base)
+	local greenhouse = BaseBuild.levelOf(effective, "greenhouse") >= 1
 	return {
 		credits = base.credits,
 		xp = base.xp,
@@ -293,6 +445,11 @@ local function buildState(player: Player): BaseState?
 		siloIce = math.floor(silo),
 		siloMax = BASE.SILO_MAX,
 		icePerMinute = BaseBuild.icePerMinute(MissionData, effective),
+		inProgress = progressState(),
+		carryingCrate = carrying[player] == true,
+		tools = toolLevelsOf(player),
+		foodReadyAt = if greenhouse then foodReady[player] or 0 else nil,
+		scanned = scannedState(base),
 	}
 end
 
@@ -342,14 +499,14 @@ local function applyHumanoid(player: Player, character: Model)
 	humanoid.JumpPower = BaseBuild.jumpPower(MissionData, skills)
 end
 
--- Player attributes read by the client (Sprint, double jump, drill hold time) and CrewService (suit).
+-- Player attributes read by the client (Sprint, double jump) and CrewService (suit). The drill hold
+-- time (SBO_DrillLevel) now comes from the drill TOOL level and is set by ToolService.
 local function applySkillEffects(player: Player)
 	local base = baseOf(player)
 	local skills = if base then base.skills else nil
 	player:SetAttribute("SBO_SpeedBonus", BaseBuild.speedBonus(MissionData, skills))
 	player:SetAttribute("SBO_SuitMax", BaseBuild.suitMax(MissionData, skills))
 	player:SetAttribute("SBO_JumpLevel", BaseBuild.levelOf(skills, "jump"))
-	player:SetAttribute("SBO_DrillLevel", BaseBuild.levelOf(skills, "drill"))
 	local character = player.Character
 	if character then
 		applyHumanoid(player, character)
@@ -358,6 +515,12 @@ end
 
 ----------------------------------------------------------------------------------------------------
 -- World sync: structures, build pads, silo, cargo robot
+
+local function setPadAttribute(pad: Instance?, name: string, value: any)
+	if pad and pad:GetAttribute(name) ~= value then
+		pad:SetAttribute(name, value)
+	end
+end
 
 local function refreshPrompts()
 	local prompts = world and world.buildPrompts
@@ -369,7 +532,32 @@ local function refreshPrompts()
 			if prompt == nil or def == nil then
 				continue
 			end
+			local padValue = if type(pads) == "table" then pads[id] else nil
+			local pad: Instance? = if typeof(padValue) == "Instance" then padValue else prompt.Parent
 			local level = BaseBuild.levelOf(effective, def.id)
+			local job = jobs[def.id]
+			local hold = promptHold[def.id] or prompt.HoldDuration
+			prompt:SetAttribute("ObjectKey", `build.{def.id}.name`)
+			setPadAttribute(pad, "SBO_Level", level)
+			setPadAttribute(pad, "SBO_MaxLevel", def.maxLevel)
+
+			if job then
+				-- A level is being built: bring a crate, then assemble it with the wrench.
+				local phase: PadPhase = if job.crate then "assemble" else "crate"
+				prompt:SetAttribute("TextKey", if job.crate then "prompt.assemble" else "prompt.deliver_crate")
+				prompt:SetAttribute("TextParams", HttpService:JSONEncode({ n = job.stage + 1, m = job.stages }))
+				prompt.HoldDuration = if job.crate then BASE.ASSEMBLE_HOLD_SECONDS else hold
+				prompt.Enabled = true
+				setPadAttribute(pad, "SBO_Phase", phase)
+				setPadAttribute(pad, "SBO_Stage", job.stage)
+				setPadAttribute(pad, "SBO_Stages", job.stages)
+				setPadAttribute(pad, "SBO_BuildingLevel", job.level)
+				setPadAttribute(pad, "SBO_Cost", nil)
+				setPadAttribute(pad, "SBO_MinLevel", nil)
+				setPadAttribute(pad, "SBO_Locked", false)
+				continue
+			end
+
 			local cost = BaseBuild.nextCost(MissionData, effective, def.id)
 			local locked = false
 			if cost ~= nil then
@@ -379,23 +567,20 @@ local function refreshPrompts()
 					end
 				end
 			end
-			prompt:SetAttribute("ObjectKey", `build.{def.id}.name`)
 			if cost ~= nil then
 				local textKey = if level > 0 then "prompt.upgrade" elseif cost == 0 then "prompt.build_free" else "prompt.build"
 				prompt:SetAttribute("TextKey", textKey)
 				prompt:SetAttribute("TextParams", HttpService:JSONEncode({ n = cost }))
 			end
+			prompt.HoldDuration = hold
 			prompt.Enabled = cost ~= nil and not locked
-
-			local padValue = if type(pads) == "table" then pads[id] else nil
-			local pad: Instance? = if typeof(padValue) == "Instance" then padValue else prompt.Parent
-			if pad then
-				pad:SetAttribute("SBO_Level", level)
-				pad:SetAttribute("SBO_MaxLevel", def.maxLevel)
-				pad:SetAttribute("SBO_Cost", cost)
-				pad:SetAttribute("SBO_MinLevel", if cost ~= nil then def.minLevel[level + 1] else nil)
-				pad:SetAttribute("SBO_Locked", locked)
-			end
+			setPadAttribute(pad, "SBO_Phase", "idle")
+			setPadAttribute(pad, "SBO_Stage", 0)
+			setPadAttribute(pad, "SBO_Stages", if cost ~= nil then BaseBuild.stagesFor(MissionData, def.id, level + 1) else 0)
+			setPadAttribute(pad, "SBO_BuildingLevel", nil)
+			setPadAttribute(pad, "SBO_Cost", cost)
+			setPadAttribute(pad, "SBO_MinLevel", if cost ~= nil then def.minLevel[level + 1] else nil)
+			setPadAttribute(pad, "SBO_Locked", locked)
 		end
 	end
 
@@ -412,8 +597,12 @@ local function refreshPrompts()
 	end
 end
 
+local function showJob(id: string, job: Job)
+	worldCall("setBuildProgress", id, job.level, job.stage, job.stages)
+end
+
 -- Recomputes the builds standing in the server from every present player whose data is loaded and
--- updates the world. animate = a player just built something (structures rise in).
+-- updates the world. animate = a player just finished a level (structures rise in).
 local function recompute(animate: boolean): boolean
 	local list: { Levels } = {}
 	for player in present do
@@ -425,20 +614,52 @@ local function recompute(animate: boolean): boolean
 		end
 	end
 	local newEffective = BaseBuild.effective(list)
+
+	-- A job is pointless once a save present already has that level (someone joined with it).
+	local cancelled: { string } = {}
+	for id, job in jobs do
+		if BaseBuild.levelOf(newEffective, id) >= job.level then
+			jobs[id] = nil
+			table.insert(cancelled, id)
+			local payer = job.payer
+			local api = progress
+			if payer and present[payer] and api then
+				api.updateBase(payer, function(saved: BaseRecord)
+					saved.credits += job.cost
+				end)
+				sayTo(payer, "carl.base.build_cancelled")
+			end
+		end
+	end
+
 	local changed = false
+	local levelChanged: { [string]: boolean } = {}
 	for _, def in BASE.BUILDS do
 		local level = BaseBuild.levelOf(newEffective, def.id)
 		local before = applied[def.id]
 		if before ~= level then
 			applied[def.id] = level
 			changed = true
+			levelChanged[def.id] = true
 			worldCall("setBuildLevel", def.id, level, animate and level > (before or 0))
+			local job = jobs[def.id]
+			if job then
+				showJob(def.id, job) -- setBuildLevel shows the plain level; keep the steps on show
+			end
+		end
+	end
+	for _, id in cancelled do
+		if not levelChanged[id] then
+			worldCall("setBuildLevel", id, applied[id] or 0, false) -- drop the step view
 		end
 	end
 	effective = newEffective
 	refreshPrompts()
 	if changed then
 		fireBuilds()
+		refreshToolsAll()
+	end
+	if changed or #cancelled > 0 then
 		scheduleSendAll()
 	end
 	return changed
@@ -467,6 +688,13 @@ local function grant(player: Player, credits: number, xp: number)
 		end
 	end
 	scheduleSend(player)
+end
+
+local function rewardKind(player: Player, kind: string)
+	local def = (BASE.REWARDS :: any)[kind]
+	if def and present[player] then
+		grant(player, def.credits, def.xp)
+	end
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -540,17 +768,106 @@ local function siloTick(dt: number)
 end
 
 ----------------------------------------------------------------------------------------------------
--- Actions
+-- Parts crates (Stage 7)
 
-local function doBuild(player: Player, id: any)
+local function setCarrying(player: Player, value: boolean)
+	if value then
+		carrying[player] = true
+	else
+		carrying[player] = nil
+	end
+	if player.Parent then
+		player:SetAttribute("SBO_CarryingCrate", value)
+	end
+	local character = player.Character
+	if character then
+		worldCall("setCarryCrate", character, value)
+	end
+	scheduleSend(player)
+end
+
+local function anyJobNeedsCrate(): boolean
+	for _, job in jobs do
+		if not job.crate then
+			return true
+		end
+	end
+	return false
+end
+
+local function takeCrate(player: Player)
+	if carrying[player] then
+		sayTo(player, "carl.base.has_crate")
+		return
+	end
+	local crewApi = crew
+	if crewApi then
+		local ok, holdsIce = pcall(crewApi.isCarrying, player)
+		if ok and holdsIce then
+			sayTo(player, "carl.base.hands_full")
+			return
+		end
+	end
+	if not anyJobNeedsCrate() then
+		sayTo(player, "carl.base.no_crate_needed")
+		return
+	end
+	setCarrying(player, true)
+	sayTo(player, "carl.base.crate_taken")
+end
+
+----------------------------------------------------------------------------------------------------
+-- Building in steps (Stage 7)
+
+-- The last step is done: the level stands and goes into the payer's save (or the finisher's when the
+-- payer is away; the payer then gets it too if they come back to this server).
+local function completeJob(finisher: Player, id: string, job: Job)
+	local api = progress
+	jobs[id] = nil
+	if api == nil then
+		return
+	end
+	local payer = job.payer
+	local owner = if payer and present[payer] then payer else finisher
+	if owner ~= payer then
+		local pending = pendingOwner[job.payerId] or {}
+		pending[id] = math.max(BaseBuild.levelOf(pending, id), job.level)
+		pendingOwner[job.payerId] = pending
+	end
+	api.updateBase(owner, function(saved: BaseRecord)
+		saved.builds[id] = math.max(BaseBuild.levelOf(saved.builds, id), job.level)
+	end)
+	local before = applied[id]
+	recompute(true)
+	if applied[id] == before then
+		-- The level did not change (no save record): still drop the step view.
+		worldCall("setBuildLevel", id, applied[id] or 0, false)
+	end
+
+	local told: { [Player]: boolean } = {}
+	for _, player in { owner, finisher } do
+		if not told[player] then
+			told[player] = true
+			if job.level == 1 then
+				sayTo(player, `carl.base.built_{id}`)
+			else
+				sayTo(player, "carl.base.upgraded", { n = job.level })
+			end
+		end
+	end
+	grant(owner, 0, BaseBuild.buildXp(MissionData, job.cost))
+	scheduleSendAll()
+end
+
+-- Pays the credits and starts the next level of `id` (step 0: only the foundation outline shows).
+local function startBuild(player: Player, id: string)
 	local api = progress
 	local base = baseOf(player)
 	if api == nil or base == nil or not isLoaded(player) then
 		reject(player, "wait")
 		return
 	end
-	if type(id) ~= "string" then
-		reject(player, "unknown")
+	if jobs[id] then
 		return
 	end
 	local ok, reason = BaseBuild.canBuild(MissionData, effective, levelOf(base), base.credits, id)
@@ -563,18 +880,118 @@ local function doBuild(player: Player, id: any)
 	local cost = def.costs[nextLevel]
 	api.updateBase(player, function(saved: BaseRecord)
 		saved.credits -= cost
-		saved.builds[id] = math.max(BaseBuild.levelOf(saved.builds, id), nextLevel)
 	end)
-	recompute(true)
-	if nextLevel == 1 then
-		sayTo(player, `carl.base.built_{id}`)
-	else
-		sayTo(player, "carl.base.upgraded", { n = nextLevel })
-	end
-	grant(player, 0, BaseBuild.buildXp(MissionData, cost))
+	local job: Job = {
+		level = nextLevel,
+		stage = 0,
+		stages = math.max(1, BaseBuild.stagesFor(MissionData, id, nextLevel)),
+		crate = false,
+		cost = cost,
+		payer = player,
+		payerId = player.UserId,
+	}
+	jobs[id] = job
+	showJob(id, job)
+	refreshPrompts()
+	sayTo(player, "carl.base.build_started", { n = job.stages })
+	scheduleSendAll()
 end
 
-local function doLearnSkill(player: Player, id: any)
+local function deliverCrate(player: Player, id: string, job: Job)
+	setCarrying(player, false)
+	job.crate = true
+	showJob(id, job)
+	refreshPrompts()
+	rewardKind(player, "crate_delivered")
+	sayTo(player, "carl.base.crate_delivered")
+	scheduleSendAll()
+end
+
+local function assembleStep(player: Player, id: string, job: Job)
+	job.stage += 1
+	job.crate = false
+	rewardKind(player, "stage_done")
+	if job.stage >= job.stages then
+		completeJob(player, id, job)
+		return
+	end
+	showJob(id, job)
+	refreshPrompts()
+	sayTo(player, "carl.base.step_done", { n = job.stage, m = job.stages })
+	scheduleSendAll()
+end
+
+-- A player used the build pad of `id` (prompt or trusted Build action). force = trusted debug: the
+-- crate and the wrench are not needed.
+local function usePad(player: Player, id: string, force: boolean)
+	local job = jobs[id]
+	if job == nil then
+		startBuild(player, id)
+		return
+	end
+	if not job.crate then
+		if carrying[player] then
+			deliverCrate(player, id, job)
+		elseif force then
+			job.crate = true
+		else
+			sayTo(player, "carl.base.need_crate")
+			return
+		end
+		if not force then
+			return
+		end
+	end
+	if not force and not isHolding(player, "wrench") then
+		sayTo(player, "carl.base.need_wrench")
+		return
+	end
+	assembleStep(player, id, job)
+end
+
+----------------------------------------------------------------------------------------------------
+-- Actions
+
+-- Build action: building happens at the pads, so the player must stand at that pad (no menu).
+local function doBuild(player: Player, id: any, trusted: boolean)
+	if type(id) ~= "string" or BaseBuild.buildDef(MissionData, id) == nil then
+		reject(player, "unknown")
+		return
+	end
+	if trusted then
+		usePad(player, id, true)
+		return
+	end
+	local prompt = buildPromptOf(id)
+	if prompt == nil or not closeEnough(player, prompt) then
+		reject(player, "pad_far")
+		return
+	end
+	if jobs[id] == nil then
+		startBuild(player, id) -- crates and assembly only through the pad prompt (it has the hold)
+	end
+end
+
+-- Skills, pets and tool upgrades are only bought at the Lab.
+local function atLab(player: Player, trusted: boolean): boolean
+	if trusted then
+		return true
+	end
+	if BaseBuild.levelOf(effective, "lab") < 1 then
+		reject(player, "need_lab")
+		return false
+	end
+	local prompt = asPrompt(world and world.labPrompt)
+	local position = if prompt then promptPosition(prompt) else nil
+	local root = rootOf(player)
+	if position == nil or root == nil or (root.Position - position).Magnitude > LAB_RANGE_STUDS + PROMPT_EXTRA_RANGE then
+		reject(player, "lab_far")
+		return false
+	end
+	return true
+end
+
+local function doLearnSkill(player: Player, id: any, trusted: boolean)
 	local api = progress
 	local base = baseOf(player)
 	if api == nil or base == nil or not isLoaded(player) then
@@ -583,6 +1000,9 @@ local function doLearnSkill(player: Player, id: any)
 	end
 	if type(id) ~= "string" then
 		reject(player, "unknown")
+		return
+	end
+	if not atLab(player, trusted) then
 		return
 	end
 	local ok, reason = BaseBuild.canLearn(MissionData, base.skills, levelOf(base), id)
@@ -595,6 +1015,39 @@ local function doLearnSkill(player: Player, id: any)
 	end)
 	applySkillEffects(player)
 	sayTo(player, "carl.base.skill_learned")
+	scheduleSend(player)
+end
+
+local function doUpgradeTool(player: Player, id: any, trusted: boolean)
+	local api = progress
+	local base = baseOf(player)
+	if api == nil or base == nil or not isLoaded(player) then
+		reject(player, "wait")
+		return
+	end
+	if type(id) ~= "string" then
+		reject(player, "unknown")
+		return
+	end
+	if not atLab(player, trusted) then
+		return
+	end
+	local upgrade = (BASE.TOOL_UPGRADES :: any)[id]
+	local current = if upgrade then math.clamp(BaseBuild.levelOf(base.tools, id), 1, upgrade.maxLevel) else 1
+	local unlocked = BaseBuild.toolsUnlocked(MissionData, effective)
+	local ok, reason = BaseBuild.canUpgradeTool(MissionData, id, current, levelOf(base), base.credits, unlocked)
+	local cost = BaseBuild.toolUpgradeCost(MissionData, id, current)
+	if not ok or cost == nil then
+		reject(player, reason or "unknown")
+		return
+	end
+	local nextLevel = current + 1
+	api.updateBase(player, function(saved: BaseRecord)
+		saved.credits -= cost
+		saved.tools[id] = math.max(BaseBuild.levelOf(saved.tools, id), nextLevel)
+	end)
+	sayTo(player, "carl.base.tool_upgraded", { n = nextLevel })
+	refreshTools(player)
 	scheduleSend(player)
 end
 
@@ -625,7 +1078,7 @@ local function doEquip(player: Player, slot: any, value: any)
 	scheduleSend(player)
 end
 
-local function doBuyPet(player: Player, id: any)
+local function doBuyPet(player: Player, id: any, trusted: boolean)
 	local api = progress
 	local base = baseOf(player)
 	if api == nil or base == nil or not isLoaded(player) then
@@ -634,6 +1087,9 @@ local function doBuyPet(player: Player, id: any)
 	end
 	if type(id) ~= "string" then
 		reject(player, "unknown")
+		return
+	end
+	if not atLab(player, trusted) then
 		return
 	end
 	local ok, reason = BaseBuild.canBuyPet(MissionData, ownedPets(player, base), levelOf(base), base.credits, id)
@@ -672,18 +1128,56 @@ local function doClaimSilo(player: Player, trusted: boolean)
 	claimSiloFor(player, false)
 end
 
+local function doResetBase(player: Player)
+	local api = progress
+	if api == nil then
+		return
+	end
+	api.resetBase(player)
+	-- Builds this player paid for are dropped (their credits were reset too).
+	for id, job in jobs do
+		if job.payerId == player.UserId then
+			jobs[id] = nil
+			worldCall("setBuildLevel", id, BaseBuild.levelOf(effective, id), false)
+		end
+	end
+	pendingOwner[player.UserId] = nil
+	foodReady[player] = nil
+	if carrying[player] then
+		setCarrying(player, false)
+	end
+	applySkillEffects(player)
+	recompute(false)
+	refreshPrompts()
+	refreshTools(player)
+	fireEquipped(player)
+	scheduleSendAll()
+end
+
 local function dispatch(player: Player, action: any, trusted: boolean)
 	local kind = action.type
 	if kind == "Build" then
-		doBuild(player, action.id)
+		doBuild(player, action.id, trusted)
 	elseif kind == "LearnSkill" then
-		doLearnSkill(player, action.id)
+		doLearnSkill(player, action.id, trusted)
 	elseif kind == "Equip" then
 		doEquip(player, action.slot, action.value)
 	elseif kind == "BuyPet" then
-		doBuyPet(player, action.id)
+		doBuyPet(player, action.id, trusted)
 	elseif kind == "ClaimSilo" then
 		doClaimSilo(player, trusted)
+	elseif kind == "UpgradeTool" then
+		doUpgradeTool(player, action.id, trusted)
+	elseif kind == "DebugMeteor" then
+		local hook = debugMeteorHook
+		if hook and isDebugAllowed(player, trusted) then
+			task.spawn(function()
+				local ok, err = pcall(hook, player, trusted)
+				if not ok then
+					warn(`[SpaceBaseOdyssey] debug meteor failed: {err}`)
+				end
+			end)
+		end
 	elseif kind == "DebugGrantCredits" then
 		local amount = action.amount
 		if not isDebugAllowed(player, trusted) or not isLoaded(player) then
@@ -695,15 +1189,10 @@ local function dispatch(player: Player, action: any, trusted: boolean)
 		local whole = math.floor(math.min(amount, DEBUG_MAX_GRANT))
 		grant(player, whole, whole)
 	elseif kind == "DebugResetBase" then
-		local api = progress
-		if not isDebugAllowed(player, trusted) or not isLoaded(player) or api == nil then
+		if not isDebugAllowed(player, trusted) or not isLoaded(player) then
 			return
 		end
-		api.resetBase(player)
-		applySkillEffects(player)
-		recompute(false)
-		fireEquipped(player)
-		scheduleSend(player)
+		doResetBase(player)
 	end
 end
 
@@ -723,8 +1212,24 @@ local function onLoaded(player: Player)
 			saved.equipped = wearing
 		end)
 	end
+	-- Builds this player paid for and others finished while they were away (same server session).
+	local pending = pendingOwner[player.UserId]
+	if pending then
+		pendingOwner[player.UserId] = nil
+		api.updateBase(player, function(saved: BaseRecord)
+			for id, level in pending do
+				saved.builds[id] = math.max(BaseBuild.levelOf(saved.builds, id), level)
+			end
+		end)
+	end
+	for _, job in jobs do
+		if job.payerId == player.UserId then
+			job.payer = player
+		end
+	end
 	applySkillEffects(player)
 	recompute(false)
+	refreshTools(player)
 	fireEquipped(player)
 	sendNow(player)
 end
@@ -735,10 +1240,17 @@ local function addPlayer(player: Player)
 	end
 	present[player] = true
 	applySkillEffects(player) -- defaults until the saved data is read
+	player:SetAttribute("SBO_CarryingCrate", false)
 	local list: { RBXScriptConnection } = {}
 	table.insert(
 		list,
 		player.CharacterAdded:Connect(function(character: Model)
+			-- A new character never carries the old one's crate.
+			if carrying[player] then
+				carrying[player] = nil
+				player:SetAttribute("SBO_CarryingCrate", false)
+				scheduleSend(player)
+			end
 			local humanoid = character:WaitForChild("Humanoid", 10)
 			if humanoid and present[player] then
 				applyHumanoid(player, character)
@@ -768,6 +1280,14 @@ local function removePlayer(player: Player)
 	lastActionAt[player] = nil
 	lastSentAt[player] = nil
 	sendScheduled[player] = nil
+	carrying[player] = nil
+	foodReady[player] = nil
+	toolsSent[player] = nil
+	for _, job in jobs do
+		if job.payer == player then
+			job.payer = nil -- the job stays for this server session
+		end
+	end
 	recompute(false)
 end
 
@@ -818,6 +1338,13 @@ local function onCosmetic(player: Player, id: string)
 	scheduleSend(player)
 end
 
+local function guarded(label: string, fn: () -> ())
+	local ok, err = pcall(fn)
+	if not ok then
+		warn(`[SpaceBaseOdyssey] {label} failed: {err}`)
+	end
+end
+
 local function connectPrompts()
 	local prompts = world and world.buildPrompts
 	if type(prompts) ~= "table" then
@@ -830,54 +1357,66 @@ local function connectPrompts()
 			end
 			local buildId = id :: string
 			local buildPrompt: ProximityPrompt = prompt
+			promptHold[buildId] = buildPrompt.HoldDuration
 			buildPrompt.Triggered:Connect(function(player: Player)
-				local ok, err = pcall(function()
+				guarded("build prompt", function()
 					if present[player] and not rateLimited(player) and closeEnough(player, buildPrompt) then
-						doBuild(player, buildId)
+						usePad(player, buildId, false)
 					end
 				end)
-				if not ok then
-					warn(`[SpaceBaseOdyssey] build prompt failed: {err}`)
-				end
 			end)
 		end
 	end
 	local siloPrompt = asPrompt(world and world.siloPrompt)
 	if siloPrompt then
 		siloPrompt.Triggered:Connect(function(player: Player)
-			local ok, err = pcall(function()
+			guarded("silo prompt", function()
 				if present[player] and not rateLimited(player) then
 					doClaimSilo(player, false)
 				end
 			end)
-			if not ok then
-				warn(`[SpaceBaseOdyssey] silo prompt failed: {err}`)
-			end
 		end)
+	end
+	local depot = world and world.crateDepot
+	local crateValue = if type(depot) == "table" then depot.prompt else nil
+	local cratePrompt = asPrompt(crateValue)
+	if cratePrompt then
+		local depotPrompt: ProximityPrompt = cratePrompt
+		depotPrompt.Triggered:Connect(function(player: Player)
+			guarded("crate prompt", function()
+				if present[player] and not rateLimited(player) and closeEnough(player, depotPrompt) then
+					takeCrate(player)
+				end
+			end)
+		end)
+	else
+		warn("[SpaceBaseOdyssey] world has no crateDepot prompt; builds need force (debug) to finish")
 	end
 end
 
 ----------------------------------------------------------------------------------------------------
 -- Public API
 
--- worldRefs: WorldBuilder.World (setBuildLevel, buildPads, buildPrompts, siloPrompt, setSilo,
--- setCargoActive); remoteEvents.baseState = Remotes.BASE_STATE; progressService: ProgressService
--- (already started).
-function BaseService.start(worldRefs: any, remoteEvents: Remotes, progressService: ProgressApi)
+-- worldRefs: WorldBuilder.World (setBuildLevel, setBuildProgress, buildPads, buildPrompts,
+-- siloPrompt, setSilo, setCargoActive, crateDepot, setCarryCrate, labPrompt);
+-- remoteEvents.baseState = Remotes.BASE_STATE; progressService: ProgressService (already started);
+-- crewService (optional): CrewService, so a player carrying ice cannot take a crate too.
+function BaseService.start(worldRefs: any, remoteEvents: Remotes, progressService: ProgressApi, crewService: CrewApi?)
 	assert(not started, "BaseService already started")
 	started = true
 	world = worldRefs
 	remotes = remoteEvents
 	progress = progressService
+	crew = crewService
 
-	-- Start from an empty base (only the habitat and its water tank stand).
+	-- Start from an empty Moon (only the lander stands; every structure is a hologram).
 	for _, def in BASE.BUILDS do
 		applied[def.id] = 0
 		worldCall("setBuildLevel", def.id, 0, false)
 	end
+	connectPrompts()
 	refreshPrompts()
 	worldCall("setSilo", silo, BASE.SILO_MAX)
-	connectPrompts()
 
 	progressService.onLoaded(onLoaded)
 	progressService.onCollectible(onCollectible)
@@ -902,7 +1441,7 @@ function BaseService.start(worldRefs: any, remoteEvents: Remotes, progressServic
 	end)
 end
 
--- Handles a Stage 6 action (MissionService routes every action here first). Returns true when the
+-- Handles a base action (MissionService routes every action here first). Returns true when the
 -- action type belongs to this module, even when it was rejected or rate-limited.
 function BaseService.handleAction(player: Player?, action: any, trusted: boolean): boolean
 	if type(action) ~= "table" or type(action.type) ~= "string" or not ACTION_TYPES[action.type] then
@@ -973,6 +1512,91 @@ end
 -- The player's BaseState right now (also used by tests in Studio).
 function BaseService.getState(player: Player): BaseState?
 	return buildState(player)
+end
+
+-- Stage 7: builds in progress (a copy: build id -> level, stage, stages, crate).
+function BaseService.inProgress(): { [string]: BuildProgress }
+	return progressState()
+end
+
+-- Stage 7: true while the player carries a parts crate (also player attribute SBO_CarryingCrate).
+function BaseService.isCarryingCrate(player: Player): boolean
+	return carrying[player] == true
+end
+
+-- Stage 7: the level of tool `id` this player may carry (0 = not unlocked yet; 1 = basic).
+function BaseService.toolLevel(player: Player, id: string): number
+	return toolLevelsOf(player)[id] or 0
+end
+
+-- Stage 7: every tool this player may carry -> level (a copy).
+function BaseService.tools(player: Player): { [string]: number }
+	return toolLevelsOf(player)
+end
+
+-- Stage 7: called (with the player) when the tools that player may carry or their levels changed
+-- (a build unlocked one, a Lab upgrade, their data loaded, a reset).
+function BaseService.onToolsChanged(listener: (player: Player) -> ())
+	table.insert(toolsListeners, listener)
+end
+
+-- Stage 7: ToolService tells BaseService which tool a player holds (fn(player, toolId) -> boolean).
+-- Without a checker every tool counts as held (the game never gets stuck).
+function BaseService.setToolChecker(fn: (player: Player, toolId: string) -> boolean)
+	toolChecker = fn
+end
+
+-- Stage 7: server time (workspace:GetServerTimeNow()) when the greenhouse has fresh food for the
+-- player; nil while no greenhouse stands.
+function BaseService.foodReadyAt(player: Player): number?
+	if BaseBuild.levelOf(effective, "greenhouse") < 1 or not present[player] then
+		return nil
+	end
+	return foodReady[player] or 0
+end
+
+-- Stage 7: picks the player's food in the greenhouse. True when food was ready (then the next one
+-- grows for FOOD.COOLDOWN_SECONDS: plants take time). ToolService checks the prompt and the hands.
+function BaseService.takeFood(player: Player): boolean
+	if not present[player] or BaseBuild.levelOf(effective, "greenhouse") < 1 then
+		return false
+	end
+	local now = serverNow()
+	if now < (foodReady[player] or 0) then
+		return false
+	end
+	foodReady[player] = now + BASE.FOOD.COOLDOWN_SECONDS
+	scheduleSend(player)
+	return true
+end
+
+-- Stage 7: remembers that the player scanned `key` ("poi:<id>"). True the first time only (the
+-- caller gives the reward with BaseService.reward). Saved in the player's base data.
+function BaseService.markScanned(player: Player, key: string): boolean
+	local api = progress
+	if api == nil or not isLoaded(player) or not api.isScannedKey(key) then
+		return false
+	end
+	local base = baseOf(player)
+	if base == nil or base.scanned[key] then
+		return false
+	end
+	api.updateBase(player, function(saved: BaseRecord)
+		saved.scanned[key] = true
+	end)
+	scheduleSend(player)
+	return true
+end
+
+-- Stage 7: true when the player already scanned `key`.
+function BaseService.hasScanned(player: Player, key: string): boolean
+	local base = baseOf(player)
+	return base ~= nil and base.scanned[key] == true
+end
+
+-- Stage 7: ExploreService handles DebugMeteor (Studio / place owner only; checked here first).
+function BaseService.setDebugMeteorHook(fn: (player: Player, trusted: boolean?) -> ())
+	debugMeteorHook = fn
 end
 
 return BaseService

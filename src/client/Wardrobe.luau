@@ -4,7 +4,7 @@
 --   helmet   standard | explorer26 (event code "explorer26" cosmetic)
 --   backpack standard | laika (Laika secret)
 --   carl     classic  | earth (Mini Earth secret)
---   pet      none | laika | cheese (secrets) | rabbit | monkey (bought in the Base panel)
+--   pet      none | laika | cheese (secrets) | rabbit | monkey (adopted at the Lab, Stage 7)
 -- Each option is a tile: the worn one is highlighted, locked ones are greyed with how to unlock them.
 -- Tapping an owned tile sends Action Equip { slot, value }; the server checks ownership again.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
@@ -25,7 +25,7 @@ type Slot = "helmet" | "backpack" | "carl" | "pet"
 local ROLE = Ui.ROLE
 local PALETTE = Ui.Theme.PALETTE
 
-local Z = 53 -- same layer as the Base panel (above the C.A.R.L. bubble, below Sources and Settings)
+local Z = 53 -- same layer as the Lab panel (above the C.A.R.L. bubble, below Sources and Settings)
 local PANEL_ASPECT = 1.5
 local PRESS_COOLDOWN = 0.4
 local PENDING_SECONDS = 2 -- an optimistic choice shows this long if the server never answers
@@ -40,7 +40,7 @@ local DEFAULTS: { [Slot]: string } = {
 }
 
 -- How a locked option is unlocked: "secret" (find a hidden collectible), "code" (event code) or
--- "buy" (Base panel, Pets tab).
+-- "buy" (adopted at the Lab: Lab panel, Pets tab; text "wardrobe.how_buy").
 type Unlock = "free" | "secret" | "code" | "buy"
 
 type Option = {

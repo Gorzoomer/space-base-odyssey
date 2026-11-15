@@ -11,6 +11,12 @@
 -- and XP through BaseService. Base mode: in Briefing the crater ice and the water machine stay open
 -- for manual ice runs that only pay rewards (no mission, no simulation change). Prompts of structures
 -- that are not built stay off. Build, skill, wardrobe, pet and silo actions go to BaseService.
+-- Stage 7: players start in the arrival lander and build the habitat first; the water machine, the
+-- leak and the mission console live in the habitat, so they only work once it stands. Shift tasks
+-- need their tool in hand (ToolService, Missions.OBJECTIVE_TOOLS): the ice drill for crater ice, the
+-- panel brush for dusty panels, the tablet to aim the antenna, the repair kit for leaks. Without it
+-- C.A.R.L. says which tool to hold ("carl.tool.need_<id>") and nothing happens. deliverIce lets the
+-- ice hauler (VehicleService) hand in several cores at once.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -26,6 +32,7 @@ local SpaceWeatherArchive = require(Shared:WaitForChild("SpaceWeatherArchive"))
 local Types = require(Shared:WaitForChild("Types"))
 
 local SpaceWeatherService = require(script.Parent:WaitForChild("SpaceWeatherService"))
+local ToolService = require(script.Parent:WaitForChild("ToolService"))
 
 type MissionState = Simulation.MissionState
 type ShiftResult = Simulation.ShiftResult
@@ -68,6 +75,8 @@ export type Crew = {
 	) -> (),
 	-- Stage 6: suits also drain outside between shifts (base mode); refills then are free.
 	setRoamDrain: (active: boolean) -> (),
+	-- Stage 7: "lander" | "habitat" | "shelter" | "outside" (optional: older crews only know inside).
+	zoneOf: ((player: Player) -> string)?,
 }
 
 -- The parts of BaseService (Stage 6) this module uses.
@@ -127,10 +136,16 @@ local BASE_ACTIONS: { [string]: boolean } = {
 	Equip = true,
 	BuyPet = true,
 	ClaimSilo = true,
+	UpgradeTool = true, -- Stage 7, at the Lab
+	DebugMeteor = true, -- Stage 7, BaseService hands it to ExploreService
 	DebugGrantCredits = true,
 	DebugResetBase = true,
 }
-local BASE_DEBUG_ACTIONS: { [string]: boolean } = { DebugGrantCredits = true, DebugResetBase = true }
+local BASE_DEBUG_ACTIONS: { [string]: boolean } = { DebugGrantCredits = true, DebugResetBase = true, DebugMeteor = true }
+-- Stage 7: carrying a parts crate fills both hands (player attribute set by BaseService).
+local CARRYING_CRATE_ATTRIBUTE = "SBO_CarryingCrate"
+-- At most this many ice cores in one hauler delivery (a sanity cap, well above the hauler's cargo).
+local MAX_ICE_PER_DELIVERY = 20
 
 local MissionService = {}
 
@@ -314,6 +329,7 @@ end
 
 -- C.A.R.L. line for "build this first" (only the builds missions need have their own line).
 local BUILD_FIRST_KEYS: { [string]: string } = {
+	habitat = "carl.build_first.habitat",
 	solar = "carl.build_first.solar",
 	greenhouse = "carl.build_first.greenhouse",
 	antenna = "carl.build_first.antenna",
@@ -321,6 +337,24 @@ local BUILD_FIRST_KEYS: { [string]: string } = {
 }
 local function buildFirstKey(buildId: string): string
 	return BUILD_FIRST_KEYS[buildId] or "carl.build_first"
+end
+
+-- Stage 7: the habitat holds the water machine, the leaky pipe and the mission console.
+local function habitatBuilt(): boolean
+	return structureBuilt("habitat")
+end
+
+-- Stage 7: true when the player holds the tool `toolId` in hand. Otherwise C.A.R.L. says which tool
+-- to hold and the task does not happen. Without ToolService (it did not start) tasks need no tool.
+local function hasToolInHand(player: Player, toolId: string): boolean
+	if not ToolService.isActive() then
+		return true
+	end
+	if ToolService.isHolding(player, toolId) then
+		return true
+	end
+	sayTo(player, "carl.tool.need_" .. toolId)
+	return false
 end
 
 -- Credits and XP for one player's work (kind = key of MissionData.BASE.REWARDS).
@@ -797,6 +831,7 @@ local function refreshWorld()
 	worldCall("setShiftPromptsEnabled", inShift)
 	-- Set after the world's own prompt refresh: unbuilt structures keep their prompts off.
 	local solarBuilt = structureBuilt("solar")
+	local habitatStands = habitatBuilt()
 	for i, ref in world.arrays do
 		setPromptEnabled(ref.prompt, inShift and solarBuilt and i <= state.arrays and dusty[i] == true)
 	end
@@ -806,10 +841,10 @@ local function refreshWorld()
 			node.part.Transparency = if inShift and iceUsed[i] then DEPLETED_ICE_TRANSPARENCY else iceTransparency[i]
 		end
 	end
-	setPromptEnabled(world.processorPrompt, inShift or baseMode or phase == "Planning")
-	setPromptEnabled(world.leak.prompt, inShift and leak)
+	setPromptEnabled(world.processorPrompt, habitatStands and (inShift or baseMode or phase == "Planning"))
+	setPromptEnabled(world.leak.prompt, habitatStands and inShift and leak)
 	setPromptEnabled(world.antenna.prompt, inShift and not linked and structureBuilt("antenna"))
-	setPromptEnabled(world.console.prompt, inShift)
+	setPromptEnabled(world.console.prompt, habitatStands and inShift)
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -1338,7 +1373,19 @@ local function returnToBriefing()
 	broadcast()
 end
 
--- go_outside / return_inside from CrewService zone changes (habitat or shelter count as inside).
+-- Stage 7: the lander is a pressurized room too, but "go back inside" means the base: the habitat
+-- (or the shelter). Crews that cannot tell the rooms apart count any inside.
+local function inBase(player: Player): boolean
+	local zoneOf = crew.zoneOf
+	if zoneOf == nil then
+		return crew.isInside(player)
+	end
+	local ok, zone = pcall(zoneOf, player)
+	return ok and (zone == "habitat" or zone == "shelter")
+end
+
+-- go_outside / return_inside from CrewService zone changes (lander, habitat or shelter count as
+-- inside). go_outside: leaving the lander counts.
 local function onZoneChanged(player: Player, inside: boolean, _sheltered: boolean, wasInside: boolean, _wasSheltered: boolean)
 	if inside == wasInside or not missionActive() then
 		return
@@ -1346,9 +1393,27 @@ local function onZoneChanged(player: Player, inside: boolean, _sheltered: boolea
 	if not inside then
 		wentOutside[player] = true
 		addProgress("go_outside")
-	elseif wentOutside[player] and earlierObjectivesDone("return_inside") then
-		-- First steps: coming back in counts once the steps before it (build the panels) are done.
+	elseif wentOutside[player] and inBase(player) and earlierObjectivesDone("return_inside") then
+		-- First steps: coming back in counts once the steps before it (build the habitat and the
+		-- panels) are done.
 		addProgress("return_inside")
+	end
+end
+
+-- First steps: a player already standing in the habitat when its last build finishes has come back
+-- in (no zone change would tell).
+local function catchUpReturnInside()
+	if not missionActive() or not hasObjective("return_inside") or (objectiveProgress.return_inside or 0) >= 1 then
+		return
+	end
+	if not earlierObjectivesDone("return_inside") then
+		return
+	end
+	for _, player in Players:GetPlayers() do
+		if wentOutside[player] and crew.isInside(player) and inBase(player) then
+			addProgress("return_inside")
+			return
+		end
 	end
 end
 
@@ -1360,6 +1425,9 @@ local function onArrayCleaned(player: Player, index: number)
 		return
 	end
 	if not structureBuilt("solar") or index > state.arrays then
+		return
+	end
+	if not hasToolInHand(player, "brush") then
 		return
 	end
 	dusty[index] = false
@@ -1376,6 +1444,19 @@ end
 -- ice runs; spots never run out, but each run still needs empty hands and a walk to the machine.
 local function onIceDrilled(player: Player, index: number)
 	if crew.isCarrying(player) then
+		return
+	end
+	if phase ~= "Shift" and phase ~= "Briefing" then
+		return
+	end
+	if phase == "Shift" and iceUsed[index] then
+		return
+	end
+	if player:GetAttribute(CARRYING_CRATE_ATTRIBUTE) == true then
+		sayTo(player, "carl.tool.hands_full") -- deliver the parts crate first
+		return
+	end
+	if not hasToolInHand(player, "drill") then
 		return
 	end
 	if phase == "Shift" and shift ~= nil then
@@ -1396,7 +1477,7 @@ end
 -- During a shift ice fills the water tank (Simulation). Outside a shift (ice from base mode, handed
 -- in from Briefing or while planning) it only pays credits and XP: no mission, no water change.
 local function onIceDelivered(player: Player)
-	if not crew.isCarrying(player) then
+	if not crew.isCarrying(player) or not habitatBuilt() then
 		return
 	end
 	if phase == "Shift" and shift ~= nil then
@@ -1415,7 +1496,10 @@ local function onIceDelivered(player: Player)
 end
 
 local function onLeakRepaired(player: Player)
-	if phase ~= "Shift" or shift == nil or shiftData == nil or not leakActiveNow() then
+	if phase ~= "Shift" or shift == nil or shiftData == nil or not leakActiveNow() or not habitatBuilt() then
+		return
+	end
+	if not hasToolInHand(player, "repair_kit") then
 		return
 	end
 	shiftData.leakRepaired = true
@@ -1429,6 +1513,9 @@ end
 
 local function onAntennaAligned(player: Player)
 	if phase ~= "Shift" or shift == nil or shift.antennaLinked or not structureBuilt("antenna") then
+		return
+	end
+	if not hasToolInHand(player, "tablet") then
 		return
 	end
 	-- The science waiting on the HUD right now is sent to Earth (it counts for stars).
@@ -1450,7 +1537,7 @@ local function onAntennaAligned(player: Player)
 end
 
 local function onConsole(player: Player)
-	if phase ~= "Shift" then
+	if phase ~= "Shift" or not habitatBuilt() then
 		return
 	end
 	sayTo(player, "carl.plan_hint")
@@ -1602,6 +1689,10 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 		if phase ~= "Planning" then
 			return
 		end
+		if not habitatBuilt() then
+			sayTo(player, buildFirstKey("habitat")) -- the power board is in the habitat
+			return
+		end
 		local system = action.system
 		if type(system) ~= "string" or table.find(Simulation.SYSTEMS, system :: any) == nil then
 			sayTo(player, "error.unknown_system")
@@ -1637,6 +1728,10 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 		end
 	elseif kind == "StartShift" then
 		if phase ~= "Planning" then
+			return
+		end
+		if not habitatBuilt() then
+			sayTo(player, buildFirstKey("habitat"))
 			return
 		end
 		if not readyForShift() then
@@ -1771,12 +1866,19 @@ function MissionService.start(worldRefs: any, crewService: Crew, progressService
 			task.defer(function()
 				refreshWorld()
 				-- Training: once the build C.A.R.L. asked for stands, the next hint follows (the next
-				-- build, or today's plan). First steps has no plan: coming back inside is next.
+				-- build, or today's plan). First steps has no plan: the next build, then going inside.
 				local before = hintedBuild
 				hintedBuild = missingBuildObjective()
-				if phase == "Planning" and before ~= nil and hintedBuild ~= before and not hasObjective("return_inside") then
-					sayLater(planningHintKey())
+				if phase == "Planning" and before ~= nil and hintedBuild ~= before then
+					if not hasObjective("return_inside") then
+						sayLater(planningHintKey())
+					elseif hintedBuild ~= nil then
+						sayLater(buildFirstKey(hintedBuild :: string))
+					else
+						sayLater("carl.return_inside")
+					end
 				end
+				catchUpReturnInside()
 				checkAutoComplete()
 				scheduleBroadcast()
 			end)
@@ -1835,6 +1937,34 @@ end
 
 function MissionService.getPhase(): Phase
 	return phase
+end
+
+-- Stage 7: the ice hauler (VehicleService) hands in `count` ice cores for `player` at the water
+-- machine. During a shift they fill the water tank and count for the ice objectives, like cores
+-- carried by hand; between shifts (Briefing, Planning) they only pay credits and XP. Returns how many
+-- were accepted (0 in the report, before the habitat stands, or for a bad count): keep the rest.
+function MissionService.deliverIce(player: Player, count: number): number
+	if not started or typeof(player) ~= "Instance" or not player:IsA("Player") or player.Parent == nil then
+		return 0
+	end
+	if type(count) ~= "number" or count ~= count or count < 1 or not habitatBuilt() then
+		return 0
+	end
+	local cores = math.min(math.floor(count), MAX_ICE_PER_DELIVERY)
+	if phase == "Shift" and shift ~= nil then
+		shift.iceCoresDelivered += cores
+		say("carl.ice_delivered")
+		addProgress("deliver_ice", cores)
+		addProgress("deliver_ice_total", cores)
+		reward(player, "ice_delivered", cores)
+		broadcast()
+		return cores
+	elseif phase == "Briefing" or phase == "Planning" then
+		sayTo(player, "carl.ice_saved")
+		reward(player, "ice_delivered", cores)
+		return cores
+	end
+	return 0
 end
 
 -- A C.A.R.L. line for everyone, from other services (for example the eclipse, in Main).

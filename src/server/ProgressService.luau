@@ -20,6 +20,11 @@
 -- changes it through ProgressService.updateBase. Credits and equipped are saved as they are (they
 -- can go down); XP, builds and skills only grow between saves unless the player reset their base.
 -- Old saves without "base" start with MissionData.BASE.START_CREDITS.
+-- Stage 7 adds base.tools (tool upgrade levels bought at the Lab, e.g. drill = 1..3) and base.scanned
+-- (exploration sites scanned with the tablet, keys like "poi:old_lander"). Both only grow between
+-- saves. Migration of Stage 6 saves: a save with any build but no habitat gets habitat = 1 (the
+-- habitat became a build in Stage 7, nobody loses their base); the removed "drill" skill becomes
+-- drill tool level skill + 1 (its skill points come back too, because spent points are counted).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local DataStoreService = game:GetService("DataStoreService")
@@ -51,6 +56,8 @@ export type BaseRecord = {
 	skills: { [string]: number },
 	pets: { [string]: boolean }, -- bought pets (pets from collectibles come from Progress.collectibles)
 	equipped: Types.Equipped?,
+	tools: { [string]: number }, -- Stage 7: tool upgrade levels (ids of MissionData.BASE.TOOL_UPGRADES)
+	scanned: { [string]: boolean }, -- Stage 7: scanned exploration keys ("poi:<id>")
 }
 
 type Record = {
@@ -72,7 +79,7 @@ type Record = {
 -- Technical settings (not gameplay numbers).
 local STORE_NAME = "SBO_Progress_v1"
 local KEY_PREFIX = "u_"
-local DATA_VERSION = 2 -- 2 = Stage 6 "base" field (version 1 saves load with base defaults)
+local DATA_VERSION = 3 -- 2 = Stage 6 "base" field, 3 = Stage 7 tools and scanned (older saves migrate)
 local MAX_STORED_NUMBER = 1e9 -- credits and XP are clamped to this when read from storage
 local SAVE_INTERVAL_SECONDS = 8 -- DataStores allow one write per key about every 6 seconds
 local LOAD_ATTEMPTS = 3
@@ -80,6 +87,8 @@ local LOAD_RETRY_SECONDS = 2
 local CLOSE_BUDGET_SECONDS = 25 -- BindToClose has about 30 seconds
 local PICKUP_DEBOUNCE_SECONDS = 1
 local PICKUP_EXTRA_RANGE = 8 -- studs beyond the prompt's own range (lag), checked on the server
+local MAX_SCANNED_KEYS = 200 -- damaged saves cannot grow without limit
+local MAX_SCANNED_KEY_LENGTH = 48
 
 local ProgressService = {}
 
@@ -151,6 +160,8 @@ local function defaultBase(): BaseRecord
 		skills = {},
 		pets = {},
 		equipped = nil,
+		tools = {},
+		scanned = {},
 	}
 end
 
@@ -188,6 +199,32 @@ local function findSkill(id: string): { maxLevel: number }?
 	return BaseBuild.skillDef(MissionData, id)
 end
 
+local function findToolUpgrade(id: string): { maxLevel: number }?
+	return (MissionData.BASE.TOOL_UPGRADES :: any)[id]
+end
+
+-- A scanned key: short, letters, digits, "_", "-" and ":" only (for example "poi:old_lander").
+local function isScannedKey(id: any): boolean
+	return type(id) == "string"
+		and #id > 0
+		and #id <= MAX_SCANNED_KEY_LENGTH
+		and string.match(id, "^[%w_:%-]+$") ~= nil
+end
+
+local function sanitizeScanned(value: any): { [string]: boolean }
+	local result: { [string]: boolean } = {}
+	local count = 0
+	if type(value) == "table" then
+		for id, flag in value do
+			if flag == true and isScannedKey(id) and count < MAX_SCANNED_KEYS then
+				result[id :: string] = true
+				count += 1
+			end
+		end
+	end
+	return result
+end
+
 local function isBuyablePet(id: any): boolean
 	if type(id) ~= "string" then
 		return false
@@ -210,18 +247,33 @@ local function sanitizeEquipped(value: any): Types.Equipped?
 	return result
 end
 
--- A stored "base" table (or nil for an old save) -> a clean BaseRecord.
+-- A stored "base" table (or nil for an old save) -> a clean BaseRecord. Also migrates Stage 6 saves
+-- (see the header): habitat = 1 for a base that already has builds, the old drill skill -> drill tool.
 local function sanitizeBase(value: any): BaseRecord
 	if type(value) ~= "table" then
 		return defaultBase()
 	end
+	local builds = sanitizeLevels(value.builds, findBuild)
+	if next(builds) ~= nil and (builds.habitat or 0) < 1 then
+		builds.habitat = 1
+	end
+	local tools = sanitizeLevels(value.tools, findToolUpgrade)
+	local oldSkills = value.skills
+	local oldDrill = if type(oldSkills) == "table" then oldSkills.drill else nil
+	local drillUpgrade = findToolUpgrade("drill")
+	if type(oldDrill) == "number" and oldDrill == oldDrill and oldDrill >= 1 and drillUpgrade then
+		local migrated = math.clamp(math.floor(oldDrill) + 1, 1, drillUpgrade.maxLevel)
+		tools.drill = math.max(tools.drill or 0, migrated)
+	end
 	return {
 		credits = sanitizeNumber(value.credits),
 		xp = sanitizeNumber(value.xp),
-		builds = sanitizeLevels(value.builds, findBuild),
+		builds = builds,
 		skills = sanitizeLevels(value.skills, findSkill),
 		pets = sanitizeSet(value.pets, isBuyablePet),
 		equipped = sanitizeEquipped(value.equipped),
+		tools = tools,
+		scanned = sanitizeScanned(value.scanned),
 	}
 end
 
@@ -241,6 +293,8 @@ local function cloneBase(base: BaseRecord): BaseRecord
 		skills = table.clone(base.skills),
 		pets = table.clone(base.pets),
 		equipped = if base.equipped then table.clone(base.equipped) else nil,
+		tools = table.clone(base.tools),
+		scanned = table.clone(base.scanned),
 	}
 end
 
@@ -255,6 +309,9 @@ local function mergeBase(stored: any, current: BaseRecord, reset: boolean): any
 		maxLevels(merged.builds, old.builds)
 		maxLevels(merged.skills, old.skills)
 		union(merged.pets, old.pets)
+		maxLevels(merged.tools, old.tools)
+		union(merged.scanned, old.scanned)
+		merged.scanned = sanitizeScanned(merged.scanned)
 	end
 	return merged
 end
@@ -469,6 +526,8 @@ local function addPlayer(player: Player)
 		maxLevels(base.builds, earned.builds)
 		maxLevels(base.skills, earned.skills)
 		union(base.pets, earned.pets)
+		maxLevels(base.tools, earned.tools)
+		union(base.scanned, earned.scanned)
 		if base.equipped == nil then
 			base.equipped = earned.equipped
 		end
@@ -779,8 +838,8 @@ function ProgressService.updateBase(player: Player, change: (base: BaseRecord) -
 	return true
 end
 
--- Puts the player's builds, skills, credits and XP back to the start (DebugResetBase). Bought pets
--- and what they wear are kept. The next save replaces the stored base instead of merging.
+-- Puts the player's builds, skills, credits, XP, tool upgrades and scanned sites back to the start
+-- (DebugResetBase). Bought pets and what they wear are kept. The next save replaces the stored base instead of merging.
 function ProgressService.resetBase(player: Player): boolean
 	local record = records[player]
 	if record == nil then
@@ -793,6 +852,11 @@ function ProgressService.resetBase(player: Player): boolean
 	record.baseReset = true
 	requestSave(player, record)
 	return true
+end
+
+-- True for a key BaseService may store in base.scanned (short; letters, digits, "_", "-", ":").
+function ProgressService.isScannedKey(key: any): boolean
+	return isScannedKey(key)
 end
 
 -- Called (with the player) when a player's stored data finished loading.

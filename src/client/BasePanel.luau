@@ -1,15 +1,19 @@
 --!strict
--- Space Base Odyssey - Base panel (Stage 6): build and grow the Moon base like a tycoon.
---   * Header: credits, player level with an XP bar, ice per minute from the drills, silo ice x/max
---     and a Collect button (Action ClaimSilo).
---   * Base tab: every build of MissionData.BASE.BUILDS in order: icon, name, what it does, level pips,
---     next cost and a Build / Upgrade button (Action Build). Building works from here too (no need to
---     walk to the pad). A blocked build shows the same reason the server would ("base.why.<reason>").
---   * Skills tab: speed, tank, jump, drill cards with level pips and a Learn button (Action LearnSkill).
---   * Pets tab: the four pets with a small 3D preview (Santiago's PetModels), how to get each one and a
---     Buy button (Action BuyPet); owned pets get a Use button (Action Equip, slot "pet").
--- The client only shows what is possible; the server (BaseService) validates every Action again.
--- Also exports BasePanel.petPreview, used by the Wardrobe for its pet tiles.
+-- Space Base Odyssey - Lab panel (Stage 7; the Stage 6 "Base" panel). Team feedback: building from a
+-- menu let players upgrade everything while standing still, so this panel no longer builds anything.
+-- Builds happen only at the build pads in the world. The panel opens ONLY when the player uses the
+-- Lab's prompt (a ProximityPrompt named "LabPrompt", wired in Main.client) and closes when they walk
+-- away from it.
+--   * Header: credits, player level with an XP bar, skill points.
+--   * Skills tab: speed, tank, jump cards with level pips and a Learn button (Action LearnSkill).
+--   * Tools tab: every tool of MissionData.BASE.TOOLS: what it is for, whether the player has it (or
+--     which build unlocks it), and for tools with upgrades (the ice drill) level pips, the next cost
+--     and an Upgrade button (Action UpgradeTool).
+--   * Pets tab: the four pets with a small 3D preview (Santiago's PetModels), how to get each one and
+--     an Adopt button (Action BuyPet); owned pets get a Use button (Action Equip, slot "pet").
+-- The client only shows what is possible; the server (BaseService) validates every Action again
+-- (it also checks that the Lab stands and that the player is next to it).
+-- Also exports BasePanel.petPreview and BasePanel.ownedPets, used by the Wardrobe for its pet tiles.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -32,14 +36,18 @@ local ROLE = Ui.ROLE
 local PALETTE = Ui.Theme.PALETTE
 local BASE = MissionData.BASE
 -- Typed views of the MissionData.BASE lists (their rows differ in optional fields).
-local BUILDS: { BaseBuild.BuildDef } = BASE.BUILDS :: any
 local SKILLS: { BaseBuild.SkillDef } = BASE.SKILLS :: any
 local PETS: { BaseBuild.PetDef } = BASE.PETS :: any
+
+type ToolDef = { id: string, icon: string, unlock: string?, consumable: boolean? }
+local TOOLS: { ToolDef } = BASE.TOOLS :: any
+type ToolUpgrade = { maxLevel: number, costs: { number }, minLevel: { number }, holdFactor: { number }? }
+local TOOL_UPGRADES: { [string]: ToolUpgrade } = BASE.TOOL_UPGRADES :: any
 
 -- Above the C.A.R.L. bubble (50-52), below Sources (55), Collection (56-61) and Settings (60-62).
 local Z = 53
 local PANEL_ASPECT = 1.5 -- width / height; fits phones in landscape and tablets
-local ROW_HEIGHT = 92 -- reference units (the root is 720 units tall)
+local ROW_HEIGHT = 84 -- reference units (the root is 720 units tall)
 local ROW_GAP = 8
 local LIST_PADDING = 8
 local SCROLL_BAR = 8
@@ -53,7 +61,7 @@ export type Deps = {
 	showMessage: any, -- reserved for local hints (the C.A.R.L. bubble sits under this panel)
 }
 
-export type Tab = "base" | "skills" | "pets"
+export type Tab = "skills" | "tools" | "pets"
 
 export type BasePanelView = {
 	open: () -> (),
@@ -104,6 +112,20 @@ local function ownedPets(base: BaseState?): { [string]: boolean }
 end
 BasePanel.ownedPets = ownedPets
 
+-- Tools this player can carry -> level. The server sends them (BaseState.tools); an older server
+-- without them falls back to the unlock rule over the builds standing (level 1).
+local function toolLevels(base: BaseState): { [string]: number }
+	local tools: any = (base :: any).tools
+	if type(tools) == "table" and next(tools) ~= nil then
+		return tools
+	end
+	local result: { [string]: number } = {}
+	for id in BaseBuild.toolsUnlocked(MissionData, base.builds) do
+		result[id] = 1
+	end
+	return result
+end
+
 -- Why something is blocked. The reason is the same one the server gives (BaseBuild); the panel can
 -- say it more exactly ("Needs level 3", "Build Antenna first") because it knows the numbers.
 -- Other reasons use the server's own "base.why.<reason>" text.
@@ -121,35 +143,6 @@ local function reasonText(reason: string?, params: Params?): string
 		return Store.t(detailed, params)
 	end
 	return Store.t("base.why." .. reason, params)
-end
-
--- Params for a blocked build: n = player level needed ("level"), credits needed ("credits") or the
--- level of the missing build ("requires"); name = the missing build's name.
-local function buildReasonParams(base: BaseState, id: string, reason: string?): Params
-	local def = BaseBuild.buildDef(MissionData, id)
-	local params: Params = {}
-	if def == nil then
-		return params
-	end
-	local nextLevel = math.min(levelOf(base.builds, id) + 1, def.maxLevel)
-	if reason == "level" then
-		params.n = def.minLevel[nextLevel]
-		params.level = def.minLevel[nextLevel]
-	elseif reason == "credits" then
-		params.n = def.costs[nextLevel]
-		params.cost = def.costs[nextLevel]
-	elseif reason == "requires" then
-		-- The first missing requirement in BUILDS order (stable text).
-		for _, other in BUILDS do
-			local needed = def.requires[other.id]
-			if needed and levelOf(base.builds, other.id) < needed then
-				params.name = Store.t("build." .. other.id .. ".name")
-				params.n = needed
-				break
-			end
-		end
-	end
-	return params
 end
 
 -- A pill: rounded raised frame with an icon on the left and a text label.
@@ -224,6 +217,16 @@ local function makePips(parent: Instance, props: Ui.Props, count: number, zindex
 	return { frame = frame, set = set }
 end
 
+-- A button label that stays on one line: the text shrinks to fit instead of wrapping (playtest:
+-- "Mascotas" and "Herramientas" were split mid-word).
+local function singleLine(button: TextButton)
+	local label = button:FindFirstChild("Label")
+	if label and label:IsA("TextLabel") then
+		label.TextWrapped = false
+		label.TextTruncate = Enum.TextTruncate.None
+	end
+end
+
 ---------------------------------------------------------------------------------------------------
 -- Pet preview: Santiago's pet models (PetModels.luau) in a ViewportFrame with a spinning camera.
 ---------------------------------------------------------------------------------------------------
@@ -240,7 +243,10 @@ local PART_SHAPES: { [string]: Enum.PartType } = {
 	Cylinder = Enum.PartType.Cylinder,
 }
 
-local function materialFor(name: string): Enum.Material
+local function materialFor(name: any): Enum.Material
+	if type(name) ~= "string" then
+		return Enum.Material.SmoothPlastic
+	end
 	local ok, value = pcall(function(): any
 		return (Enum.Material :: any)[name]
 	end)
@@ -250,9 +256,52 @@ local function materialFor(name: string): Enum.Material
 	return Enum.Material.SmoothPlastic
 end
 
+-- One PetModels part as a Part (nil when its data is broken). Extra fields (pivot, anim: used by
+-- the PetService animation) are ignored here: the preview is a still model.
+local function petPart(data: any): (BasePart?, CFrame?)
+	if type(data) ~= "table" or type(data.size) ~= "table" or type(data.cframe) ~= "table" or #data.cframe < 12 then
+		return nil, nil
+	end
+	local part: BasePart
+	if data.shape == "Wedge" then
+		part = Instance.new("WedgePart")
+	else
+		local plain = Instance.new("Part")
+		local s = data.size
+		local egg = data.shape == "Ball"
+			and type(s[1]) == "number" and type(s[2]) == "number" and type(s[3]) == "number"
+			and (math.abs(s[1] - s[2]) > 0.01 or math.abs(s[1] - s[3]) > 0.01)
+		if egg then
+			-- Ball parts are always round; an egg-shaped ball needs a sphere mesh (as PetService does).
+			local mesh = Instance.new("SpecialMesh")
+			mesh.MeshType = Enum.MeshType.Sphere
+			mesh.Parent = plain
+		else
+			plain.Shape = PART_SHAPES[data.shape] or Enum.PartType.Block
+		end
+		part = plain
+	end
+	local c = data.cframe
+	local cframe = CFrame.new(c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11], c[12])
+	part.Name = if type(data.name) == "string" then data.name else "Part"
+	part.Size = Vector3.new(data.size[1] or 1, data.size[2] or 1, data.size[3] or 1)
+	part.CFrame = cframe
+	local color = data.color
+	if type(color) == "table" then
+		part.Color = Color3.fromRGB(color[1] or 255, color[2] or 255, color[3] or 255)
+	end
+	part.Material = materialFor(data.material)
+	part.Transparency = if type(data.transparency) == "number" then data.transparency else 0
+	part.Reflectance = if type(data.reflectance) == "number" then data.reflectance else 0
+	part.Anchored = true
+	part.CanCollide = false
+	part.CastShadow = false
+	return part, cframe
+end
+
 function BasePanel.petPreview(parent: Instance, petId: string, props: Ui.Props): PetPreview?
-	local parts = PetModels[petId]
-	if parts == nil then
+	local parts = (PetModels :: any)[petId]
+	if type(parts) ~= "table" then
 		return nil
 	end
 	local viewport = Instance.new("ViewportFrame")
@@ -275,29 +324,14 @@ function BasePanel.petPreview(parent: Instance, petId: string, props: Ui.Props):
 	local top = 0.5
 	local reach = 0.5
 	for _, data in parts do
-		local part: BasePart
-		if data.shape == "Wedge" then
-			part = Instance.new("WedgePart")
-		else
-			local plain = Instance.new("Part")
-			plain.Shape = PART_SHAPES[data.shape] or Enum.PartType.Block
-			part = plain
+		local part, cframe = petPart(data)
+		if part and cframe then
+			part.Parent = model
+			local half = math.max(part.Size.X, part.Size.Y, part.Size.Z) / 2
+			local position = cframe.Position
+			top = math.max(top, position.Y + half)
+			reach = math.max(reach, math.abs(position.X) + half, math.abs(position.Z) + half)
 		end
-		local c = data.cframe
-		part.Name = data.name
-		part.Size = Vector3.new(data.size[1], data.size[2], data.size[3])
-		part.CFrame = CFrame.new(c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11], c[12])
-		part.Color = Color3.fromRGB(data.color[1], data.color[2], data.color[3])
-		part.Material = materialFor(data.material)
-		part.Transparency = data.transparency
-		part.Reflectance = data.reflectance
-		part.Anchored = true
-		part.CanCollide = false
-		part.CastShadow = false
-		part.Parent = model
-		local half = math.max(data.size[1], data.size[2], data.size[3]) / 2
-		top = math.max(top, c[2] + half)
-		reach = math.max(reach, math.abs(c[1]) + half, math.abs(c[3]) + half)
 	end
 	model.Parent = viewport
 
@@ -349,7 +383,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 		color = ROLE.panel,
 		corner = 0.04,
 		stroke = 4,
-		strokeColor = ROLE.good,
+		strokeColor = ROLE.accent,
 		aspect = PANEL_ASPECT,
 		zindex = Z + 1,
 	})
@@ -357,54 +391,55 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 	Ui.sheen(panel)
 
 	-- Header: icon, title, tabs, close ------------------------------------------------------------
-	Ui.icon(panel, Ui.Icons.build, {
+	Ui.icon(panel, Ui.Icons.flask, {
+		name = "LabIcon",
 		size = UDim2.fromScale(0.05, 0.08),
 		position = UDim2.fromScale(0.025, 0.075),
 		anchor = Vector2.new(0, 0.5),
-		tint = ROLE.good,
+		tint = ROLE.accent,
 		zindex = Z + 2,
 	})
 	local title = Ui.label(panel, {
 		name = "Title",
-		size = UDim2.fromScale(0.26, 0.08),
+		size = UDim2.fromScale(0.18, 0.08),
 		position = UDim2.fromScale(0.08, 0.075),
 		anchor = Vector2.new(0, 0.5),
 		alignX = Enum.TextXAlignment.Left,
-		textColor = ROLE.good,
+		textColor = ROLE.accent,
 		maxText = 36,
 		zindex = Z + 2,
 	})
 
-	local currentTab: Tab = "base"
+	local currentTab: Tab = "skills"
 	local render: () -> () -- defined below
 
 	local TABS: { { id: Tab, key: string, icon: string, color: Color3 } } = {
-		{ id = "base", key = "panel.tab_base", icon = Ui.Icons.build, color = ROLE.good },
 		{ id = "skills", key = "panel.tab_skills", icon = Ui.Icons.skills, color = ROLE.accent },
+		{ id = "tools", key = "panel.tab_tools", icon = Ui.Icons.failure, color = ROLE.good },
 		{ id = "pets", key = "panel.tab_pets", icon = Ui.Icons.paw, color = ROLE.reward },
 	}
+	local TAB_X = 0.28
+	local TAB_W = 0.19
+	local TAB_STEP = 0.2
 	local tabButtons: { [Tab]: TextButton } = {}
 	for index, tab in TABS do
-		tabButtons[tab.id] = Ui.button(panel, {
+		local button = Ui.button(panel, {
 			name = `Tab_{tab.id}`,
-			size = UDim2.fromScale(0.165, 0.085),
-			position = UDim2.fromScale(0.35 + (index - 1) * 0.177, 0.035),
+			size = UDim2.fromScale(TAB_W, 0.085),
+			position = UDim2.fromScale(TAB_X + (index - 1) * TAB_STEP, 0.035),
 			color = Ui.COLORS.secondary,
 			icon = tab.icon,
 			corner = 0.35,
 			stroke = 2,
 			maxText = 26,
+			minText = 8,
 			zindex = Z + 2,
 		}, function()
 			currentTab = tab.id
 			render()
 		end)
-		-- One line only: wrapping split "Mascotas" mid-word in playtest; scaling shrinks it instead.
-		local tabLabel = tabButtons[tab.id]:FindFirstChild("Label", true)
-		if tabLabel and tabLabel:IsA("TextLabel") then
-			tabLabel.TextWrapped = false
-			tabLabel.TextScaled = true
-		end
+		singleLine(button)
+		tabButtons[tab.id] = button
 	end
 
 	local function close()
@@ -423,7 +458,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 		zindex = Z + 2,
 	}, close)
 
-	-- Stats row: credits, level + XP, ice per minute, silo + Collect ------------------------------
+	-- Stats row: credits, level + XP, skill points, a hint -----------------------------------------
 	local STATS_Y = 0.145
 	local STATS_H = 0.085
 	local credits = makePill(panel, {
@@ -440,7 +475,6 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 		position = UDim2.fromScale(0.185, STATS_Y),
 		textColor = ROLE.accent,
 	}, Ui.Icons.xp, ROLE.accent, Z + 2)
-	levelPill.icon.Size = UDim2.fromScale(0.7, 0.7)
 	levelPill.label.Size = UDim2.fromScale(0.36, 0.62)
 	levelPill.label.Position = UDim2.fromScale(0.15, 0.4)
 	local xpLabel = Ui.label(levelPill.frame, {
@@ -472,43 +506,26 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 		zindex = Z + 4,
 	})
 
-	local icePill = makePill(panel, {
-		name = "IceRate",
+	local pointsPill = makePill(panel, {
+		name = "SkillPoints",
 		size = UDim2.fromScale(0.22, STATS_H),
 		position = UDim2.fromScale(0.465, STATS_Y),
-		maxText = 20,
-	}, Ui.Icons.drill, PALETTE.cyan, Z + 2)
-	icePill.label.Size = UDim2.fromScale(0.78, 0.8)
-	icePill.label.Position = UDim2.fromScale(0.19, 0.5)
+		maxText = 22,
+	}, Ui.Icons.skills, ROLE.accent, Z + 2)
+	pointsPill.label.Size = UDim2.fromScale(0.74, 0.8)
+	pointsPill.label.Position = UDim2.fromScale(0.22, 0.5)
 
-	local siloPill = makePill(panel, {
-		name = "Silo",
-		size = UDim2.fromScale(0.15, STATS_H),
-		position = UDim2.fromScale(0.695, STATS_Y),
-		maxText = 20,
-	}, Ui.Icons.silo, PALETTE.cyan, Z + 2)
-
-	local lastClaim = -math.huge
-	local collectButton = Ui.button(panel, {
-		name = "Collect",
-		size = UDim2.fromScale(0.125, STATS_H),
+	local labHint = Ui.body(panel, {
+		name = "LabHint",
+		size = UDim2.fromScale(0.28, STATS_H),
 		position = UDim2.fromScale(0.975, STATS_Y),
 		anchor = Vector2.new(1, 0),
-		color = Ui.COLORS.go,
-		icon = Ui.Icons.ice,
-		corner = 0.35,
-		stroke = 2,
-		maxText = 22,
+		alignX = Enum.TextXAlignment.Right,
+		textColor = ROLE.textDim,
+		maxText = 18,
+		minText = 8,
 		zindex = Z + 2,
-	}, function()
-		local base = getBase()
-		if base == nil or base.siloIce < 1 or os.clock() - lastClaim < PRESS_COOLDOWN then
-			return
-		end
-		lastClaim = os.clock()
-		local action: any = { type = "ClaimSilo" }
-		Store.send(action)
-	end)
+	})
 
 	-- Content area: one page per tab, plus a "loading" line until the first BaseState ------------
 	local content = Ui.frame(panel, {
@@ -531,217 +548,11 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 		pages[tab.id] = Ui.frame(content, { name = `Page_{tab.id}`, zindex = Z + 1, visible = false })
 	end
 
-	-----------------------------------------------------------------------------------------------
-	-- Base tab: a scrolling list of builds
-	-----------------------------------------------------------------------------------------------
-	local list = Instance.new("ScrollingFrame")
-	list.Name = "Builds"
-	list.Size = UDim2.fromScale(1, 1)
-	list.BackgroundColor3 = ROLE.background
-	list.BackgroundTransparency = 0.3
-	list.BorderSizePixel = 0
-	list.ScrollingDirection = Enum.ScrollingDirection.Y
-	list.ScrollBarThickness = SCROLL_BAR
-	list.ScrollBarImageColor3 = ROLE.good
-	list.CanvasSize = UDim2.new(0, 0, 0, 0)
-	list.ZIndex = Z + 2
-	Ui.corner(list, 0.04)
-	list.Parent = pages["base"]
-	local listPadding = Instance.new("UIPadding")
-	listPadding.PaddingTop = UDim.new(0, LIST_PADDING)
-	listPadding.PaddingBottom = UDim.new(0, LIST_PADDING)
-	listPadding.PaddingLeft = UDim.new(0, LIST_PADDING)
-	listPadding.PaddingRight = UDim.new(0, LIST_PADDING + SCROLL_BAR)
-	listPadding.Parent = list
-	local listLayout = Instance.new("UIListLayout")
-	listLayout.FillDirection = Enum.FillDirection.Vertical
-	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
-	listLayout.Padding = UDim.new(0, ROW_GAP)
-	listLayout.Parent = list
-	-- Canvas from the fixed row heights (AutomaticCanvasSize is unreliable under a UIScale).
-	list.CanvasSize = UDim2.new(0, 0, 0, LIST_PADDING * 2 + #BUILDS * ROW_HEIGHT + (#BUILDS - 1) * ROW_GAP)
-
-	type BuildRow = {
-		id: string,
-		frame: Frame,
-		stroke: UIStroke,
-		badgeScale: UIScale,
-		name: TextLabel,
-		desc: TextLabel,
-		pips: Pips,
-		cost: Pill,
-		button: TextButton,
-		reason: TextLabel,
-		allowed: boolean,
-		lastPress: number,
-	}
-	local buildRows: { BuildRow } = {}
-	local shownLevels: { [string]: number } = {}
-
-	for index, def in BUILDS do
-		local frame = Ui.frame(list, {
-			name = `Build_{def.id}`,
-			size = UDim2.new(1, 0, 0, ROW_HEIGHT),
-			color = ROLE.panelRaised,
-			corner = 0.2,
-			stroke = 2,
-			strokeColor = ROLE.stroke,
-			order = index,
-			zindex = Z + 3,
-		})
-		local stroke = frame:FindFirstChildOfClass("UIStroke") :: UIStroke
-		local badge = Ui.frame(frame, {
-			name = "Badge",
-			size = UDim2.fromScale(0.8, 0.8),
-			position = UDim2.fromScale(0.012, 0.5),
-			anchor = Vector2.new(0, 0.5),
-			color = ROLE.background,
-			corner = 0.5,
-			aspect = 1,
-			zindex = Z + 4,
-		})
-		local badgeScale = Instance.new("UIScale")
-		badgeScale.Parent = badge
-		Ui.icon(badge, Ui.iconImage(def.icon), {
-			name = "Icon",
-			size = UDim2.fromScale(0.62, 0.62),
-			position = UDim2.fromScale(0.5, 0.5),
-			anchor = Vector2.new(0.5, 0.5),
-			tint = ROLE.good,
-			zindex = Z + 5,
-		})
-		local name = Ui.label(frame, {
-			name = "Name",
-			size = UDim2.fromScale(0.36, 0.42),
-			position = UDim2.fromScale(0.1, 0.07),
-			alignX = Enum.TextXAlignment.Left,
-			maxText = 26,
-			zindex = Z + 4,
-		})
-		local desc = Ui.body(frame, {
-			name = "Desc",
-			size = UDim2.fromScale(0.46, 0.42),
-			position = UDim2.fromScale(0.1, 0.52),
-			textColor = ROLE.textDim,
-			maxText = 18,
-			minText = 7,
-			zindex = Z + 4,
-		})
-		local pips = makePips(frame, {
-			name = "Pips",
-			size = UDim2.fromScale(0.15, 0.3),
-			position = UDim2.fromScale(0.585, 0.12),
-		}, def.maxLevel, Z + 4)
-		local cost = makePill(frame, {
-			name = "Cost",
-			size = UDim2.fromScale(0.15, 0.38),
-			position = UDim2.fromScale(0.585, 0.5),
-			color = ROLE.background,
-			textColor = ROLE.star,
-			maxText = 24,
-		}, Ui.Icons.coin, ROLE.star, Z + 4)
-		local row: BuildRow
-		local button = Ui.button(frame, {
-			name = "Action",
-			size = UDim2.fromScale(0.24, 0.5),
-			position = UDim2.fromScale(0.99, 0.08),
-			anchor = Vector2.new(1, 0),
-			color = Ui.COLORS.go,
-			icon = Ui.Icons.build,
-			corner = 0.35,
-			stroke = 2,
-			maxText = 24,
-			zindex = Z + 4,
-		}, function()
-			local base = getBase()
-			if base == nil or not row.allowed or os.clock() - row.lastPress < PRESS_COOLDOWN then
-				return
-			end
-			-- Same check as the server, with the newest state.
-			local ok = BaseBuild.canBuild(MissionData, base.builds, base.level, base.credits, def.id)
-			if not ok then
-				return
-			end
-			row.lastPress = os.clock()
-			local action: any = { type = "Build", id = def.id }
-			Store.send(action)
-		end)
-		local reason = Ui.body(frame, {
-			name = "Reason",
-			size = UDim2.fromScale(0.24, 0.32),
-			position = UDim2.fromScale(0.99, 0.62),
-			anchor = Vector2.new(1, 0),
-			alignX = Enum.TextXAlignment.Center,
-			textColor = ROLE.warning,
-			maxText = 16,
-			minText = 7,
-			zindex = Z + 4,
-		})
-		row = {
-			id = def.id,
-			frame = frame,
-			stroke = stroke,
-			badgeScale = badgeScale,
-			name = name,
-			desc = desc,
-			pips = pips,
-			cost = cost,
-			button = button,
-			reason = reason,
-			allowed = false,
-			lastPress = -math.huge,
-		}
-		table.insert(buildRows, row)
-	end
-
 	local function pop(scale: UIScale)
 		scale.Scale = 1.35
 		TweenService:Create(scale, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 			Scale = 1,
 		}):Play()
-	end
-
-	local function renderBuilds(base: BaseState)
-		for _, row in buildRows do
-			local def = BaseBuild.buildDef(MissionData, row.id)
-			if def == nil then
-				continue
-			end
-			local level = levelOf(base.builds, row.id)
-			local maxed = level >= def.maxLevel
-			local allowed, reason = BaseBuild.canBuild(MissionData, base.builds, base.level, base.credits, row.id)
-			row.allowed = allowed
-			row.name.Text = Store.t("build." .. row.id .. ".name")
-			row.desc.Text = Store.t("build." .. row.id .. ".desc")
-			row.pips.set(level, def.maxLevel, ROLE.good)
-			if shownLevels[row.id] ~= nil and level > (shownLevels[row.id] :: number) then
-				pop(row.badgeScale)
-			end
-			shownLevels[row.id] = level
-
-			local nextCost = BaseBuild.nextCost(MissionData, base.builds, row.id)
-			row.cost.frame.Visible = nextCost ~= nil
-			if nextCost ~= nil then
-				row.cost.label.Text = if nextCost == 0 then Store.t("panel.free") else formatNumber(nextCost)
-				row.cost.label.TextColor3 = if base.credits >= nextCost then ROLE.star else ROLE.textDim
-			end
-
-			if maxed then
-				Ui.setButton(row.button, Store.t("panel.max"), Ui.ICONS.check)
-				Ui.setButtonLook(row.button, true, Ui.COLORS.secondary)
-				row.button.AutoButtonColor = false
-				row.reason.Text = ""
-			else
-				local verb = if level == 0 then "panel.build" else "panel.upgrade"
-				local image = if allowed then (if level == 0 then Ui.Icons.build else Ui.Icons.upgrade) else Ui.ICONS.lock
-				Ui.setButton(row.button, Store.t(verb), image)
-				Ui.setButtonLook(row.button, allowed, Ui.COLORS.go)
-				row.reason.Text = if allowed then "" else reasonText(reason, buildReasonParams(base, row.id, reason))
-			end
-			-- Something the player can do right now glows lime.
-			row.stroke.Color = if allowed then ROLE.good else ROLE.stroke
-			row.stroke.Thickness = if allowed then 3 else 2
-		end
 	end
 
 	-----------------------------------------------------------------------------------------------
@@ -774,11 +585,14 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 		return left, right
 	end
 
-	local function card(page: Frame, index: number, name: string, strokeColor: Color3): (Frame, UIStroke)
+	-- Card `index` of `count`, centred in the page.
+	local function card(page: Frame, index: number, count: number, name: string, strokeColor: Color3): (Frame, UIStroke)
+		local total = count * CARD_W + (count - 1) * CARD_GAP
+		local left = (1 - total) / 2
 		local frame = Ui.frame(page, {
 			name = name,
 			size = UDim2.fromScale(CARD_W, 0.87),
-			position = UDim2.fromScale((index - 1) * (CARD_W + CARD_GAP), 0.13),
+			position = UDim2.fromScale(left + (index - 1) * (CARD_W + CARD_GAP), 0.13),
 			color = ROLE.panelRaised,
 			corner = 0.08,
 			stroke = 2,
@@ -805,7 +619,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 	local skillCards: { SkillCard } = {}
 	local shownSkills: { [string]: number } = {}
 	for index, def in SKILLS do
-		local frame, stroke = card(pages["skills"], index, `Skill_{def.id}`, ROLE.stroke)
+		local frame, stroke = card(pages["skills"], index, #SKILLS, `Skill_{def.id}`, ROLE.stroke)
 		local badge = Ui.frame(frame, {
 			name = "Badge",
 			size = UDim2.fromScale(0.5, 0.25),
@@ -892,6 +706,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 			local action: any = { type = "LearnSkill", id = def.id }
 			Store.send(action)
 		end)
+		singleLine(button)
 		entry = {
 			id = def.id,
 			stroke = stroke,
@@ -916,8 +731,6 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 			return { n = formatNumber(target * BASE.TANK_BONUS_PER_LEVEL) }
 		elseif id == "jump" then
 			return { n = formatNumber(BASE.JUMP_POWER_BONUS[target]) }
-		elseif id == "drill" then
-			return { n = formatNumber(math.floor((1 - BASE.DRILL_HOLD_FACTOR[target]) * 100 + 0.5)) }
 		end
 		return {}
 	end
@@ -961,6 +774,290 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 		end
 	end
 
+	-----------------------------------------------------------------------------------------------
+	-- Tools tab: a scrolling list, one row per tool
+	-----------------------------------------------------------------------------------------------
+	local toolHintLeft, toolHintRight = topLine(pages["tools"], ROLE.good)
+	local list = Instance.new("ScrollingFrame")
+	list.Name = "Tools"
+	list.Size = UDim2.fromScale(1, 0.87)
+	list.Position = UDim2.fromScale(0, 0.13)
+	list.BackgroundColor3 = ROLE.background
+	list.BackgroundTransparency = 0.3
+	list.BorderSizePixel = 0
+	list.ScrollingDirection = Enum.ScrollingDirection.Y
+	list.ScrollBarThickness = SCROLL_BAR
+	list.ScrollBarImageColor3 = ROLE.good
+	list.ZIndex = Z + 2
+	Ui.corner(list, 0.04)
+	list.Parent = pages["tools"]
+	local listPadding = Instance.new("UIPadding")
+	listPadding.PaddingTop = UDim.new(0, LIST_PADDING)
+	listPadding.PaddingBottom = UDim.new(0, LIST_PADDING)
+	listPadding.PaddingLeft = UDim.new(0, LIST_PADDING)
+	listPadding.PaddingRight = UDim.new(0, LIST_PADDING + SCROLL_BAR)
+	listPadding.Parent = list
+	local listLayout = Instance.new("UIListLayout")
+	listLayout.FillDirection = Enum.FillDirection.Vertical
+	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	listLayout.Padding = UDim.new(0, ROW_GAP)
+	listLayout.Parent = list
+	-- Canvas from the fixed row heights (AutomaticCanvasSize is unreliable under a UIScale).
+	list.CanvasSize = UDim2.new(0, 0, 0, LIST_PADDING * 2 + #TOOLS * ROW_HEIGHT + (#TOOLS - 1) * ROW_GAP)
+
+	type ToolRow = {
+		id: string,
+		stroke: UIStroke,
+		badgeScale: UIScale,
+		icon: ImageLabel,
+		name: TextLabel,
+		desc: TextLabel,
+		pips: Pips,
+		cost: Pill,
+		button: TextButton,
+		status: TextLabel,
+		allowed: boolean,
+		lastPress: number,
+	}
+	local toolRows: { ToolRow } = {}
+	local shownTools: { [string]: number } = {}
+
+	for index, def in TOOLS do
+		local upgrade = TOOL_UPGRADES[def.id]
+		local frame = Ui.frame(list, {
+			name = `Tool_{def.id}`,
+			size = UDim2.new(1, 0, 0, ROW_HEIGHT),
+			color = ROLE.panelRaised,
+			corner = 0.2,
+			stroke = 2,
+			strokeColor = ROLE.stroke,
+			order = index,
+			zindex = Z + 3,
+		})
+		local stroke = frame:FindFirstChildOfClass("UIStroke") :: UIStroke
+		local badge = Ui.frame(frame, {
+			name = "Badge",
+			size = UDim2.fromScale(0.8, 0.8),
+			position = UDim2.fromScale(0.012, 0.5),
+			anchor = Vector2.new(0, 0.5),
+			color = ROLE.background,
+			corner = 0.5,
+			aspect = 1,
+			zindex = Z + 4,
+		})
+		local badgeScale = Instance.new("UIScale")
+		badgeScale.Parent = badge
+		local icon = Ui.icon(badge, Ui.iconImage(def.icon), {
+			name = "Icon",
+			size = UDim2.fromScale(0.62, 0.62),
+			position = UDim2.fromScale(0.5, 0.5),
+			anchor = Vector2.new(0.5, 0.5),
+			tint = ROLE.good,
+			zindex = Z + 5,
+		})
+		local name = Ui.label(frame, {
+			name = "Name",
+			size = UDim2.fromScale(0.4, 0.42),
+			position = UDim2.fromScale(0.1, 0.07),
+			alignX = Enum.TextXAlignment.Left,
+			maxText = 26,
+			zindex = Z + 4,
+		})
+		local desc = Ui.body(frame, {
+			name = "Desc",
+			size = UDim2.fromScale(0.46, 0.42),
+			position = UDim2.fromScale(0.1, 0.52),
+			textColor = ROLE.textDim,
+			maxText = 18,
+			minText = 7,
+			zindex = Z + 4,
+		})
+		local pips = makePips(frame, {
+			name = "Pips",
+			size = UDim2.fromScale(0.15, 0.3),
+			position = UDim2.fromScale(0.585, 0.12),
+			visible = upgrade ~= nil,
+		}, if upgrade then upgrade.maxLevel else 1, Z + 4)
+		local cost = makePill(frame, {
+			name = "Cost",
+			size = UDim2.fromScale(0.15, 0.38),
+			position = UDim2.fromScale(0.585, 0.5),
+			color = ROLE.background,
+			textColor = ROLE.star,
+			maxText = 24,
+			visible = false,
+		}, Ui.Icons.coin, ROLE.star, Z + 4)
+		local row: ToolRow
+		local button = Ui.button(frame, {
+			name = "Action",
+			size = UDim2.fromScale(0.24, 0.5),
+			position = UDim2.fromScale(0.99, 0.08),
+			anchor = Vector2.new(1, 0),
+			color = Ui.COLORS.go,
+			icon = Ui.Icons.upgrade,
+			corner = 0.35,
+			stroke = 2,
+			maxText = 24,
+			zindex = Z + 4,
+			visible = upgrade ~= nil,
+		}, function()
+			local base = getBase()
+			if base == nil or not row.allowed or os.clock() - row.lastPress < PRESS_COOLDOWN then
+				return
+			end
+			local levels = toolLevels(base)
+			local unlocked: { [string]: boolean } = {}
+			for id, value in levels do
+				unlocked[id] = value > 0
+			end
+			-- Same check as the server, with the newest state.
+			if not BaseBuild.canUpgradeTool(MissionData, def.id, levels[def.id] or 0, base.level, base.credits, unlocked) then
+				return
+			end
+			row.lastPress = os.clock()
+			local action: any = { type = "UpgradeTool", id = def.id }
+			Store.send(action)
+		end)
+		singleLine(button)
+		-- Status line: "In your backpack", "Build the Antenna first", or why an upgrade waits.
+		local status = Ui.body(frame, {
+			name = "Status",
+			size = if upgrade then UDim2.fromScale(0.24, 0.32) else UDim2.fromScale(0.38, 0.6),
+			position = if upgrade then UDim2.fromScale(0.99, 0.62) else UDim2.fromScale(0.99, 0.5),
+			anchor = if upgrade then Vector2.new(1, 0) else Vector2.new(1, 0.5),
+			alignX = if upgrade then Enum.TextXAlignment.Center else Enum.TextXAlignment.Right,
+			textColor = ROLE.warning,
+			maxText = if upgrade then 16 else 20,
+			minText = 7,
+			zindex = Z + 4,
+		})
+		row = {
+			id = def.id,
+			stroke = stroke,
+			badgeScale = badgeScale,
+			icon = icon,
+			name = name,
+			desc = desc,
+			pips = pips,
+			cost = cost,
+			button = button,
+			status = status,
+			allowed = false,
+			lastPress = -math.huge,
+		}
+		table.insert(toolRows, row)
+	end
+
+	-- "Digs ice 30% faster" for the next drill level (the top level when maxed).
+	local function upgradeEffect(id: string, level: number): Params
+		local upgrade = TOOL_UPGRADES[id]
+		if upgrade == nil then
+			return {}
+		end
+		local target = math.clamp(level + 1, 1, upgrade.maxLevel)
+		local factors = upgrade.holdFactor
+		if factors and factors[target] then
+			return { n = formatNumber(math.floor((1 - factors[target]) * 100 + 0.5)) }
+		end
+		return {}
+	end
+
+	local function renderTools(base: BaseState)
+		toolHintLeft.Text = Store.t("panel.tab_tools")
+		toolHintRight.Text = Store.t("panel.tools_hint")
+		local levels = toolLevels(base)
+		local unlocked: { [string]: boolean } = {}
+		for id, value in levels do
+			unlocked[id] = value > 0
+		end
+		for _, row in toolRows do
+			local def = BaseBuild.toolDef(MissionData, row.id) :: ToolDef?
+			if def == nil then
+				continue
+			end
+			local upgrade = TOOL_UPGRADES[row.id]
+			local level = levels[row.id] or 0
+			local has = level > 0
+			row.name.Text = Store.t("tool." .. row.id .. ".name")
+			row.icon.ImageColor3 = if has then ROLE.good else ROLE.textDim
+			row.icon.ImageTransparency = if has then 0 else 0.4
+			if shownTools[row.id] ~= nil and level > (shownTools[row.id] :: number) then
+				pop(row.badgeScale)
+			end
+			shownTools[row.id] = level
+
+			if not has then
+				-- Locked: which build unlocks it.
+				row.desc.Text = Store.t("panel.tool_use." .. row.id)
+				row.pips.frame.Visible = false
+				row.cost.frame.Visible = false
+				row.button.Visible = false
+				local unlock = def.unlock
+				row.status.Text = if unlock
+					then Store.t("panel.needs_build", { name = Store.t("build." .. unlock .. ".name") })
+					else Store.t("base.why.not_owned")
+				row.status.TextColor3 = ROLE.warning
+				row.allowed = false
+				row.stroke.Color = ROLE.stroke
+				row.stroke.Thickness = 2
+				continue
+			end
+
+			if upgrade == nil then
+				-- A tool without upgrades: you have it (food is picked in the greenhouse).
+				row.desc.Text = Store.t("panel.tool_use." .. row.id)
+				row.pips.frame.Visible = false
+				row.cost.frame.Visible = false
+				row.button.Visible = false
+				row.status.Text = Store.t(if def.consumable then "panel.tool_food" else "panel.tool_ready")
+				row.status.TextColor3 = ROLE.good
+				row.allowed = false
+				row.stroke.Color = ROLE.stroke
+				row.stroke.Thickness = 2
+				continue
+			end
+
+			-- A tool with upgrades (the ice drill).
+			local maxed = level >= upgrade.maxLevel
+			local allowed, reason = BaseBuild.canUpgradeTool(MissionData, row.id, level, base.level, base.credits, unlocked)
+			row.allowed = allowed
+			row.desc.Text = Store.t("panel.tool_use." .. row.id)
+				.. "  "
+				.. Store.t("panel.drill_effect", upgradeEffect(row.id, level))
+			row.pips.frame.Visible = true
+			row.pips.set(level, upgrade.maxLevel, ROLE.good)
+			row.button.Visible = true
+			local nextCost = BaseBuild.toolUpgradeCost(MissionData, row.id, level)
+			row.cost.frame.Visible = nextCost ~= nil
+			if nextCost ~= nil then
+				row.cost.label.Text = if nextCost == 0 then Store.t("panel.free") else formatNumber(nextCost)
+				row.cost.label.TextColor3 = if base.credits >= nextCost then ROLE.star else ROLE.textDim
+			end
+			if maxed then
+				Ui.setButton(row.button, Store.t("panel.max"), Ui.ICONS.check)
+				Ui.setButtonLook(row.button, true, Ui.COLORS.secondary)
+				row.button.AutoButtonColor = false
+				row.status.Text = ""
+			else
+				Ui.setButton(row.button, Store.t("panel.upgrade"), if allowed then Ui.Icons.upgrade else Ui.ICONS.lock)
+				Ui.setButtonLook(row.button, allowed, Ui.COLORS.go)
+				local params: Params = {}
+				if reason == "level" then
+					params.n = upgrade.minLevel[level + 1]
+					params.level = upgrade.minLevel[level + 1]
+				elseif reason == "credits" then
+					params.n = upgrade.costs[level + 1]
+					params.cost = upgrade.costs[level + 1]
+				end
+				row.status.Text = if allowed then "" else reasonText(reason, params)
+				row.status.TextColor3 = ROLE.warning
+			end
+			-- Something the player can do right now glows lime.
+			row.stroke.Color = if allowed then ROLE.good else ROLE.stroke
+			row.stroke.Thickness = if allowed then 3 else 2
+		end
+	end
+
 	-- Pets tab ------------------------------------------------------------------------------------
 	local petTitle, petHint = topLine(pages["pets"], ROLE.reward)
 	type PetCard = {
@@ -977,7 +1074,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 	}
 	local petCards: { PetCard } = {}
 	for index, def in PETS do
-		local frame, stroke = card(pages["pets"], index, `Pet_{def.id}`, ROLE.stroke)
+		local frame, stroke = card(pages["pets"], index, #PETS, `Pet_{def.id}`, ROLE.stroke)
 		local stage = Ui.frame(frame, {
 			name = "Stage",
 			size = UDim2.fromScale(0.9, 0.42),
@@ -1041,7 +1138,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 			position = UDim2.fromScale(0.5, 0.83),
 			anchor = Vector2.new(0.5, 0),
 			color = ROLE.reward,
-			icon = Ui.Icons.coin,
+			icon = Ui.Icons.paw,
 			corner = 0.35,
 			stroke = 2,
 			maxText = 24,
@@ -1065,6 +1162,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 				Store.send(action)
 			end
 		end)
+		singleLine(button)
 		entry = {
 			id = def.id,
 			stroke = stroke,
@@ -1119,7 +1217,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 				entry.reason.TextColor3 = ROLE.good
 				entry.stroke.Color = if inUse then ROLE.reward else ROLE.good
 			elseif def.collectible then
-				-- Found, never bought: no button, the text says where to look.
+				-- Found, never adopted: no button, the text says where to look.
 				entry.mode = "none"
 				entry.button.Visible = false
 				entry.reason.Text = ""
@@ -1132,7 +1230,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 					entry.mode = "none"
 				end
 				entry.button.Visible = true
-				Ui.setButton(entry.button, Store.t("panel.buy"), if allowed then Ui.Icons.coin else Ui.ICONS.lock)
+				Ui.setButton(entry.button, Store.t("panel.adopt"), if allowed then Ui.Icons.paw else Ui.ICONS.lock)
 				Ui.setButtonLook(entry.button, allowed, ROLE.reward)
 				local params: Params = {}
 				if reason == "level" then
@@ -1173,21 +1271,19 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 	-- Render
 	-----------------------------------------------------------------------------------------------
 	local function renderHeader(base: BaseState?)
-		title.Text = Store.t("panel.base_title")
+		title.Text = Store.t("panel.lab_title")
+		labHint.Text = Store.t("panel.lab_hint")
 		for _, tab in TABS do
 			local button = tabButtons[tab.id]
 			Ui.setButton(button, Store.t(tab.key))
 			Ui.setButtonColor(button, if currentTab == tab.id then tab.color else Ui.COLORS.secondary)
 		end
-		Ui.setButton(collectButton, Store.t("panel.collect"))
 		if base == nil then
 			credits.label.Text = "-"
 			levelPill.label.Text = Store.t("panel.level", { n = 1 })
 			xpLabel.Text = ""
 			xpFill.Size = UDim2.fromScale(0, 1)
-			icePill.label.Text = Store.t("panel.ice_rate", { n = 0 })
-			siloPill.label.Text = Store.t("panel.silo", { n = 0, max = BASE.SILO_MAX })
-			Ui.setButtonLook(collectButton, false, Ui.COLORS.go)
+			pointsPill.label.Text = Store.t("panel.skill_points", { n = 0 })
 			return
 		end
 		credits.label.Text = formatNumber(math.floor(base.credits))
@@ -1201,12 +1297,8 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 			xpFill.Size = UDim2.fromScale(1, 1)
 		end
 		xpFill.Visible = xpFill.Size.X.Scale > 0.005
-		icePill.label.Text = Store.t("panel.ice_rate", { n = formatNumber(base.icePerMinute) })
-		local siloMax = if base.siloMax > 0 then base.siloMax else BASE.SILO_MAX
-		siloPill.label.Text = Store.t("panel.silo", { n = math.floor(base.siloIce), max = siloMax })
-		local canClaim = base.siloIce >= 1
-		Ui.setButtonLook(collectButton, canClaim, Ui.COLORS.go)
-		siloPill.label.TextColor3 = if base.siloIce >= siloMax then ROLE.warning else ROLE.text
+		pointsPill.label.Text = Store.t("panel.skill_points", { n = base.skillPoints })
+		pointsPill.label.TextColor3 = if base.skillPoints > 0 then ROLE.accent else ROLE.text
 	end
 
 	render = function()
@@ -1218,10 +1310,10 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 			pages[tab.id].Visible = base ~= nil and currentTab == tab.id
 		end
 		if base ~= nil then
-			if currentTab == "base" then
-				renderBuilds(base)
-			elseif currentTab == "skills" then
+			if currentTab == "skills" then
 				renderSkills(base)
+			elseif currentTab == "tools" then
+				renderTools(base)
 			else
 				renderPets(base)
 			end
@@ -1236,11 +1328,11 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 			if name == "base" then
 				local base = getBase()
 				if base then
-					for id, value in base.builds do
-						shownLevels[id] = value
-					end
 					for id, value in base.skills do
 						shownSkills[id] = value
+					end
+					for id, value in toolLevels(base) do
+						shownTools[id] = value
 					end
 				end
 			end

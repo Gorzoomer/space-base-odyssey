@@ -11,9 +11,23 @@
 -- Guidance (Settings: on by default): a cyan beam points to where the next unfinished objective
 -- happens (Workspace.Base.Markers, or a build pad for "build_*" objectives); with no such objective
 -- during a shift it points to the most useful task (ice to deliver, leak, dusty arrays, antenna,
--- ice). In base mode (Briefing, no mission running) it points to the cheapest build pad the player
--- can pay for now (Workspace.Base.BuildPads, attributes BuildId, SBO_Cost, SBO_Locked), or else to
--- the ice: the silo when it has ice, the ice site otherwise. It hides within 8 studs.
+-- ice). In base mode (Briefing, no mission running), in this order:
+--   1) carried ice: the water machine;
+--   2) a build being built in steps (Stage 7: BaseState.inProgress, or the pad attribute SBO_Phase
+--      "crate" | "assemble"): the nearest step needing assembly (its pad); a step needing a parts
+--      crate: that pad when the player carries one (BaseState.carryingCrate or player attribute
+--      SBO_CarryingCrate), else the crate depot at the lander (marker "CrateDepot", or the prompt
+--      with TextKey "prompt.take_crate");
+--   3) a fresh meteorite crater (Workspace.Base.Impacts) this player has not scanned yet (impact
+--      attribute SBO_ImpactId vs player attribute SBO_ScannedImpact), when the tablet is unlocked;
+--   4) the cheapest build pad the player can pay for now (Workspace.Base.BuildPads, attributes
+--      BuildId, SBO_Cost, SBO_Locked; pads already under way are skipped);
+--   5) the nearest exploration site (a part with attribute PoiId) within 250 studs that this player
+--      has not scanned (BaseState.scanned "poi:<id>"), when the tablet is unlocked;
+--   6) the ice: the silo when it has ice, the ice site otherwise.
+-- It hides within 8 studs. A "build_<id>" mission objective uses the same step logic as 2).
+-- Vehicles (Stage 7): while the player drives, C.A.R.L. keeps up beside the vehicle (wider gap,
+-- faster follow) and its raycasts skip the vehicle.
 -- Earth skin (chosen in the Wardrobe: Equipped.carl == "earth"; older data: the hidden mini Earth):
 -- the dome shows the real Earth (NASA Blue Marble map, Icons.earthMap) slowly turning; it is local
 -- to that player.
@@ -69,6 +83,11 @@ local COLOR_RATE = 4
 local GUIDE_REFRESH_SECONDS = 0.25 -- where the guidance beam points is worked out 4 times a second
 local FILTER_REFRESH_SECONDS = 1
 local SILO_SEARCH_SECONDS = 2
+local PROMPT_SEARCH_SECONDS = 3 -- crate depot search (when there is no marker)
+local POI_SEARCH_SECONDS = 10 -- exploration sites are found again this often
+local POI_GUIDE_RANGE = 250 -- studs: unscanned sites closer than this are worth a detour
+local SEATED_SIDE_OFFSET = 7 -- while driving: beside the vehicle, not inside it
+local SEATED_FOLLOW_RATE = 12
 
 local PALETTE = Theme.PALETTE
 local ROLE = Theme.ROLE
@@ -97,7 +116,7 @@ local SHELTER_MARKER = "ShelterDoor"
 -- Where each objective happens (marker names in Workspace.Base.Markers). Objectives that are not
 -- in one place (finish_day, complete_days, survive_storm, stars_at_least) are skipped.
 local OBJECTIVE_MARKERS: { [string]: string } = {
-	go_outside = "HabitatDoor",
+	go_outside = "LanderDoor", -- Stage 7: the game starts in the arrival lander
 	return_inside = "HabitatDoor",
 	align_antenna = "Antenna",
 	clean_panel = "Arrays",
@@ -107,24 +126,18 @@ local OBJECTIVE_MARKERS: { [string]: string } = {
 	set_power = "Console",
 	start_shift = "Console",
 }
--- Stage 6 build objectives: they happen at the build pad of that structure.
-local OBJECTIVE_PADS: { [string]: string } = {
-	build_solar = "solar",
-	build_greenhouse = "greenhouse",
-	build_antenna = "antenna",
-	build_shelter = "shelter",
-}
+-- Build objectives ("build_<id>", Stages 6-7) happen at the build pad of that structure (and, while
+-- it is built in steps, at the crate depot). They can all be done while planning.
+local BUILD_OBJECTIVE_PREFIX = "build_"
 -- Objectives that can be done while planning (the rest need the shift: the console starts it).
 local PLANNING_OBJECTIVES: { [string]: boolean } = {
 	go_outside = true,
 	return_inside = true,
 	set_power = true,
 	start_shift = true,
-	build_solar = true,
-	build_greenhouse = true,
-	build_antenna = true,
-	build_shelter = true,
 }
+local CRATE_DEPOT_MARKER = "CrateDepot"
+local CRATE_PROMPT_KEY = "prompt.take_crate"
 
 local CarlDrone = {}
 
@@ -164,6 +177,13 @@ local function rootPart(): BasePart?
 		return root
 	end
 	return nil
+end
+
+-- The seat the local astronaut sits in (a vehicle), or nil.
+local function seatedIn(): BasePart?
+	local character = player.Character
+	local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
+	return if humanoid then humanoid.SeatPart else nil
 end
 
 -- Stage 6 Store helpers (added by the UI): read through `any` so this file also works without them.
@@ -245,6 +265,11 @@ local function affordablePad(): BasePart?
 		if type(cost) ~= "number" or pad:GetAttribute("SBO_Locked") == true then
 			continue
 		end
+		-- A build already under way is not "next" (the step guidance handles it).
+		local phase = pad:GetAttribute("SBO_Phase")
+		if phase == "crate" or phase == "assemble" then
+			continue
+		end
 		if cost <= credits and cost < bestCost then
 			best = pad
 			bestCost = cost
@@ -294,17 +319,251 @@ local function siloPart(): BasePart?
 	return siloCache
 end
 
+-- The BasePart a prompt sits on (directly, through an Attachment, or a Model's main part).
+local function promptHolder(prompt: Instance): BasePart?
+	local holder = prompt.Parent
+	if holder and holder:IsA("Attachment") then
+		holder = holder.Parent
+	end
+	if holder and holder:IsA("Model") then
+		holder = holder.PrimaryPart or holder:FindFirstChildWhichIsA("BasePart", true)
+	end
+	if holder and holder:IsA("BasePart") then
+		return holder
+	end
+	return nil
+end
+
+-- Stage 7: the parts crate depot at the lander's cargo bay: Markers.CrateDepot, else the part with
+-- the "take crate" prompt, searched at most every PROMPT_SEARCH_SECONDS.
+local depotCache: BasePart? = nil
+local depotSearchedAt = -math.huge
+local function crateDepotPart(): BasePart?
+	local marker = Store.findMarker(CRATE_DEPOT_MARKER)
+	if marker then
+		return marker
+	end
+	if depotCache and depotCache.Parent ~= nil then
+		return depotCache
+	end
+	local now = os.clock()
+	if now - depotSearchedAt < PROMPT_SEARCH_SECONDS then
+		return nil
+	end
+	depotSearchedAt = now
+	depotCache = nil
+	local base = workspace:FindFirstChild("Base")
+	if not base then
+		return nil
+	end
+	for _, item in base:GetDescendants() do
+		if item:IsA("ProximityPrompt") and item:GetAttribute("TextKey") == CRATE_PROMPT_KEY then
+			local holder = promptHolder(item)
+			if holder then
+				depotCache = holder
+				break
+			end
+		end
+	end
+	return depotCache
+end
+
+-- Is the player carrying a parts crate from the lander?
+local function carryingCrate(): boolean
+	if player:GetAttribute("SBO_CarryingCrate") == true then
+		return true
+	end
+	local state = baseState()
+	return state ~= nil and state.carryingCrate == true
+end
+
+-- A tool the player can carry (BaseState.tools). Without that field (older data) every tool counts.
+local function hasTool(id: string): boolean
+	local state = baseState()
+	local list = if state then state.tools else nil
+	if type(list) ~= "table" then
+		return true
+	end
+	local level = list[id]
+	return type(level) == "number" and level > 0
+end
+
+-- What the build at this pad needs next while it is built in steps: "crate" (bring parts),
+-- "assemble" (the parts are there: use the wrench) or nil (not being built). BaseState.inProgress
+-- when the Store has it, else the pad attribute SBO_Phase set by the server.
+local function stepNeed(id: string, pad: BasePart?): string?
+	local state = baseState()
+	local list = if state then state.inProgress else nil
+	if type(list) == "table" then
+		local progress = list[id]
+		if type(progress) ~= "table" then
+			return nil
+		end
+		return if progress.crate == true then "assemble" else "crate"
+	end
+	local phase = if pad then pad:GetAttribute("SBO_Phase") else nil
+	if phase == "crate" or phase == "assemble" then
+		return phase
+	end
+	return nil
+end
+
+local function padIdOf(pad: BasePart): string
+	local id = pad:GetAttribute("BuildId")
+	return if type(id) == "string" then id else pad.Name
+end
+
+-- Where to go for the next step of one build (the crate depot first when parts are needed and the
+-- player has none, else its pad).
+local function buildStepTarget(id: string): BasePart?
+	local pad = buildPad(id)
+	if stepNeed(id, pad) == "crate" and not carryingCrate() then
+		return crateDepotPart() or pad
+	end
+	return pad
+end
+
+local function distanceTo(part: BasePart): number
+	local root = rootPart()
+	return if root then (part.Position - root.Position).Magnitude else 0
+end
+
+-- Builds in progress (base mode): the nearest pad waiting for the crate the player carries, else
+-- the nearest step to assemble, else the crate depot (a step needs parts), or nil.
+local function stepTarget(): BasePart?
+	local pads = baseFolder("BuildPads")
+	if not pads then
+		return nil
+	end
+	local assemble: BasePart? = nil
+	local assembleDistance = math.huge
+	local deliver: BasePart? = nil
+	local deliverDistance = math.huge
+	for _, pad in pads:GetChildren() do
+		if not pad:IsA("BasePart") then
+			continue
+		end
+		local need = stepNeed(padIdOf(pad), pad)
+		if need == "assemble" then
+			local distance = distanceTo(pad)
+			if distance < assembleDistance then
+				assemble = pad
+				assembleDistance = distance
+			end
+		elseif need == "crate" then
+			local distance = distanceTo(pad)
+			if distance < deliverDistance then
+				deliver = pad
+				deliverDistance = distance
+			end
+		end
+	end
+	if deliver and carryingCrate() then
+		return deliver
+	end
+	if assemble then
+		return assemble
+	end
+	if deliver then
+		return crateDepotPart() or deliver
+	end
+	return nil
+end
+
+-- A fresh meteorite crater this player has not scanned yet (Workspace.Base.Impacts), or nil.
+local function impactTarget(): BasePart?
+	local impacts = baseFolder("Impacts")
+	if not impacts or not hasTool("tablet") then
+		return nil
+	end
+	local scanned = player:GetAttribute("SBO_ScannedImpact")
+	for _, impact in impacts:GetChildren() do
+		local id = impact:GetAttribute("SBO_ImpactId")
+		if id ~= nil and id == scanned then
+			continue
+		end
+		local prompt = impact:FindFirstChildWhichIsA("ProximityPrompt", true)
+		local part = if prompt then promptHolder(prompt) else nil
+		if part == nil and impact:IsA("Model") then
+			part = impact.PrimaryPart or impact:FindFirstChildWhichIsA("BasePart", true)
+		elseif part == nil and impact:IsA("BasePart") then
+			part = impact
+		end
+		if part then
+			return part
+		end
+	end
+	return nil
+end
+
+-- Exploration sites: every part with the attribute PoiId (searched every POI_SEARCH_SECONDS).
+local poiCache: { BasePart } = {}
+local poiSearchedAt = -math.huge
+local function poiParts(): { BasePart }
+	local now = os.clock()
+	if now - poiSearchedAt < POI_SEARCH_SECONDS then
+		return poiCache
+	end
+	poiSearchedAt = now
+	local found: { BasePart } = {}
+	local base = workspace:FindFirstChild("Base")
+	if base then
+		for _, item in base:GetDescendants() do
+			if item:IsA("BasePart") and type(item:GetAttribute("PoiId")) == "string" then
+				table.insert(found, item)
+			end
+		end
+	end
+	poiCache = found
+	return found
+end
+
+-- The nearest exploration site within POI_GUIDE_RANGE this player has not scanned, or nil.
+local function poiTarget(): BasePart?
+	local root = rootPart()
+	if not root or not hasTool("tablet") then
+		return nil
+	end
+	local state = baseState()
+	local scanned: { [string]: any } = if state and type(state.scanned) == "table" then state.scanned else {}
+	local best: BasePart? = nil
+	local bestDistance = POI_GUIDE_RANGE
+	for _, part in poiParts() do
+		local id = part:GetAttribute("PoiId")
+		if part.Parent == nil or type(id) ~= "string" then
+			continue
+		end
+		if scanned["poi:" .. id] == true or scanned[id] == true then
+			continue
+		end
+		local distance = (part.Position - root.Position).Magnitude
+		if distance < bestDistance then
+			best = part
+			bestDistance = distance
+		end
+	end
+	return best
+end
+
+local function isBuildObjective(id: string): boolean
+	return string.sub(id, 1, #BUILD_OBJECTIVE_PREFIX) == BUILD_OBJECTIVE_PREFIX
+end
+
+local function doableWhilePlanning(id: string): boolean
+	return PLANNING_OBJECTIVES[id] == true or isBuildObjective(id)
+end
+
 -- Marker for one objective, or nil when it is not done in one place (or not now).
 local function objectiveTarget(id: string, phase: string): BasePart?
-	if phase == "Planning" and not PLANNING_OBJECTIVES[id] then
+	local isBuild = isBuildObjective(id)
+	if phase == "Planning" and not doableWhilePlanning(id) then
 		return nil
 	end
 	if id == "deliver_ice" or id == "deliver_ice_total" then
 		return Store.findMarker(if carryingIce() then "Processor" else "IceSite")
 	end
-	local padId = OBJECTIVE_PADS[id]
-	if padId then
-		return buildPad(padId)
+	if isBuild then
+		return buildStepTarget(string.sub(id, #BUILD_OBJECTIVE_PREFIX + 1))
 	end
 	local marker = OBJECTIVE_MARKERS[id]
 	return if marker then Store.findMarker(marker) else nil
@@ -329,7 +588,8 @@ local function usefulTaskMarker(): string?
 	return "IceSite"
 end
 
--- Base mode (Briefing): deliver carried ice, else the next build the player can pay for, else ice.
+-- Base mode (Briefing): carried ice, build steps, a fresh meteorite crater, the next build the
+-- player can pay for, a nearby unscanned site, else ice.
 local function baseModeTarget(): BasePart?
 	if carryingIce() then
 		local processor = Store.findMarker("Processor")
@@ -337,9 +597,21 @@ local function baseModeTarget(): BasePart?
 			return processor
 		end
 	end
+	local step = stepTarget()
+	if step then
+		return step
+	end
+	local impact = impactTarget()
+	if impact then
+		return impact
+	end
 	local pad = affordablePad()
 	if pad then
 		return pad
+	end
+	local site = poiTarget()
+	if site then
+		return site
 	end
 	local state = baseState()
 	local siloIce = if state and type(state.siloIce) == "number" then state.siloIce else 0
@@ -376,7 +648,7 @@ local function guidanceTarget(): BasePart?
 			if target then
 				return target
 			end
-			if phase == "Planning" and not PLANNING_OBJECTIVES[objective.id] then
+			if phase == "Planning" and not doableWhilePlanning(objective.id) then
 				hasShiftTask = true
 			end
 		end
@@ -665,22 +937,41 @@ function CarlDrone.start()
 	rayParams.RespectCanCollide = true
 	rayParams.IgnoreWater = true
 	local filterAt = -math.huge
+	local filterSeat: BasePart? = nil
 	local function refreshFilter(now: number)
-		if now - filterAt < FILTER_REFRESH_SECONDS then
+		local seat = seatedIn()
+		if now - filterAt < FILTER_REFRESH_SECONDS and seat == filterSeat then
 			return
 		end
 		filterAt = now
+		filterSeat = seat
 		local list: { Instance } = { model }
 		for _, other in Players:GetPlayers() do
 			if other.Character then
 				table.insert(list, other.Character)
 			end
 		end
-		for _, name in { "Pets", "SBO_Pets" } do
+		for _, name in { "Pets", "SBO_Pets", "Vehicles" } do
 			local folder = workspace:FindFirstChild(name)
 			if folder then
 				table.insert(list, folder)
 			end
+		end
+		local baseVehicles = baseFolder("Vehicles")
+		if baseVehicles then
+			table.insert(list, baseVehicles)
+		end
+		-- The vehicle the player drives (its whole model), wherever it lives.
+		if seat then
+			local top: Instance = seat
+			while true do
+				local parent = top.Parent
+				if parent == nil or not parent:IsA("Model") then
+					break
+				end
+				top = parent
+			end
+			table.insert(list, top)
 		end
 		rayParams.FilterDescendantsInstances = list
 	end
@@ -822,7 +1113,10 @@ function CarlDrone.start()
 		end
 		playerLook = playerLook.Unit
 		local playerRight = Vector3.new(-playerLook.Z, 0, playerLook.X)
-		local spot = rootPos + playerRight * SIDE_OFFSET - playerLook * BACK_OFFSET
+		local driving = seatedIn() ~= nil
+		local sideOffset = if driving then SEATED_SIDE_OFFSET else SIDE_OFFSET
+		local followRate = if driving then SEATED_FOLLOW_RATE else FOLLOW_RATE
+		local spot = rootPos + playerRight * sideOffset - playerLook * BACK_OFFSET
 		local toSpot = spot - rootPos
 		local wall = workspace:Raycast(rootPos, toSpot, rayParams)
 		if wall and math.abs(wall.Normal.Y) < WALL_NORMAL_Y then
@@ -901,7 +1195,7 @@ function CarlDrone.start()
 			else
 				jumpRequested = false
 				-- Drive on the ground toward the spot, settling on small bumps.
-				local alpha = 1 - math.exp(-deltaTime * FOLLOW_RATE)
+				local alpha = 1 - math.exp(-deltaTime * followRate)
 				local nextXZ = flat(pos):Lerp(flat(target), alpha)
 				local groundHere = groundAt(nextXZ, math.max(pos.Y, target.Y) + RAY_UP + BODY_RAY_HEIGHT)
 				local y = pos.Y

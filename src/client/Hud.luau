@@ -5,14 +5,19 @@
 --   Field (shift and while roaming the base): suit air bar (out of PlayerStats.suitMax) and ice.
 --   Wallet (Stage 6: shift, roaming, base mode and mission select): credits, player level and an XP
 --   bar, with a "+N" pop when credits rise.
---   Top bar (Stage 6, Hud.newTopBar): Base, Wardrobe and Missions buttons beside the Settings button,
---   and the "Build your base" hint pill in base mode.
+--   Stage 7 (field): a "Carrying parts" pill while the player carries a parts crate from the lander,
+--   a food boost timer while player attribute SBO_FoodBoostUntil (server time) is in the future, and a
+--   small build-progress sign (a local BillboardGui) over every build pad with a build in progress
+--   (BaseState.inProgress): step x/y and what is needed next (a crate, or Assemble with the wrench).
+--   Top bar (Hud.newTopBar): Missions and Wardrobe buttons beside the Settings button, and the "Build
+--   your base" hint pill in base mode. Stage 7: no Base button (team feedback: building from a menu
+--   let players upgrade everything while standing still; builds happen at the pads in the world).
 -- Screen layout (fractions of the screen):
 --   top centre   y 0.02-0.09  shift timer 0.25-0.49 | today's event 0.51-0.75
 --   top right    y 0.02-0.10  settings button 0.815-0.985 (Settings.luau); y 0.115-0.18 Earth link
---                base mode:  Missions | Wardrobe | Base buttons 0.43-0.805, y 0.02-0.10;
+--                base mode:  Missions | Wardrobe buttons 0.555-0.805, y 0.02-0.10;
 --                            hint pill 0.3-0.7, y 0.115-0.175
---                elsewhere:  icon-only Wardrobe | Base squares at the right edge, under the settings
+--                elsewhere:  an icon-only Wardrobe square at the right edge, under the settings
 --                            button (y 0.115: mission select, roaming) or under the Earth link or
 --                            sources button (y 0.195: shift, power board)
 --   left column  x 0.01-0.21  objectives (Objectives.luau, from y 0.10-0.12), then the meters panel
@@ -20,7 +25,7 @@
 --                             wallet (at y 0.105 when nothing is above it)
 --   centre       y 0.10-0.25  C.A.R.L. bubble (Messages.luau, x 0.29-0.71)
 --                y 0.27-0.48  storm countdown and flare source (x 0.22-0.78)
---   bottom       y 0.76-0.84  carrying ice; y 0.86-0.96 suit air
+--   bottom       y 0.68-0.74  food boost; y 0.76-0.84  carrying ice or parts; y 0.86-0.96 suit air
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -31,6 +36,8 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local BaseBuild = require(Shared:WaitForChild("BaseBuild"))
 local MissionData = require(Shared:WaitForChild("MissionData"))
 local Simulation = require(Shared:WaitForChild("Simulation"))
+
+local Types = require(Shared:WaitForChild("Types"))
 
 local Meters = require(script.Parent.Meters)
 local Store = require(script.Parent.Store)
@@ -57,6 +64,12 @@ local METERS_HEIGHT = 0.19
 local WALLET_TOP = 0.105 -- under the Roblox menu buttons when nothing else is in the column
 local WALLET_HEIGHT = 0.09
 local POP_SECONDS = 0.9
+local FOOD_BOOST_ATTRIBUTE = "SBO_FoodBoostUntil"
+-- Build-progress signs over the pads (studs).
+local SIGN_SIZE = UDim2.fromScale(13, 4.2)
+local SIGN_HEIGHT = 9
+local SIGN_MAX_DISTANCE = 220
+local SIGN_POLL_SECONDS = 1 -- look again for pads that were not there yet
 
 -- What the HUD shows (Main.client picks it from the phase and the open screens):
 --   "shift"  work time: everything.   "roam"  planning with the power board closed (walk tasks).
@@ -74,6 +87,7 @@ export type HudView = {
 	setMode: (mode: Mode) -> (),
 	render: () -> (),
 	renderWallet: () -> (), -- call when a new BaseState arrives
+	renderBase: () -> (), -- Stage 7: call when a new BaseState arrives (wallet, parts, build signs)
 	tick: () -> (), -- call often (timers and storm countdown use server time)
 }
 
@@ -190,6 +204,36 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		textColor = Ui.COLORS.textDark,
 		icon = Ui.ICONS.ice,
 		maxText = 32,
+		visible = false,
+	})
+
+	-- Stage 7: a parts crate carried from the lander to a build pad (same place as the ice: one at a time).
+	local crateBadge = Ui.iconText(field, {
+		name = "CarryingCrate",
+		size = UDim2.fromScale(0.28, 0.08),
+		position = UDim2.fromScale(0.5, 0.76),
+		anchor = Vector2.new(0.5, 0),
+		color = ROLE.star,
+		stroke = 3,
+		strokeColor = ROLE.background,
+		textColor = Ui.COLORS.textDark,
+		icon = Ui.Icons.crate,
+		maxText = 32,
+		visible = false,
+	})
+
+	-- Stage 7: greenhouse food eaten: a short speed boost with a countdown.
+	local foodBadge = Ui.iconText(field, {
+		name = "FoodBoost",
+		size = UDim2.fromScale(0.22, 0.06),
+		position = UDim2.fromScale(0.5, 0.68),
+		anchor = Vector2.new(0.5, 0),
+		color = ROLE.good,
+		stroke = 3,
+		strokeColor = ROLE.background,
+		textColor = Ui.COLORS.textDark,
+		icon = Ui.ICONS.food,
+		maxText = 26,
 		visible = false,
 	})
 
@@ -399,10 +443,13 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 			earthLink.label.TextColor3 = foreground
 			earthLink.frame.BackgroundColor3 = background
 		end
+		local carryingCrate = Store.carryingCrate()
+		crateBadge.set(Ui.Icons.crate, Store.t("ui.carrying_parts"), Ui.COLORS.textDark)
+		crateBadge.frame.Visible = carryingCrate
 		if stats then
 			local suitMax = suitMaxOf(stats)
 			iceBadge.set(Ui.ICONS.ice, Store.t("ui.carrying_ice"), Ui.COLORS.textDark)
-			iceBadge.frame.Visible = stats.carryingIce
+			iceBadge.frame.Visible = stats.carryingIce and not carryingCrate
 
 			local suitShown = (not stats.inside) or stats.suitO2 < suitMax
 			suitPanel.Visible = suitShown
@@ -418,7 +465,187 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		renderWallet()
 	end
 
+	-- Food boost countdown (server time from the player attribute set by the server's ToolService).
+	local player = game:GetService("Players").LocalPlayer
+	local function renderFood()
+		local value = player:GetAttribute(FOOD_BOOST_ATTRIBUTE)
+		local left = if type(value) == "number" then value - workspace:GetServerTimeNow() else 0
+		local boosted = left > 0
+		foodBadge.frame.Visible = boosted
+		if boosted then
+			foodBadge.set(Ui.ICONS.food, Store.t("ui.food_boost", { seconds = math.ceil(left) }), Ui.COLORS.textDark)
+		end
+	end
+	player:GetAttributeChangedSignal(FOOD_BOOST_ATTRIBUTE):Connect(renderFood)
+
+	---------------------------------------------------------------------------------------------
+	-- Build-progress signs: a BillboardGui on each pad (Workspace.Base.BuildPads.<id>) with a build
+	-- in progress. Local only: every player sees the shared progress from their own BaseState.
+	---------------------------------------------------------------------------------------------
+	type Sign = {
+		gui: BillboardGui,
+		title: TextLabel,
+		step: TextLabel,
+		fill: Frame,
+		needIcon: ImageLabel,
+		need: TextLabel,
+	}
+	local signs: { [string]: Sign } = {}
+
+	local function findPad(id: string): BasePart?
+		local base = workspace:FindFirstChild("Base")
+		local pads = if base then base:FindFirstChild("BuildPads") else nil
+		local pad = if pads then pads:FindFirstChild(id) else nil
+		if pad and pad:IsA("BasePart") then
+			return pad
+		end
+		return nil
+	end
+
+	-- Sign text scales with the sign (a BillboardGui sized in studs), not with the screen.
+	local function looseText(label: TextLabel)
+		local constraint = label:FindFirstChildOfClass("UITextSizeConstraint")
+		if constraint then
+			constraint.MaxTextSize = 60
+			constraint.MinTextSize = 6
+		end
+	end
+
+	local function makeSign(id: string, pad: BasePart): Sign
+		local gui = Instance.new("BillboardGui")
+		gui.Name = "SBO_BuildProgress"
+		gui.Size = SIGN_SIZE
+		gui.StudsOffsetWorldSpace = Vector3.new(0, SIGN_HEIGHT, 0)
+		gui.AlwaysOnTop = true
+		gui.LightInfluence = 0
+		gui.MaxDistance = SIGN_MAX_DISTANCE
+		gui.ResetOnSpawn = false
+		gui.Adornee = pad
+		local frame = Ui.panel(gui, {
+			name = "Panel",
+			color = ROLE.panel,
+			transparency = 0.08,
+			corner = 0.2,
+			stroke = 3,
+			strokeColor = ROLE.accent,
+		})
+		local def = BaseBuild.buildDef(MissionData, id)
+		Ui.icon(frame, Ui.iconImage(if def then def.icon else "build"), {
+			name = "Icon",
+			size = UDim2.fromScale(0.13, 0.36),
+			position = UDim2.fromScale(0.03, 0.06),
+			tint = ROLE.accent,
+		})
+		local title = Ui.label(frame, {
+			name = "Title",
+			size = UDim2.fromScale(0.56, 0.34),
+			position = UDim2.fromScale(0.17, 0.07),
+			alignX = Enum.TextXAlignment.Left,
+			textColor = ROLE.text,
+		})
+		looseText(title)
+		local step = Ui.label(frame, {
+			name = "Step",
+			size = UDim2.fromScale(0.26, 0.3),
+			position = UDim2.fromScale(0.97, 0.09),
+			anchor = Vector2.new(1, 0),
+			alignX = Enum.TextXAlignment.Right,
+			textColor = ROLE.good,
+		})
+		looseText(step)
+		local back = Ui.frame(frame, {
+			name = "Bar",
+			size = UDim2.fromScale(0.94, 0.13),
+			position = UDim2.fromScale(0.03, 0.46),
+			color = ROLE.background,
+			corner = 0.5,
+		})
+		local fill = Ui.frame(back, {
+			name = "Fill",
+			size = UDim2.fromScale(0, 1),
+			color = ROLE.good,
+			corner = 0.5,
+		})
+		local needIcon = Ui.icon(frame, Ui.Icons.crate, {
+			name = "NeedIcon",
+			size = UDim2.fromScale(0.1, 0.28),
+			position = UDim2.fromScale(0.03, 0.66),
+			tint = ROLE.star,
+		})
+		local need = Ui.body(frame, {
+			name = "Need",
+			size = UDim2.fromScale(0.82, 0.28),
+			position = UDim2.fromScale(0.15, 0.66),
+			textColor = ROLE.star,
+		})
+		looseText(need)
+		gui.Parent = pad
+		return { gui = gui, title = title, step = step, fill = fill, needIcon = needIcon, need = need }
+	end
+
+	local function renderSigns()
+		local state = Store.getBase()
+		local inProgress: { [string]: Types.BuildProgress } = if state then state.inProgress else {}
+		for id, sign in signs do
+			if inProgress[id] == nil or sign.gui.Parent == nil then
+				sign.gui:Destroy()
+				signs[id] = nil
+			end
+		end
+		local carrying = Store.carryingCrate()
+		for id, progress in inProgress do
+			local sign = signs[id]
+			if sign == nil then
+				local pad = findPad(id)
+				if pad == nil then
+					continue -- not there yet (or streamed out): the poll below tries again
+				end
+				sign = makeSign(id, pad)
+				signs[id] = sign
+			end
+			local current = sign :: Sign
+			local name = Store.t(`build.{id}.name`)
+			current.title.Text = if progress.level > 1 then name .. "  " .. Store.t("ui.level", { n = progress.level }) else name
+			current.step.Text = Store.t("ui.build_step", { n = progress.stage, max = progress.stages })
+			local fraction = math.clamp(progress.stage / math.max(1, progress.stages), 0, 1)
+			current.fill.Size = UDim2.fromScale(fraction, 1)
+			current.fill.Visible = fraction > 0.005
+			if progress.crate then
+				Ui.setIcon(current.needIcon, Ui.Icons.failure, ROLE.good) -- the wrench
+				current.need.Text = Store.t("ui.build_need_assemble")
+				current.need.TextColor3 = ROLE.good
+			else
+				Ui.setIcon(current.needIcon, Ui.Icons.crate, ROLE.star)
+				current.need.Text = Store.t(if carrying then "ui.build_need_deliver" else "ui.build_need_crate")
+				current.need.TextColor3 = ROLE.star
+			end
+		end
+	end
+
+	local sincePoll = 0
+	RunService.Heartbeat:Connect(function(deltaTime: number)
+		sincePoll += deltaTime
+		if sincePoll < SIGN_POLL_SECONDS then
+			return
+		end
+		sincePoll = 0
+		local state = Store.getBase()
+		if state == nil then
+			return
+		end
+		for id in state.inProgress do
+			local sign = signs[id]
+			if sign == nil or sign.gui.Parent == nil then
+				renderSigns()
+				return
+			end
+		end
+	end)
+
 	local function tick()
+		if field.Visible then
+			renderFood()
+		end
 		if wallet.Visible then
 			placeColumn() -- the objectives panel above the wallet can change height
 		end
@@ -490,12 +717,27 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		setMode(if value then "shift" else "none")
 	end
 
+	-- A new BaseState: wallet, the parts pill and the build-progress signs.
+	local function renderBase()
+		renderWallet()
+		local carryingCrate = Store.carryingCrate()
+		crateBadge.set(Ui.Icons.crate, Store.t("ui.carrying_parts"), Ui.COLORS.textDark)
+		crateBadge.frame.Visible = carryingCrate
+		local stats = Store.getStats()
+		iceBadge.frame.Visible = stats ~= nil and stats.carryingIce and not carryingCrate
+		renderSigns()
+	end
+
 	render()
 	return {
 		setVisible = setVisible,
 		setMode = setMode,
-		render = render,
+		render = function()
+			render()
+			renderSigns()
+		end,
 		renderWallet = renderWallet,
+		renderBase = renderBase,
 		tick = tick,
 	}
 end
@@ -503,8 +745,7 @@ end
 -- Top bar -----------------------------------------------------------------------------------------
 
 export type TopBarDeps = {
-	openBase: (() -> ())?, -- nil when the Base panel failed to load: its buttons stay hidden
-	openWardrobe: (() -> ())?,
+	openWardrobe: (() -> ())?, -- nil when the Wardrobe failed to load: its buttons stay hidden
 	openMissions: () -> (),
 }
 
@@ -513,29 +754,8 @@ export type TopBarView = {
 	render: () -> (),
 }
 
--- True when this player can do something in the Base panel right now (a build, upgrade or skill).
-local function hasSomethingToDo(): boolean
-	local state = Store.getBase()
-	if state == nil then
-		return false
-	end
-	if state.skillPoints > 0 then
-		for _, def in MissionData.BASE.SKILLS do
-			if BaseBuild.canLearn(MissionData, state.skills, state.level, def.id) then
-				return true
-			end
-		end
-	end
-	for _, def in MissionData.BASE.BUILDS do
-		if BaseBuild.canBuild(MissionData, state.builds, state.level, state.credits, def.id) then
-			return true
-		end
-	end
-	return false
-end
-
 function Hud.newTopBar(root: Frame, deps: TopBarDeps): TopBarView
-	local Z = 52 -- above the C.A.R.L. bubble (50), under the Base and Wardrobe panels (53) and Settings (60+)
+	local Z = 52 -- above the C.A.R.L. bubble (50), under the Lab and Wardrobe panels (53) and Settings (60+)
 	local BUTTON_HEIGHT = 0.08 -- same height as the Settings button
 	local SQUARE_HEIGHT = 0.07
 
@@ -558,23 +778,6 @@ function Hud.newTopBar(root: Frame, deps: TopBarDeps): TopBarView
 		return frame
 	end
 
-	-- A small gold dot on the Base buttons: something can be built or learned right now.
-	local function dot(button: TextButton): Frame
-		return Ui.frame(button, {
-			name = "Dot",
-			size = UDim2.fromScale(0.3, 0.3),
-			position = UDim2.fromScale(1.04, -0.08),
-			anchor = Vector2.new(1, 0),
-			color = ROLE.star,
-			corner = 0.5,
-			stroke = 2,
-			strokeColor = ROLE.background,
-			aspect = 1,
-			zindex = Z + 2,
-			visible = false,
-		})
-	end
-
 	local function call(callback: (() -> ())?): () -> ()
 		return function()
 			if callback then
@@ -583,12 +786,12 @@ function Hud.newTopBar(root: Frame, deps: TopBarDeps): TopBarView
 		end
 	end
 
-	-- Full bar (base mode): Missions | Wardrobe | Base, left of the Settings button.
-	local full = row("TopBar", UDim2.fromScale(0.375, BUTTON_HEIGHT), UDim2.fromScale(0.805, 0.02))
+	-- Full bar (base mode): Missions | Wardrobe, left of the Settings button.
+	local full = row("TopBar", UDim2.fromScale(0.25, BUTTON_HEIGHT), UDim2.fromScale(0.805, 0.02))
 	local function fullButton(name: string, order: number, image: string, primary: boolean, onClick: () -> ()): TextButton
 		return Ui.button(full, {
 			name = name,
-			size = UDim2.fromScale(0.32, 1),
+			size = UDim2.fromScale(0.48, 1),
 			order = order,
 			color = if primary then ROLE.primaryButton else Ui.COLORS.secondary,
 			strokeColor = if primary then ROLE.stroke else ROLE.accent,
@@ -600,11 +803,9 @@ function Hud.newTopBar(root: Frame, deps: TopBarDeps): TopBarView
 	end
 	local missionsButton = fullButton("MissionsButton", 1, Ui.Icons.target, true, deps.openMissions)
 	local wardrobeButton = fullButton("WardrobeButton", 2, Ui.Icons.wardrobe, false, call(deps.openWardrobe))
-	local baseButton = fullButton("BaseButton", 3, Ui.Icons.build, false, call(deps.openBase))
-	local baseDot = dot(baseButton)
 
-	-- Compact squares (other screens): Wardrobe | Base, icon only, at the right edge.
-	local compact = row("TopBarCompact", UDim2.fromScale(0.2, SQUARE_HEIGHT), UDim2.fromScale(0.985, 0.115))
+	-- Compact square (other screens): Wardrobe, icon only, at the right edge.
+	local compact = row("TopBarCompact", UDim2.fromScale(0.1, SQUARE_HEIGHT), UDim2.fromScale(0.985, 0.115))
 	local function square(name: string, order: number, image: string, onClick: () -> ()): TextButton
 		return Ui.button(compact, {
 			name = name,
@@ -619,8 +820,6 @@ function Hud.newTopBar(root: Frame, deps: TopBarDeps): TopBarView
 		}, onClick)
 	end
 	local wardrobeSquare = square("WardrobeSquare", 1, Ui.Icons.wardrobe, call(deps.openWardrobe))
-	local baseSquare = square("BaseSquare", 2, Ui.Icons.build, call(deps.openBase))
-	local squareDot = dot(baseSquare)
 
 	-- Base mode hint for players whose base is not finished yet (pulsing orange border).
 	local hint = Ui.iconText(root, {
@@ -650,21 +849,14 @@ function Hud.newTopBar(root: Frame, deps: TopBarDeps): TopBarView
 	local function render()
 		Ui.setButton(missionsButton, Store.t("ui.top_missions"))
 		Ui.setButton(wardrobeButton, Store.t("ui.top_wardrobe"))
-		Ui.setButton(baseButton, Store.t("ui.top_base"))
 		hint.label.Text = Store.t("ui.base_hint")
 		local hasState = Store.getBase() ~= nil
-		local hasBase = deps.openBase ~= nil and hasState
 		local hasWardrobe = deps.openWardrobe ~= nil and hasState
-		baseButton.Visible = hasBase
 		wardrobeButton.Visible = hasWardrobe
-		baseSquare.Visible = hasBase
 		wardrobeSquare.Visible = hasWardrobe
-		local todo = hasBase and hasSomethingToDo()
-		baseDot.Visible = todo
-		squareDot.Visible = todo
 
 		full.Visible = mode == "base"
-		compact.Visible = mode == "shift" or mode == "roam" or mode == "select" or mode == "board"
+		compact.Visible = hasWardrobe and (mode == "shift" or mode == "roam" or mode == "select" or mode == "board")
 		local y = if mode == "shift" or mode == "board" then 0.195 else 0.115
 		compact.Position = UDim2.fromScale(0.985, y)
 

@@ -2,8 +2,8 @@
 -- Space Base Odyssey - mission objectives checklist: a compact panel in the top-left corner during
 -- Planning and Shift, built from snapshot.mission.objectives. Done objectives get a lime check and
 -- a small "pop"; open ones show an empty ring and their progress ("1/3"). Open build objectives
--- (Stage 6: build_solar, build_greenhouse, build_antenna, build_shelter) show a hammer instead of
--- the ring.
+-- (Stage 6: build_solar, build_greenhouse, build_antenna, build_shelter; Stage 7: build_habitat)
+-- show the build's icon (a hammer by default, a house for the habitat) instead of the ring.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local TweenService = game:GetService("TweenService")
@@ -27,6 +27,11 @@ local MAX_ROWS = 6
 local POP_SECONDS = 0.35
 
 local Objectives = {}
+
+-- Icon of an open build objective (Icons.luau images); others use the hammer.
+local BUILD_ICONS: { [string]: string } = {
+	build_habitat = Ui.Icons.home,
+}
 
 export type ObjectivesView = {
 	setPhase: (phase: string) -> (),
@@ -181,6 +186,9 @@ function Objectives.new(root: Frame): ObjectivesView
 			local isBuild = string.sub(objective.id, 1, 6) == "build_"
 			row.check.Visible = done
 			row.build.Visible = isBuild and not done
+			if isBuild then
+				row.build.Image = BUILD_ICONS[objective.id] or Ui.Icons.build
+			end
 			row.ring.Visible = not done and not isBuild
 			row.text.Text = objectiveText(objective)
 			row.text.TextColor3 = if done then ROLE.good else ROLE.text

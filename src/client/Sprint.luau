@@ -1,7 +1,9 @@
 --!strict
 -- Space Base Odyssey - Run toggle: LeftShift on PC or an on-screen button on touch sets the local WalkSpeed.
 -- The "speed" skill (Stage 6) adds the player attribute SBO_SpeedBonus (set by the server's BaseService)
--- to both the walking and the running speed.
+-- to both the walking and the running speed. Stage 7: eating greenhouse food sets the player attribute
+-- SBO_FoodBoostUntil (server time, set by the server's ToolService); until then FOOD.BOOST_SPEED is
+-- added as well.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ContextActionService = game:GetService("ContextActionService")
@@ -17,6 +19,7 @@ local Ui = require(script.Parent.Ui)
 
 local ACTION_NAME = "SpaceBaseOdysseyRun"
 local SPEED_BONUS_ATTRIBUTE = "SBO_SpeedBonus"
+local FOOD_BOOST_ATTRIBUTE = "SBO_FoodBoostUntil"
 -- Above the default player scripts, so LeftShift toggles running instead of shift lock.
 local ACTION_PRIORITY = Enum.ContextActionPriority.High.Value + 10
 
@@ -38,15 +41,40 @@ function Sprint.new(root: Frame): SprintView
 		return if type(value) == "number" and value == value then math.max(0, value) else 0
 	end
 
+	-- Server time when the food boost ends (0 = no boost).
+	local function boostUntil(): number
+		local value = player:GetAttribute(FOOD_BOOST_ATTRIBUTE)
+		return if type(value) == "number" and value == value then value else 0
+	end
+
+	local function foodBonus(): number
+		return if boostUntil() > workspace:GetServerTimeNow() then MissionData.BASE.FOOD.BOOST_SPEED else 0
+	end
+
 	local function applySpeed()
 		local character = player.Character
 		local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
 		if humanoid then
 			local speed = if running then MissionData.WORLD.RUN_SPEED else MissionData.WORLD.WALK_SPEED
-			humanoid.WalkSpeed = speed + speedBonus()
+			humanoid.WalkSpeed = speed + speedBonus() + foodBonus()
 		end
 	end
 	player:GetAttributeChangedSignal(SPEED_BONUS_ATTRIBUTE):Connect(applySpeed)
+	-- A new boost: speed up now and slow down again right after it ends.
+	local boostToken = 0
+	player:GetAttributeChangedSignal(FOOD_BOOST_ATTRIBUTE):Connect(function()
+		boostToken += 1
+		local token = boostToken
+		applySpeed()
+		local left = boostUntil() - workspace:GetServerTimeNow()
+		if left > 0 then
+			task.delay(left + 0.05, function()
+				if token == boostToken then
+					applySpeed()
+				end
+			end)
+		end
+	end)
 
 	local button: TextButton
 	local function render()

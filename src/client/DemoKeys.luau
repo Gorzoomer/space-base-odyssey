@@ -7,6 +7,7 @@
 --   F10: start an eclipse now (DebugEclipse).
 --   F4: grant 100 credits (and the same XP) for testing the base (DebugGrantCredits).
 --   F3: reset this player's base: builds, skills, credits and XP back to the start (DebugResetBase).
+--   F2: a meteorite lands near this player now, to scan with the tablet (DebugMeteor, Stage 7).
 -- No UI. The server validates every debug action again (Studio or place owner only).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
@@ -49,6 +50,8 @@ function DemoKeys.start()
 			Store.send({ type = "DebugGrantCredits", amount = 100 })
 		elseif input.KeyCode == Enum.KeyCode.F3 then
 			Store.send({ type = "DebugResetBase" })
+		elseif input.KeyCode == Enum.KeyCode.F2 then
+			Store.send({ type = "DebugMeteor" })
 		elseif input.KeyCode == Enum.KeyCode.F7 then
 			for _, id in Store.COLLECTIBLES do
 				if not Store.hasCollectible(id) then

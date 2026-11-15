@@ -25,8 +25,15 @@ local PREFIX_MAX_WORDS: { [string]: number } = {
 	petfact = 16,
 }
 
+-- Stage 7: exploration site and meteorite facts ("poi.<id>.fact", "meteor.fact") are cards too.
+local FACT_CARD_PREFIXES: { [string]: boolean } = { poi = true, meteor = true }
+local FACT_CARD_MAX_WORDS = 16
+
 local function maxWords(key: string): number
 	local prefix = string.match(key, "^([%a_]+)%.")
+	if prefix and FACT_CARD_PREFIXES[prefix] and string.sub(key, -5) == ".fact" then
+		return FACT_CARD_MAX_WORDS
+	end
 	if prefix and PREFIX_MAX_WORDS[prefix] then
 		return PREFIX_MAX_WORDS[prefix]
 	end
@@ -311,7 +318,6 @@ local EXPECTED: { [string]: { string } } = {
 	["prompt.upgrade"] = {"n"},
 	["prompt.claim_silo"] = {},
 	["ui.level"] = {"n"},
-	["ui.top_base"] = {},
 	["ui.top_wardrobe"] = {},
 	["ui.top_missions"] = {},
 	["ui.explore_base"] = {},
@@ -323,20 +329,14 @@ local EXPECTED: { [string]: { string } } = {
 	["tip.build_antenna"] = {},
 	["tip.build_shelter"] = {},
 	["tip.double_jump"] = {},
-	["panel.base_title"] = {},
-	["panel.tab_base"] = {},
 	["panel.tab_skills"] = {},
 	["panel.tab_pets"] = {},
-	["panel.collect"] = {},
 	["panel.level"] = {"n"},
 	["panel.xp"] = {"n", "max"},
 	["panel.level_top"] = {},
-	["panel.ice_rate"] = {"n"},
-	["panel.silo"] = {"n", "max"},
 	["panel.waiting"] = {},
 	["panel.free"] = {},
 	["panel.max"] = {},
-	["panel.build"] = {},
 	["panel.upgrade"] = {},
 	["panel.learn"] = {},
 	["panel.skill_points"] = {"n"},
@@ -344,7 +344,6 @@ local EXPECTED: { [string]: { string } } = {
 	["panel.pets_hint"] = {},
 	["panel.pet_secret"] = {},
 	["panel.pet_price"] = {"n", "level"},
-	["panel.buy"] = {},
 	["panel.use"] = {},
 	["panel.in_use"] = {},
 	["panel.owned"] = {},
@@ -373,8 +372,6 @@ local EXPECTED: { [string]: { string } } = {
 	["skill.tank.desc"] = {"n"},
 	["skill.jump.name"] = {},
 	["skill.jump.desc"] = {},
-	["skill.drill.name"] = {},
-	["skill.drill.desc"] = {"n"},
 	["pet.laika.name"] = {},
 	["pet.cheese.name"] = {},
 	["pet.rabbit.name"] = {},
@@ -401,6 +398,137 @@ local EXPECTED: { [string]: { string } } = {
 	["petfact.cheese"] = {},
 	["petfact.rabbit"] = {},
 	["petfact.monkey"] = {},
+	-- Stage 7: lander start, building in steps, tools, Lab, vehicles, exploration, meteorites.
+	["prompt.pick_food"] = {},
+	["prompt.lab"] = {},
+	["prompt.scan"] = {},
+	["prompt.take_crate"] = {},
+	["prompt.deliver_crate"] = {"n", "m"},
+	["prompt.assemble"] = {"n", "m"},
+	["carl.base.build_started"] = {"n"},
+	["carl.base.crate_taken"] = {},
+	["carl.base.crate_delivered"] = {},
+	["carl.base.step_done"] = {"n", "m"},
+	["carl.base.need_crate"] = {},
+	["carl.base.need_wrench"] = {},
+	["carl.base.has_crate"] = {},
+	["carl.base.hands_full"] = {},
+	["carl.base.no_crate_needed"] = {},
+	["carl.base.build_cancelled"] = {},
+	["carl.base.tool_upgraded"] = {"n"},
+	["carl.base.built_habitat"] = {},
+	["carl.base.built_lab"] = {},
+	["carl.base.built_garage"] = {},
+	["carl.base.built_landing_pad"] = {},
+	["carl.base.built_ship"] = {},
+	["base.why.need_lab"] = {},
+	["base.why.lab_far"] = {},
+	["base.why.pad_far"] = {},
+	["tool.wrench.name"] = {},
+	["tool.drill.name"] = {},
+	["tool.brush.name"] = {},
+	["tool.repair_kit.name"] = {},
+	["tool.tablet.name"] = {},
+	["tool.food.name"] = {},
+	["carl.tool.need_drill"] = {},
+	["carl.tool.need_brush"] = {},
+	["carl.tool.need_tablet"] = {},
+	["carl.tool.need_repair_kit"] = {},
+	["carl.tool.need_tablet_scan"] = {},
+	["carl.tool.hands_full"] = {},
+	["carl.tool.eat_inside"] = {},
+	["carl.tool.food_eaten"] = {},
+	["carl.tool.food_picked"] = {},
+	["carl.tool.food_full"] = {},
+	["carl.tool.food_growing"] = {},
+	["obj.build_habitat"] = {},
+	["carl.build_first.habitat"] = {},
+	["carl.return_inside"] = {},
+	["prompt.take_vehicle"] = {},
+	["prompt.return_vehicle"] = {},
+	["prompt.load_ice"] = {},
+	["prompt.unload_ice"] = {},
+	["ui.vehicle.buggy"] = {},
+	["ui.vehicle.hauler"] = {},
+	["ui.vehicle.speed"] = {},
+	["ui.vehicle.cargo"] = {"n", "max"},
+	["ui.vehicle.exit_key"] = {},
+	["ui.vehicle.exit_touch"] = {},
+	["ui.vehicle.exit_pad"] = {},
+	["ui.vehicle.passenger"] = {},
+	["carl.vehicle.busy"] = {},
+	["carl.vehicle.returned"] = {},
+	["carl.vehicle.righted"] = {},
+	["carl.vehicle.need_ice"] = {},
+	["carl.vehicle.full"] = {},
+	["carl.vehicle.loaded"] = {"n", "max"},
+	["carl.vehicle.unloaded"] = {"n"},
+	["carl.vehicle.unload_later"] = {},
+	["carl.vehicle.gone"] = {},
+	["carl.meteor.hit"] = {},
+	["carl.meteor.no_air"] = {},
+	["carl.explore.all_sites"] = {},
+	["tip.lander_start"] = {},
+	["tip.build_habitat"] = {},
+	["tip.take_crate"] = {},
+	["tip.deliver_crate"] = {},
+	["tip.use_wrench"] = {},
+	["tip.tool_brush"] = {},
+	["tip.tool_repair_kit"] = {},
+	["tip.tool_tablet"] = {},
+	["tip.tool_food"] = {},
+	["tip.lab_built"] = {},
+	["tip.garage_built"] = {},
+	["tip.meteor_scan"] = {},
+	["build.habitat.name"] = {},
+	["build.habitat.desc"] = {},
+	["build.lab.name"] = {},
+	["build.lab.desc"] = {},
+	["build.garage.name"] = {},
+	["build.garage.desc"] = {},
+	["build.landing_pad.name"] = {},
+	["build.landing_pad.desc"] = {},
+	["build.ship.name"] = {},
+	["build.ship.desc"] = {},
+	["panel.lab_title"] = {},
+	["panel.lab_hint"] = {},
+	["panel.tab_tools"] = {},
+	["panel.tools_hint"] = {},
+	["panel.tool_use.wrench"] = {},
+	["panel.tool_use.drill"] = {},
+	["panel.tool_use.brush"] = {},
+	["panel.tool_use.repair_kit"] = {},
+	["panel.tool_use.tablet"] = {},
+	["panel.tool_use.food"] = {},
+	["panel.tool_ready"] = {},
+	["panel.tool_food"] = {},
+	["panel.drill_effect"] = {"n"},
+	["panel.adopt"] = {},
+	["ui.carrying_parts"] = {},
+	["ui.food_boost"] = {"seconds"},
+	["ui.build_step"] = {"n", "max"},
+	["ui.build_need_crate"] = {},
+	["ui.build_need_deliver"] = {},
+	["ui.build_need_assemble"] = {},
+	["explore.new_site"] = {},
+	["explore.new_meteor"] = {},
+	["explore.kind_site"] = {},
+	["explore.kind_meteor"] = {},
+	["explore.reward"] = {"credits", "xp"},
+	["explore.seen"] = {},
+	["explore.count"] = {"n", "max"},
+	["poi.old_lander.name"] = {},
+	["poi.old_lander.fact"] = {},
+	["poi.impact_crater.name"] = {},
+	["poi.impact_crater.fact"] = {},
+	["poi.boulder_tracks.name"] = {},
+	["poi.boulder_tracks.fact"] = {},
+	["poi.prospector_crash.name"] = {},
+	["poi.prospector_crash.fact"] = {},
+	["poi.sun_peak.name"] = {},
+	["poi.sun_peak.fact"] = {},
+	["meteor.name"] = {},
+	["meteor.fact"] = {},
 }
 
 -- Fun facts: "funfact.01" .. "funfact.NN" with N = Localization.FUNFACT_COUNT, no placeholders.
@@ -581,7 +709,8 @@ for _, lang in Localization.LANGUAGES do
 end
 
 -- 3. Every full key quoted in the game source exists (scan src/ for quoted keys). Keys built at
--- run time from a quoted prefix ending in "." (for example "ui.system." .. name) are skipped.
+-- run time from a quoted prefix ending in "." or "_" (for example "ui.system." .. name or
+-- "carl.tool.need_" .. toolId) are skipped.
 local KEY_PREFIXES = {
 	"cause",
 	"error",
@@ -608,6 +737,10 @@ local KEY_PREFIXES = {
 	"petfact",
 	"panel",
 	"wardrobe",
+	"tool",
+	"poi",
+	"meteor",
+	"explore",
 }
 
 local function luauFiles(dir: string, out: { string })
@@ -633,10 +766,43 @@ for _, file in sourceFiles do
 	local source = string.gsub(fs.readFile(file), "%-%-[^\n]*", "")
 	for quoted in string.gmatch(source, '"([%a_]+%.[%w_.]+)"') do
 		local prefix = string.match(quoted, "^([%a_]+)%.")
-		if prefix and table.find(KEY_PREFIXES, prefix) and string.sub(quoted, -1) ~= "." then
+		if prefix and table.find(KEY_PREFIXES, prefix) and string.sub(quoted, -1) ~= "." and string.sub(quoted, -1) ~= "_" then
 			check(inKeys[quoted] == true, file .. " uses a key that is not localized: " .. quoted)
 		end
 	end
+end
+
+-- 3b. Keys the game builds at run time from data ids (they never appear quoted in full).
+local MissionData = require("../src/shared/MissionData")
+local DYNAMIC: { string } = {}
+for _, def in MissionData.BASE.BUILDS do
+	table.insert(DYNAMIC, "build." .. def.id .. ".name")
+	table.insert(DYNAMIC, "build." .. def.id .. ".desc")
+	table.insert(DYNAMIC, "carl.base.built_" .. def.id)
+end
+for _, def in MissionData.BASE.TOOLS do
+	table.insert(DYNAMIC, "tool." .. def.id .. ".name")
+	table.insert(DYNAMIC, "panel.tool_use." .. def.id)
+end
+for _, toolId in { "drill", "brush", "repair_kit", "tablet" } do
+	table.insert(DYNAMIC, "carl.tool.need_" .. toolId)
+end
+for _, def in MissionData.BASE.SKILLS do
+	table.insert(DYNAMIC, "skill." .. def.id .. ".name")
+	table.insert(DYNAMIC, "skill." .. def.id .. ".desc")
+end
+for _, def in MissionData.BASE.PETS do
+	table.insert(DYNAMIC, "pet." .. def.id .. ".name")
+end
+for _, def in MissionData.BASE.VEHICLES do
+	table.insert(DYNAMIC, "ui.vehicle." .. def.id)
+end
+for _, siteId in { "old_lander", "impact_crater", "boulder_tracks", "prospector_crash", "sun_peak" } do
+	table.insert(DYNAMIC, "poi." .. siteId .. ".name")
+	table.insert(DYNAMIC, "poi." .. siteId .. ".fact")
+end
+for _, key in DYNAMIC do
+	check(inKeys[key] == true, "dynamic key is not localized: " .. key)
 end
 
 -- 4. API behaviour.

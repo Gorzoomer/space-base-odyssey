@@ -5,9 +5,11 @@
 --     from the life-support backpack. Upward speed = Humanoid.JumpPower * BASE.DOUBLE_JUMP_FRACTION.
 --     Once per air time. Real science: on the Moon there is no air to push on, so only gas thrust
 --     could do this.
---   * Faster drilling: with SBO_DrillLevel >= 1 (the "drill" skill) the ice drill prompts need a
---     shorter hold: original HoldDuration * BaseBuild.drillHoldFactor. The original value is kept
---     in the prompt attribute SBO_BaseHold so the factor never compounds.
+--   * Faster drilling (Stage 7): the player attribute SBO_DrillLevel is the level of the ice drill
+--     TOOL (set by the server's ToolService; upgraded at the Lab). The ice drill prompts need a
+--     shorter hold: original HoldDuration * BaseBuild.drillHoldFactor(data, level). The original
+--     value is kept in the prompt attribute SBO_BaseHold so the factor never compounds. Prompt hold
+--     times cannot be set per player on the server, so this local change is the only place it happens.
 -- The character gets the attribute SBO_DoubleJumpAt (server time) on every double jump, so other
 -- client scripts (C.A.R.L.) can react.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
@@ -164,14 +166,15 @@ local function startDoubleJump(player: Player)
 	end)
 end
 
--- Faster ice drilling ---------------------------------------------------------------------------
+-- Faster ice drilling (drill tool level) -------------------------------------------------------
 
-local function startDrillSkill(player: Player)
+local function startDrillTool(player: Player)
 	local drillPrompts: { [ProximityPrompt]: boolean } = setmetatable({}, { __mode = "k" }) :: any
 
 	local function factor(): number
-		local level = attributeLevel(player, DRILL_LEVEL_ATTRIBUTE)
-		return BaseBuild.drillHoldFactor(MissionData, { drill = level })
+		-- Level 0 (no drill yet) and 1 (basic drill) both use the normal hold time.
+		local level = math.max(1, attributeLevel(player, DRILL_LEVEL_ATTRIBUTE))
+		return BaseBuild.drillHoldFactor(MissionData, level)
 	end
 
 	local function apply(prompt: ProximityPrompt, value: number)
@@ -218,7 +221,7 @@ function Movement.start()
 	started = true
 	local player = Players.LocalPlayer
 	startDoubleJump(player)
-	startDrillSkill(player)
+	startDrillTool(player)
 end
 
 return table.freeze(Movement)

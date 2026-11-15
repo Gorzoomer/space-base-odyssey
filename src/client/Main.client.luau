@@ -2,10 +2,15 @@
 -- Space Base Odyssey - client entry point: builds the UI, listens to the server and shows the right screen.
 -- Stage 6 "base mode": in Briefing the mission select can be closed to roam the base, build and
 -- gather ice. It opens by itself for a new player (no mission completed yet) and after a report;
--- the Missions top button opens it again. The Base and Wardrobe panels open from the top bar.
+-- the Missions top button opens it again. The Wardrobe opens from the top bar.
+-- Stage 7: there is no Base menu any more (builds happen only at the pads in the world). The Lab panel
+-- (BasePanel.luau: skills, tool upgrades, pets) opens only when the player uses the Lab's prompt
+-- ("LabPrompt") and closes when they walk away. Exploration scans show an ExploreCard. The vehicle
+-- HUD (VehicleClient.luau) starts here too.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
+local ProximityPromptService = game:GetService("ProximityPromptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
@@ -43,8 +48,12 @@ local HUD_TICK_SECONDS = 0.1
 local PROGRESS_REMOTE: string = (Types.Remotes :: any).PROGRESS or "Progress"
 local COLLECTED_REMOTE: string = (Types.Remotes :: any).COLLECTED or "Collected"
 local BASE_STATE_REMOTE: string = (Types.Remotes :: any).BASE_STATE or "BaseState"
+local EXPLORE_REMOTE: string = (Types.Remotes :: any).EXPLORE or "Explore"
 local REMOTE_WAIT_SECONDS = 60 -- an older server never creates the Stage 6 remote
 local PROGRESS_WAIT_SECONDS = 5 -- first join: wait this long for saved progress, then decide
+-- Stage 7 Lab panel: opened by the prompt with this name, closed this far (studs) from it.
+local LAB_PROMPT_NAME = "LabPrompt"
+local LAB_CLOSE_DISTANCE = 30
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -53,8 +62,8 @@ Store.setLanguage(Localization.detect(player.LocaleId))
 
 local _gui, root = Ui.createRoot(playerGui)
 
--- Stage 6 panels (src/client/BasePanel.luau, src/client/Wardrobe.luau). Loaded with pcall: a broken
--- or missing panel hides its buttons but never breaks the rest of the client.
+-- Panels (src/client/BasePanel.luau = the Lab panel, src/client/Wardrobe.luau). Loaded with pcall: a
+-- broken or missing panel hides its buttons but never breaks the rest of the client.
 type PanelView = { open: () -> (), close: () -> (), isOpen: () -> boolean }
 
 local function loadPanel(name: string, deps: any): PanelView?
@@ -106,8 +115,27 @@ local sprint = Sprint.new(root)
 -- Settings button (top right) and panel: language, volumes, C.A.R.L. options, redeem code.
 local settings = Settings.new(root)
 
-local basePanel = loadPanel("BasePanel", { showMessage = messages.show })
+local basePanel = loadPanel("BasePanel", { showMessage = messages.show }) -- the Lab panel
 local wardrobe = loadPanel("Wardrobe", { showMessage = messages.show })
+
+-- Stage 7 exploration card (pcall: a broken card never breaks the client).
+type ExploreCardView = { show: (event: any) -> (), close: () -> (), isOpen: () -> boolean, render: () -> () }
+local exploreCard: ExploreCardView? = nil
+do
+	local ok, result = pcall(function(): any
+		local moduleScript = Client:WaitForChild("ExploreCard", 5)
+		if moduleScript == nil then
+			error("ExploreCard not found")
+		end
+		local module: any = require(moduleScript :: any)
+		return module.new(root)
+	end)
+	if ok and type(result) == "table" and type(result.show) == "function" then
+		exploreCard = result
+	else
+		warn(`[SpaceBaseOdyssey] ExploreCard unavailable: {result}`)
+	end
+end
 
 local function closePanels()
 	if basePanel then
@@ -135,13 +163,11 @@ local function togglePanel(panel: PanelView?, other: PanelView?)
 	panel.open()
 end
 
--- Top bar beside the Settings button: Missions (base mode), Wardrobe, Base.
+-- Top bar beside the Settings button: Missions (base mode) and Wardrobe.
+-- Team feedback (Stage 6 playtest): no Base button. Building from a menu let players upgrade
+-- everything while standing still; builds happen at the pads in the world, and the Lab panel opens
+-- only at the Lab.
 local topBar = Hud.newTopBar(root, {
-	openBase = if basePanel
-		then function()
-			togglePanel(basePanel, wardrobe)
-		end
-		else nil,
 	openWardrobe = if wardrobe
 		then function()
 			togglePanel(wardrobe, basePanel)
@@ -155,6 +181,40 @@ local topBar = Hud.newTopBar(root, {
 	end,
 })
 
+-- First person locks the mouse to the screen centre, so a player could not reach a panel's buttons
+-- (playtest: the "new secret" card). A visible GuiButton with Modal = true frees the mouse, so one
+-- invisible Modal button is shown whenever any full-screen panel is open.
+do
+	local MODAL_PANELS = {
+		"MissionSelect", "Report", "PowerBoard", "Settings", "Sources", "Collection", "FindCard",
+		"BasePanel", "Wardrobe", "ExploreCard",
+	}
+	local unlock = Instance.new("TextButton")
+	unlock.Name = "MouseUnlock"
+	unlock.Text = ""
+	unlock.BackgroundTransparency = 1
+	unlock.Size = UDim2.fromOffset(1, 1) -- a real (tiny) button: Modal needs a visible GuiButton
+	unlock.Modal = true
+	unlock.Visible = false
+	unlock.Selectable = false
+	unlock.Parent = root
+	local function anyOpen(): boolean
+		for _, name in MODAL_PANELS do
+			local panel = root:FindFirstChild(name)
+			if panel and panel:IsA("GuiObject") and panel.Visible then
+				return true
+			end
+		end
+		return false
+	end
+	RunService.Heartbeat:Connect(function()
+		local open = anyOpen()
+		if unlock.Visible ~= open then
+			unlock.Visible = open
+		end
+	end)
+end
+
 local shownPhase: string? = nil
 local boardShown: boolean? = nil
 
@@ -163,6 +223,7 @@ local boardShown: boolean? = nil
 local WALK_OBJECTIVES: { [string]: boolean } = {
 	go_outside = true,
 	return_inside = true,
+	build_habitat = true,
 	build_solar = true,
 	build_greenhouse = true,
 	build_antenna = true,
@@ -291,6 +352,9 @@ local function renderAll()
 	collection.render()
 	settings.render()
 	topBar.render()
+	if exploreCard then
+		exploreCard.render()
+	end
 	for _, panel in { basePanel, wardrobe } do
 		local render = (panel :: any).render
 		if type(render) == "function" then
@@ -307,9 +371,12 @@ Store.onChanged(function(kind: Store.ChangeKind)
 		return -- applyView already ran (setSelectOpen / showPhase)
 	end
 	if kind == "base" then
-		hud.renderWallet()
+		hud.renderBase()
 		topBar.render()
 		return
+	end
+	if kind == "explore" then
+		return -- the ExploreCard shows it (CarlDrone and Onboarding read the Store themselves)
 	end
 	if kind == "stats" then
 		hud.render()
@@ -379,6 +446,80 @@ Onboarding.start({
 })
 DemoKeys.start()
 Movement.start()
+-- Stage 7 drivable vehicles: chase camera, speed readout and exit hint (src/client/VehicleClient.luau).
+task.spawn(function()
+	local ok, result = pcall(function()
+		local moduleScript = Client:WaitForChild("VehicleClient", 10)
+		if moduleScript == nil then
+			error("VehicleClient not found")
+		end
+		local module: any = require(moduleScript :: any)
+		module.start(root)
+	end)
+	if not ok then
+		warn(`[SpaceBaseOdyssey] VehicleClient unavailable: {result}`)
+	end
+end)
+
+-- Stage 7 Lab panel: opens only when this player uses the Lab's prompt, closes when they walk away
+-- (the server also checks the distance for every Lab action).
+do
+	local labPart: BasePart? = nil
+
+	local function promptPart(prompt: ProximityPrompt): BasePart?
+		local parent = prompt.Parent
+		if parent and parent:IsA("Attachment") then
+			parent = parent.Parent
+		end
+		if parent and parent:IsA("BasePart") then
+			return parent
+		end
+		if parent and parent:IsA("Model") then
+			return parent.PrimaryPart or parent:FindFirstChildWhichIsA("BasePart")
+		end
+		return nil
+	end
+
+	ProximityPromptService.PromptTriggered:Connect(function(prompt: ProximityPrompt, who: Player)
+		local panel = basePanel
+		if who ~= player or prompt.Name ~= LAB_PROMPT_NAME or panel == nil then
+			return
+		end
+		if Store.phase() == "Report" then
+			return
+		end
+		labPart = promptPart(prompt)
+		if wardrobe then
+			wardrobe.close()
+		end
+		settings.close()
+		sources.close()
+		panel.open()
+	end)
+
+	local sinceCheck = 0
+	RunService.Heartbeat:Connect(function(deltaTime: number)
+		sinceCheck += deltaTime
+		if sinceCheck < 0.25 then
+			return
+		end
+		sinceCheck = 0
+		local panel = basePanel
+		if panel == nil or not panel.isOpen() then
+			return
+		end
+		local part = labPart
+		local character = player.Character
+		local rootPart = if character then character:FindFirstChild("HumanoidRootPart") else nil
+		if part == nil or part.Parent == nil then
+			panel.close() -- the Lab is gone (base reset)
+			return
+		end
+		if rootPart and rootPart:IsA("BasePart") and (rootPart.Position - part.Position).Magnitude > LAB_CLOSE_DISTANCE then
+			panel.close()
+		end
+	end)
+end
 task.delay(PROGRESS_WAIT_SECONDS, function()
 	progressWaitOver = true
 	decideOnJoin()
@@ -443,6 +584,26 @@ task.spawn(function()
 	baseRemote.OnClientEvent:Connect(function(state: any)
 		if type(state) == "table" and type(state.credits) == "number" then
 			Store.setBase(state)
+		end
+	end)
+end)
+task.spawn(function()
+	local exploreRemote = remotes:WaitForChild(EXPLORE_REMOTE, REMOTE_WAIT_SECONDS)
+	if exploreRemote == nil or not exploreRemote:IsA("RemoteEvent") then
+		return -- older server: no exploration scans
+	end
+	exploreRemote.OnClientEvent:Connect(function(payload: any)
+		if type(payload) ~= "table" or (payload.kind ~= "poi" and payload.kind ~= "meteor") then
+			return
+		end
+		local event: Types.ExploreEvent = {
+			kind = payload.kind,
+			id = if type(payload.id) == "string" then payload.id else "",
+			isNew = payload.isNew == true,
+		}
+		Store.setExplore(event)
+		if exploreCard then
+			exploreCard.show(event)
 		end
 	end)
 end)

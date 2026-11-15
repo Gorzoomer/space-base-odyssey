@@ -178,6 +178,28 @@ export type BaseState = {
 	siloIce: number, -- ice waiting in the silo (shared by the server)
 	siloMax: number,
 	icePerMinute: number, -- from every automatic drill standing
+	-- Stage 7: builds being built in steps (shared by the server): build id -> the level being built,
+	-- steps done, steps needed, and whether the current step's parts crate is already at the pad.
+	inProgress: { [string]: BuildProgress },
+	carryingCrate: boolean, -- this player carries a parts crate from the lander
+	tools: { [string]: number }, -- tools this player can carry -> tool level (1 = basic)
+	foodReadyAt: number?, -- workspace:GetServerTimeNow() when the greenhouse has fresh food for this player
+	scanned: { [string]: boolean }, -- exploration sites this player has scanned
+}
+
+export type BuildProgress = {
+	level: number, -- the level being built (current level + 1)
+	stage: number, -- steps finished (0..stages)
+	stages: number,
+	crate: boolean, -- the parts for the next step are at the pad (only "Assemble" is left)
+}
+
+-- Stage 7: sent to one player when they scan an exploration site or a meteorite crater (card UI).
+-- Text keys: "poi.<id>.name" / "poi.<id>.fact" for sites, "meteor.name" / "meteor.fact" for craters.
+export type ExploreEvent = {
+	kind: "poi" | "meteor",
+	id: string, -- site id ("" for a meteorite)
+	isNew: boolean, -- first time for this player (reward given)
 }
 
 -- Client -> server requests.
@@ -197,6 +219,8 @@ export type Action =
 	| { type: "Equip", slot: "helmet" | "backpack" | "carl" | "pet", value: string }
 	| { type: "BuyPet", id: string }
 	| { type: "ClaimSilo" } -- also from the silo prompt
+	| { type: "UpgradeTool", id: string } -- Stage 7, at the Lab (credits)
+	| { type: "DebugMeteor" } -- Stage 7, Studio / place owner only: a meteorite lands now
 	| { type: "DebugGrantCredits", amount: number } -- Studio / place owner only; also grants XP = amount
 	| { type: "DebugResetBase" } -- Studio / place owner only: this player's builds, skills, credits, XP back to the start
 	-- Owner-only, Studio or the place owner: deterministic testing and video recording.
@@ -218,6 +242,7 @@ local Remotes = table.freeze({
 	PROGRESS = "Progress", -- server -> one client: Progress (on join and on change)
 	COLLECTED = "Collected", -- server -> one client: Collected (right after a pickup)
 	BASE_STATE = "BaseState", -- server -> one client: BaseState (Stage 6)
+	EXPLORE = "Explore", -- server -> one client: ExploreEvent (Stage 7)
 })
 
 return table.freeze({

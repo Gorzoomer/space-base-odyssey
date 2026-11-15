@@ -129,26 +129,43 @@ MissionData.STORM = table.freeze({
 	FLARE_AT_SECONDS = 40, -- seconds into the shift when the flare is spotted
 })
 
--- Build and grow the base (GAME, Stage 6). A new player starts with only the habitat and its water
--- tank and builds everything else with credits. Credits come from useful work (ice, repairs, days
--- finished, data sent); experience (XP) raises the player level, which unlocks bigger builds and
--- gives skill points. Pure numbers; the rules that use them live in BaseBuild.luau.
--- Build ids: "solar" (level = solar arrays standing, 1 to POWER.ARRAYS), "greenhouse", "antenna"
--- (2 = bigger dish, 3 = laser link), "shelter", "drill_1".."drill_3" (automatic ice drills; each
--- needs one more solar array: machines need electricity), "cargo_bot" (carries silo ice for you).
+-- Build and grow the base (GAME, Stages 6-7). A new player lands in the arrival lander (the spawn)
+-- and builds the whole base: the habitat first, then everything else. Credits come from useful work
+-- (ice, repairs, days finished, data sent, exploring); experience (XP) raises the player level, which
+-- unlocks bigger builds and gives skill points. Pure numbers; the rules live in BaseBuild.luau.
+-- Build ids: "habitat" (the main module; the lander is the only shelter until it stands), "solar"
+-- (level = solar arrays standing, 1 to POWER.ARRAYS), "greenhouse" (2 = second dome), "lab" (skills,
+-- tool upgrades, pets), "antenna" (2 = bigger dish, 3 = laser link), "shelter", "drill_1".."drill_3"
+-- (automatic ice drills; each needs one more solar array: machines need electricity), "cargo_bot"
+-- (carries silo ice for you), "garage" (1 = moon buggy bay, 2 = ice hauler bay), "landing_pad",
+-- "ship" (a ship for the future trip to Mars: decoration and the long-term goal).
 -- costs[i] / minLevel[i] = credits and player level for level i of that build.
+-- Building happens in STEPS (Stage 7, team feedback: not all at once). Paying starts the level; each
+-- step needs one parts crate carried from the lander cargo bay to the build pad, then the player
+-- holds "Assemble" with the wrench tool in hand. The structure rises a bit with every step.
 MissionData.BASE = table.freeze({
 	START_CREDITS = 25,
 	BUILDS = table.freeze({
-		table.freeze({ id = "solar", icon = "solar", maxLevel = 3, costs = table.freeze({ 0, 30, 60 }), minLevel = table.freeze({ 1, 2, 3 }), requires = table.freeze({}) }),
-		table.freeze({ id = "greenhouse", icon = "plant", maxLevel = 1, costs = table.freeze({ 15 }), minLevel = table.freeze({ 1 }), requires = table.freeze({ solar = 1 }) }),
+		table.freeze({ id = "habitat", icon = "home", maxLevel = 1, costs = table.freeze({ 0 }), minLevel = table.freeze({ 1 }), requires = table.freeze({}) }),
+		table.freeze({ id = "solar", icon = "solar", maxLevel = 3, costs = table.freeze({ 0, 30, 60 }), minLevel = table.freeze({ 1, 2, 3 }), requires = table.freeze({ habitat = 1 }) }),
+		table.freeze({ id = "greenhouse", icon = "plant", maxLevel = 2, costs = table.freeze({ 15, 120 }), minLevel = table.freeze({ 1, 4 }), requires = table.freeze({ solar = 1 }) }),
+		table.freeze({ id = "lab", icon = "flask", maxLevel = 1, costs = table.freeze({ 40 }), minLevel = table.freeze({ 2 }), requires = table.freeze({ habitat = 1, solar = 1 }) }),
 		table.freeze({ id = "antenna", icon = "antenna", maxLevel = 3, costs = table.freeze({ 20, 90, 200 }), minLevel = table.freeze({ 1, 4, 6 }), requires = table.freeze({ solar = 1 }) }),
 		table.freeze({ id = "shelter", icon = "shield", maxLevel = 1, costs = table.freeze({ 40 }), minLevel = table.freeze({ 1 }), requires = table.freeze({ antenna = 1 }) }),
 		table.freeze({ id = "drill_1", icon = "drill", maxLevel = 3, costs = table.freeze({ 60, 120, 240 }), minLevel = table.freeze({ 2, 3, 5 }), requires = table.freeze({ shelter = 1, solar = 1 }) }),
 		table.freeze({ id = "drill_2", icon = "drill", maxLevel = 3, costs = table.freeze({ 150, 250, 400 }), minLevel = table.freeze({ 4, 5, 7 }), requires = table.freeze({ drill_1 = 1, solar = 2 }) }),
 		table.freeze({ id = "drill_3", icon = "drill", maxLevel = 3, costs = table.freeze({ 300, 450, 650 }), minLevel = table.freeze({ 6, 7, 9 }), requires = table.freeze({ drill_2 = 1, solar = 3 }) }),
 		table.freeze({ id = "cargo_bot", icon = "robot", maxLevel = 1, costs = table.freeze({ 250 }), minLevel = table.freeze({ 5 }), requires = table.freeze({ drill_1 = 1 }) }),
+		table.freeze({ id = "garage", icon = "car", maxLevel = 2, costs = table.freeze({ 120, 220 }), minLevel = table.freeze({ 3, 5 }), requires = table.freeze({ lab = 1, shelter = 1 }) }),
+		table.freeze({ id = "landing_pad", icon = "flag", maxLevel = 1, costs = table.freeze({ 300 }), minLevel = table.freeze({ 6 }), requires = table.freeze({ garage = 1 }) }),
+		table.freeze({ id = "ship", icon = "rocket", maxLevel = 1, costs = table.freeze({ 800 }), minLevel = table.freeze({ 8 }), requires = table.freeze({ landing_pad = 1 }) }),
 	}),
+	-- Steps per build level: STAGES_FIRST for a new structure, STAGES_UPGRADE for an upgrade, unless
+	-- STAGES_BY_ID says otherwise (the habitat and first panels are quick; the ship is a big project).
+	STAGES_FIRST = 3,
+	STAGES_UPGRADE = 2,
+	STAGES_BY_ID = table.freeze({ habitat = 2, solar = 2, ship = 6 }),
+	ASSEMBLE_HOLD_SECONDS = 2.5,
 	-- Rewards: credits and XP for each kind of work (counted for the player who did it).
 	REWARDS = table.freeze({
 		ice_delivered = table.freeze({ credits = 5, xp = 8 }),
@@ -160,8 +177,13 @@ MissionData.BASE = table.freeze({
 		mission_first = table.freeze({ credits = 20, xp = 30 }), -- first time a mission is completed
 		mission_repeat = table.freeze({ credits = 5, xp = 10 }),
 		collectible = table.freeze({ credits = 10, xp = 20 }), -- first time only
+		crate_delivered = table.freeze({ credits = 0, xp = 2 }),
+		stage_done = table.freeze({ credits = 0, xp = 5 }),
+		food_eaten = table.freeze({ credits = 0, xp = 3 }),
+		poi_scanned = table.freeze({ credits = 10, xp = 20 }), -- first scan of each exploration site
+		meteor_scanned = table.freeze({ credits = 15, xp = 25 }),
 	}),
-	BUILD_XP_BASE = 10, -- XP for any build or upgrade ...
+	BUILD_XP_BASE = 10, -- XP for finishing any build level ...
 	BUILD_XP_PER_CREDIT = 0.25, -- ... plus a quarter of its cost (rounded down)
 	-- Automatic drills fill the ice silo while at least one player is in the server.
 	DRILL_ICE_PER_MINUTE = table.freeze({ 2, 4, 7 }), -- per drill, by drill level
@@ -170,21 +192,44 @@ MissionData.BASE = table.freeze({
 	XP_PER_SILO_ICE = 1,
 	CARGO_BOT_SECONDS = 30, -- the cargo robot empties the silo for its owner this often
 	-- Player level i needs LEVEL_XP[i] total XP. Each level above 1 gives one skill point.
-	LEVEL_XP = table.freeze({ 0, 40, 100, 180, 280, 400, 550, 730, 940, 1200 }),
-	-- Skills: each level costs one skill point and needs the player level in minLevel.
+	LEVEL_XP = table.freeze({ 0, 40, 100, 180, 280, 400, 550, 730, 940, 1200, 1500, 1850, 2250, 2700, 3200 }),
+	-- Skills (learned at the Lab): each level costs one skill point and needs the player level in minLevel.
 	SKILLS = table.freeze({
 		table.freeze({ id = "speed", icon = "run", maxLevel = 3, minLevel = table.freeze({ 2, 4, 6 }) }),
 		table.freeze({ id = "tank", icon = "lungs", maxLevel = 3, minLevel = table.freeze({ 2, 4, 6 }) }),
 		table.freeze({ id = "jump", icon = "rocket", maxLevel = 3, minLevel = table.freeze({ 3, 5, 7 }) }),
-		table.freeze({ id = "drill", icon = "drill", maxLevel = 3, minLevel = table.freeze({ 2, 4, 6 }) }),
 	}),
 	SPEED_BONUS_PER_LEVEL = 1.5, -- studs/s added to walking and running (and the running threshold)
 	TANK_BONUS_PER_LEVEL = 25, -- suit air added to SUIT.MAX
 	JUMP_POWER_BONUS = table.freeze({ 0, 4, 8 }), -- by jump level; level 1 already gives a double jump
 	DOUBLE_JUMP_FRACTION = 0.8, -- the second jump (a backpack gas puff) is 80% of a normal jump
-	DRILL_HOLD_FACTOR = table.freeze({ 0.8, 0.6, 0.45 }), -- ice drilling hold time, by drill level
+	-- Tools the player carries (Roblox Tools in the backpack bar). A task needs its tool IN HAND:
+	-- no drill, no ice (team feedback). unlock = build id that must stand (nil = from the start).
+	-- wrench: assemble build steps; drill: crater ice; brush: dusty panels; repair_kit: leaks;
+	-- tablet: align the antenna, scan exploration sites and meteorite craters; food: from the greenhouse.
+	TOOLS = table.freeze({
+		table.freeze({ id = "wrench", icon = "failure" }),
+		table.freeze({ id = "drill", icon = "drill" }),
+		table.freeze({ id = "brush", icon = "brush", unlock = "solar" }),
+		table.freeze({ id = "repair_kit", icon = "repair", unlock = "habitat" }),
+		table.freeze({ id = "tablet", icon = "tablet", unlock = "antenna" }),
+		table.freeze({ id = "food", icon = "food", unlock = "greenhouse", consumable = true }),
+	}),
+	-- Tool upgrades bought at the Lab with credits (level 1 comes with the tool).
+	TOOL_UPGRADES = table.freeze({
+		drill = table.freeze({ maxLevel = 3, costs = table.freeze({ 0, 80, 160 }), minLevel = table.freeze({ 1, 3, 5 }), holdFactor = table.freeze({ 1, 0.7, 0.5 }) }),
+	}),
+	-- Fresh food from the greenhouse: pick one every COOLDOWN_SECONDS, eat it for a short speed boost.
+	FOOD = table.freeze({ COOLDOWN_SECONDS = 90, BOOST_SECONDS = 20, BOOST_SPEED = 4 }),
+	-- Meteorite impacts (random event): a flash, a fresh small crater to scan with the tablet.
+	METEOR = table.freeze({ MIN_SECONDS = 240, MAX_SECONDS = 420, LIFETIME_SECONDS = 300, RING_MIN = 120, RING_MAX = 420 }),
+	-- Vehicles from the garage. cargo = ice cores the hauler carries.
+	VEHICLES = table.freeze({
+		table.freeze({ id = "buggy", garage = 1, maxSpeed = 45 }),
+		table.freeze({ id = "hauler", garage = 2, maxSpeed = 32, cargo = 4 }),
+	}),
 	-- Pets that follow the player (cosmetic only). laika and cheese come from the hidden collectibles;
-	-- rabbit and monkey are bought with credits once the player level is high enough.
+	-- rabbit and monkey (a space chimp) are adopted at the Lab with credits once the level is high enough.
 	PETS = table.freeze({
 		table.freeze({ id = "laika", collectible = "laika" }),
 		table.freeze({ id = "cheese", collectible = "cheese" }),
