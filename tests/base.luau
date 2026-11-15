@@ -1,10 +1,10 @@
 --!strict
--- Space Base Odyssey - build-and-grow rules tests (Stages 6 to 8). Run with: lune run tests/base
+-- Space Base Odyssey - build-and-grow rules tests (Stages 6 to 9). Run with: lune run tests/base
 -- Checks MissionData.BASE is well formed and that src/shared/BaseBuild.luau follows it:
 --   A. data: build / skill / pet ids unique, levels match their lists, requirements point to real
 --      builds and never to themselves, icons exist, rewards give something; the habitat comes first;
 --   B. player level from XP (15 levels), skill points;
---   C. build costs, requirements, level gates and the "max" stop;
+--   C. build costs, requirements, habitat gates (Stage 9) and the "max" stop;
 --   D. effective builds take the highest level of every present player;
 --   E. skills: points, level gates, effects (speed, suit, credits, xp, builder); the drill is a tool
 --      and the jump skill is the air boots now;
@@ -15,7 +15,9 @@
 --   J. tools: unlocks, the drill tool upgrade (hold time, costs, gates);
 --   K. food, meteorites and vehicles data;
 --   L. gear (Stage 8): air boots and jetpack, buying, gas use, the gas tank; bonuses are whole numbers;
---   M. save migration (Stage 8): the old jump skill becomes air boots, its points come back.
+--   M. save migration (Stage 8): the old jump skill becomes air boots, its points come back;
+--   N. the habitat tree (Stage 9): every structure level opens at one habitat level, per-level effects;
+--   O. quests (Stage 9): step types, mission ids, builds reachable in order with the habitat tree.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local BaseBuild = require("../src/shared/BaseBuild")
@@ -74,6 +76,7 @@ local EXPECTED_BUILDS = {
 	"ship",
 }
 local EXPECTED_SKILLS = { "speed", "tank", "credits", "xp", "builder" }
+local HABITAT_MAX = 5 -- Stage 9: the habitat (base level) goes from 1 to 5
 local EXPECTED_GEAR = { "boots", "jetpack" }
 local EXPECTED_TOOLS = { "wrench", "drill", "brush", "repair_kit", "tablet", "food" }
 
@@ -84,13 +87,20 @@ do
 		seen[def.id] = true
 		check(isWhole(def.maxLevel, 1), `A: {def.id} maxLevel is a whole number >= 1`)
 		check(#def.costs == def.maxLevel, `A: {def.id} has one cost per level`)
-		check(#def.minLevel == def.maxLevel, `A: {def.id} has one player level per level`)
+		-- Stage 9: structures are gated by the habitat level (hab), not by the player level.
+		check(type(def.hab) == "table" and #def.hab == def.maxLevel, `A: {def.id} has one habitat level per level`)
+		check((def :: any).minLevel == nil, `A: {def.id} has no player-level gate any more (hab replaces minLevel)`)
 		for i = 1, def.maxLevel do
 			check(isWhole(def.costs[i], 0), `A: {def.id} cost {i} is a whole number`)
-			check(isWhole(def.minLevel[i], 1) and def.minLevel[i] <= #BASE.LEVEL_XP, `A: {def.id} minLevel {i} is a real player level`)
+			local hab = def.hab and def.hab[i]
+			if def.id == "habitat" then
+				check(hab == i - 1, `A: habitat level {i} needs habitat level {i - 1}`)
+			else
+				check(isWhole(hab, 1) and hab <= HABITAT_MAX, `A: {def.id} level {i} needs a real habitat level ({hab})`)
+			end
 			if i > 1 then
 				check(def.costs[i] > def.costs[i - 1], `A: {def.id} level {i} costs more than level {i - 1}`)
-				check(def.minLevel[i] >= def.minLevel[i - 1], `A: {def.id} level {i} needs at least the level of {i - 1}`)
+				check(def.hab[i] >= def.hab[i - 1], `A: {def.id} level {i} needs at least the habitat of level {i - 1}`)
 			end
 		end
 		for needId, needLevel in def.requires do
@@ -155,7 +165,7 @@ do
 	-- through what it needs), because the game starts in the lander.
 	local habitat = BaseBuild.buildDef(MissionData, "habitat")
 	check(habitat ~= nil and habitat.costs[1] == 0 and next(habitat.requires) == nil, "A: habitat is free and needs nothing")
-	check(habitat ~= nil and habitat.minLevel[1] == 1, "A: habitat at player level 1")
+	check(habitat ~= nil and habitat.maxLevel == HABITAT_MAX, `A: the habitat (base level) goes up to {HABITAT_MAX}`)
 	check(BASE.BUILDS[1].id == "habitat", "A: habitat is listed first")
 	local function needsHabitat(id: string, depth: number): boolean
 		local def = BaseBuild.buildDef(MissionData, id)
@@ -219,24 +229,28 @@ do
 	check(ok and reason == nil, "C: the first solar array is free at level 1")
 	check(BaseBuild.nextCost(MissionData, home, "solar") == 0, "C: first solar costs 0")
 	ok, reason = BaseBuild.canBuild(MissionData, home, 1, 10 ^ 6, "habitat")
-	check(not ok and reason == "max", "C: only one habitat")
+	check(ok, "C: the habitat can grow to level 2 (the base level)")
 
 	ok, reason = BaseBuild.canBuild(MissionData, home, 10, 10 ^ 6, "greenhouse")
 	check(not ok and reason == "requires", "C: greenhouse needs solar first")
 
-	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1 }, 1, 0, "greenhouse")
+	local camp: BaseBuild.Levels = { habitat = 1, solar = 1 }
+	local greenhouseCost = BaseBuild.nextCost(MissionData, camp, "greenhouse") :: number
+	ok, reason = BaseBuild.canBuild(MissionData, camp, 1, 0, "greenhouse")
 	check(not ok and reason == "credits", "C: greenhouse without credits says credits")
-	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1 }, 1, 15, "greenhouse")
-	check(ok, "C: greenhouse with 15 credits and solar 1")
-	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1, greenhouse = 1 }, 3, 10 ^ 6, "greenhouse")
-	check(not ok and reason == "level", "C: a bigger greenhouse needs level 4")
+	ok, reason = BaseBuild.canBuild(MissionData, camp, 1, greenhouseCost, "greenhouse")
+	check(ok, `C: greenhouse with {greenhouseCost} credits and solar 1`)
+	-- Stage 9: the habitat is the town hall. The player level never gates a structure any more.
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1, greenhouse = 1 }, 15, 10 ^ 6, "greenhouse")
+	check(not ok and reason == "habitat", "C: a bigger greenhouse needs habitat 2 (reason habitat)")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 2, solar = 1, greenhouse = 1 }, 1, 10 ^ 6, "greenhouse")
+	check(ok, "C: greenhouse 2 at habitat 2, even at player level 1")
 
-	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1 }, 1, 10 ^ 6, "solar")
-	check(not ok and reason == "level", "C: a second solar array needs player level 2")
-	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1 }, 2, 30, "solar")
-	check(ok, "C: second solar array at level 2 with 30 credits")
-	check(BaseBuild.nextCost(MissionData, { solar = 2 }, "solar") == 60, "C: third solar array costs 60")
-
+	-- Habitat 1 (landing camp): all three solar arrays, the greenhouse, the antenna and the shelter.
+	ok, reason = BaseBuild.canBuild(MissionData, camp, 1, 10 ^ 6, "solar")
+	check(ok, "C: a second solar array at habitat 1")
+	local solarDef = BaseBuild.buildDef(MissionData, "solar") :: BaseBuild.BuildDef
+	check(BaseBuild.nextCost(MissionData, { solar = 2 }, "solar") == solarDef.costs[3], "C: third solar array cost")
 	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 3 }, 10, 10 ^ 6, "solar")
 	check(not ok and reason == "max", "C: no fourth solar array")
 	check(BaseBuild.nextCost(MissionData, { solar = 3 }, "solar") == nil, "C: maxed build has no cost")
@@ -245,37 +259,59 @@ do
 	check(not ok and reason == "unknown", "C: unknown build id")
 	check(BaseBuild.nextCost(MissionData, {}, "rocket_pad") == nil, "C: unknown build has no cost")
 
-	-- Requirements check the EFFECTIVE builds: drill_1 needs the shelter and power.
-	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1, antenna = 1 }, 10, 10 ^ 6, "drill_1")
+	-- Requirements check the EFFECTIVE builds: drill_1 needs the shelter and power, then habitat 2.
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 2, solar = 1, antenna = 1 }, 10, 10 ^ 6, "drill_1")
 	check(not ok and reason == "requires", "C: drill_1 needs the shelter")
 	local sheltered: BaseBuild.Levels = { habitat = 1, solar = 1, antenna = 1, shelter = 1 }
-	ok, reason = BaseBuild.canBuild(MissionData, sheltered, 2, 60, "drill_1")
-	check(ok, "C: drill_1 at level 2 with 60 credits")
-	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1, antenna = 1, shelter = 1, drill_1 = 1 }, 10, 10 ^ 6, "drill_2")
+	ok, reason = BaseBuild.canBuild(MissionData, sheltered, 15, 10 ^ 6, "drill_1")
+	check(not ok and reason == "habitat", "C: drill_1 needs habitat 2")
+	sheltered.habitat = 2
+	local drillCost = BaseBuild.nextCost(MissionData, sheltered, "drill_1") :: number
+	ok, reason = BaseBuild.canBuild(MissionData, sheltered, 1, drillCost, "drill_1")
+	check(ok, `C: drill_1 at habitat 2 with {drillCost} credits`)
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 5, solar = 1, antenna = 1, shelter = 1, drill_1 = 1 }, 10, 10 ^ 6, "drill_2")
 	check(not ok and reason == "requires", "C: drill_2 needs a second solar array")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 2, solar = 2, antenna = 1, shelter = 1, drill_1 = 1 }, 10, 10 ^ 6, "drill_2")
+	check(not ok and reason == "habitat", "C: drill_2 needs habitat 3")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 2, solar = 1, antenna = 1, shelter = 1, drill_1 = 1 }, 10, 10 ^ 6, "drill_1")
+	check(not ok and reason == "habitat", "C: drill_1 level 2 needs habitat 3")
 
 	-- The Lab, the garage (two bays), the landing pad and the ship.
-	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1 }, 1, 10 ^ 6, "lab")
-	check(not ok and reason == "level", "C: the Lab needs level 2")
-	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1 }, 2, 40, "lab")
-	check(ok, "C: the Lab at level 2 with 40 credits")
-	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1, lab = 1 }, 10, 10 ^ 6, "garage")
+	ok, reason = BaseBuild.canBuild(MissionData, camp, 15, 10 ^ 6, "lab")
+	check(not ok and reason == "habitat", "C: the Lab needs habitat 2")
+	local labCost = BaseBuild.nextCost(MissionData, camp, "lab") :: number
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 2, solar = 1 }, 1, labCost, "lab")
+	check(ok, `C: the Lab at habitat 2 with {labCost} credits`)
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 5, solar = 1, lab = 1 }, 10, 10 ^ 6, "garage")
 	check(not ok and reason == "requires", "C: the garage needs the shelter too")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 2, solar = 1, lab = 1, antenna = 1, shelter = 1 }, 15, 10 ^ 6, "garage")
+	check(not ok and reason == "habitat", "C: the garage needs habitat 3")
 	ok, reason = BaseBuild.canBuild(MissionData, {}, 15, 10 ^ 9, "ship")
 	check(not ok and reason == "requires", "C: the ship needs the landing pad")
-	local padReady: BaseBuild.Levels = { habitat = 1, solar = 1, lab = 1, antenna = 1, shelter = 1, garage = 1, landing_pad = 1 }
-	ok, reason = BaseBuild.canBuild(MissionData, padReady, 7, 10 ^ 9, "ship")
-	check(not ok and reason == "level", "C: the ship is a late goal (level 8)")
-	ok, reason = BaseBuild.canBuild(MissionData, padReady, 8, 10 ^ 9, "ship")
-	check(ok, "C: the ship at level 8")
+	local padReady: BaseBuild.Levels = { habitat = 4, solar = 1, lab = 1, antenna = 2, shelter = 1, garage = 1, landing_pad = 1 }
+	ok, reason = BaseBuild.canBuild(MissionData, padReady, 15, 10 ^ 9, "ship")
+	check(not ok and reason == "habitat", "C: the ship needs habitat 5 (the last base level)")
+	padReady.habitat = 5
+	ok, reason = BaseBuild.canBuild(MissionData, padReady, 1, 10 ^ 9, "ship")
+	check(ok, "C: the ship at habitat 5")
 
-	-- Requirement checks come before level and credit checks (the lock shows what to build first).
+	-- Habitat upgrades: one at a time, each costs more, the player level does not matter.
+	for level = 2, HABITAT_MAX do
+		ok, reason = BaseBuild.canBuild(MissionData, { habitat = level - 1 }, 1, 10 ^ 9, "habitat")
+		check(ok, `C: habitat {level - 1} can grow to {level}`)
+	end
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = HABITAT_MAX }, 15, 10 ^ 9, "habitat")
+	check(not ok and reason == "max", `C: the habitat stops at {HABITAT_MAX}`)
+
+	-- Requirement checks come before habitat and credit checks (the lock shows what to build first).
 	ok, reason = BaseBuild.canBuild(MissionData, {}, 1, 0, "cargo_bot")
 	check(not ok and reason == "requires", "C: cargo_bot locked by requirements first")
+	ok, reason = BaseBuild.canBuild(MissionData, { habitat = 1, solar = 1 }, 1, 0, "lab")
+	check(not ok and reason == "habitat", "C: the habitat check comes before credits")
 
 	check(BaseBuild.buildXp(MissionData, 0) == BASE.BUILD_XP_BASE, "C: free build gives the base XP")
 	check(BaseBuild.buildXp(MissionData, 60) == BASE.BUILD_XP_BASE + math.floor(60 * BASE.BUILD_XP_PER_CREDIT), "C: XP grows with cost")
-	check(BaseBuild.buildXp(MissionData, 15) == BASE.BUILD_XP_BASE + 3, "C: XP rounds down")
+	check(BaseBuild.buildXp(MissionData, 15) == BASE.BUILD_XP_BASE + math.floor(15 * BASE.BUILD_XP_PER_CREDIT), "C: XP rounds down")
 
 	-- Every build at every level is reachable at the top player level with enough credits.
 	local all: BaseBuild.Levels = {}
@@ -478,7 +514,8 @@ end
 
 do
 	-- Plan: build the habitat and solar (free), deliver ice by hand, build greenhouse, antenna,
-	-- shelter, the first drill. Every step of a build gives its crate and assembly XP.
+	-- shelter, grow the habitat to level 2 (Stage 9), the first drill. Every step of a build gives
+	-- its crate and assembly XP.
 	local function stepXp(id: string, level: number): number
 		local stages = BaseBuild.stagesFor(MissionData, id, level)
 		return stages * (BASE.REWARDS.crate_delivered.xp + BASE.REWARDS.stage_done.xp)
@@ -487,7 +524,7 @@ do
 	local xp = 0
 	local builds: BaseBuild.Levels = {}
 	local deliveries = 0
-	local order = { "habitat", "solar", "greenhouse", "antenna", "shelter", "drill_1" }
+	local order = { "habitat", "solar", "greenhouse", "antenna", "shelter", "habitat", "drill_1" }
 	for _, id in order do
 		local guard = 0
 		while true do
@@ -784,6 +821,332 @@ do
 			check(BaseBuild.gasUse(MissionData, "boots", migrated) ~= nil, `M: migrated boots level {migrated} works`)
 		end
 	end
+end
+
+----------------------------------------------------------------------------------------------------
+-- N. The habitat tree (Stage 9): the habitat is the town hall, every structure level opens at one
+-- habitat level, and the per-level effects are well formed.
+
+do
+	-- Every structure level opens at exactly one habitat level; print the tree.
+	local opened: { [string]: boolean } = {}
+	print("habitat tree (structure levels that open at each base level):")
+	for hab = 1, HABITAT_MAX do
+		local names = {}
+		for _, entry in BaseBuild.unlocksAt(MissionData, hab) do
+			local key = `{entry.id}:{entry.level}`
+			check(not opened[key], `N: {key} opens only once`)
+			opened[key] = true
+			table.insert(names, `{entry.id} {entry.level}`)
+		end
+		print(`  habitat {hab}: {table.concat(names, ", ")}`)
+		if hab > 1 then
+			check(#names >= 2, `N: habitat {hab} opens something new (at least 2 levels)`)
+		end
+	end
+	for _, def in BASE.BUILDS do
+		if def.id ~= "habitat" then
+			for level = 1, def.maxLevel do
+				check(opened[`{def.id}:{level}`] == true, `N: {def.id} level {level} opens at some habitat level`)
+			end
+			-- A structure never opens before what it requires can open.
+			for needId, needLevel in def.requires do
+				local needHab = BaseBuild.habitatNeeded(MissionData, needId, needLevel) or 0
+				check(needHab <= def.hab[1], `N: {def.id} opens no sooner than its requirement {needId} {needLevel}`)
+			end
+		end
+	end
+	-- Habitat 1 (landing camp) has what the training missions build and one mission day needs.
+	for _, id in { "solar", "greenhouse", "antenna", "shelter" } do
+		check(BaseBuild.habitatNeeded(MissionData, id, 1) == 1, `N: {id} opens at habitat 1`)
+	end
+	check(BaseBuild.maxLevelAt(MissionData, "solar", 1) == MissionData.POWER.ARRAYS, "N: every solar array at habitat 1 (the story needs them)")
+	check(BaseBuild.habitatNeeded(MissionData, "lab", 1) == 2, "N: the Lab opens at habitat 2")
+	check(BaseBuild.habitatNeeded(MissionData, "greenhouse", 2) == 2, "N: greenhouse 2 opens at habitat 2")
+	check(BaseBuild.habitatNeeded(MissionData, "ship", 1) == HABITAT_MAX, "N: the ship needs the top habitat level")
+	check(BaseBuild.habitatNeeded(MissionData, "habitat", 3) == 2, "N: habitat 3 needs habitat 2")
+	check(BaseBuild.habitatNeeded(MissionData, "lab", 2) == nil, "N: no habitat level for a level that does not exist")
+	check(BaseBuild.habitatNeeded(MissionData, "rocket_pad", 1) == nil, "N: no habitat level for an unknown build")
+	check(BaseBuild.habitatLevel({}) == 0 and BaseBuild.habitatLevel({ habitat = 3 }) == 3, "N: habitatLevel reads the habitat")
+	check(BaseBuild.maxLevelAt(MissionData, "drill_1", 1) == 0, "N: no drill at habitat 1")
+	check(BaseBuild.maxLevelAt(MissionData, "drill_1", HABITAT_MAX) == 3, "N: every drill level by the top habitat")
+	check(BaseBuild.maxLevelAt(MissionData, "rocket_pad", 5) == 0, "N: unknown build has no level")
+	-- Old saves: the habitat they need for what they already built (save migration helper).
+	check(BaseBuild.habitatForBuilds(MissionData, {}) == 0, "N: nothing built needs no habitat")
+	check(BaseBuild.habitatForBuilds(MissionData, { habitat = 1, solar = 3, shelter = 1 }) == 1, "N: a landing camp needs habitat 1")
+	check(BaseBuild.habitatForBuilds(MissionData, { habitat = 1, lab = 1, garage = 2 }) == 4, "N: an old save with the hauler bay needs habitat 4")
+	check(BaseBuild.habitatForBuilds(MissionData, { habitat = 1, ship = 1 }) == HABITAT_MAX, "N: an old save with the ship needs the top habitat")
+	check(BaseBuild.habitatForBuilds(MissionData, { habitat = 3, solar = 1 }) == 3, "N: a higher habitat is kept")
+	-- A habitat upgrade is a big project; the first habitat is quick.
+	check(BaseBuild.stagesFor(MissionData, "habitat", 1) == BASE.STAGES_BY_ID.habitat, "N: the first habitat uses STAGES_BY_ID")
+	for level = 2, HABITAT_MAX do
+		check(BaseBuild.stagesFor(MissionData, "habitat", level) == BASE.STAGES_UPGRADE_BY_ID.habitat, `N: habitat {level} uses STAGES_UPGRADE_BY_ID`)
+	end
+	check(BaseBuild.stagesFor(MissionData, "antenna", 2) == BASE.STAGES_UPGRADE, "N: other upgrades keep STAGES_UPGRADE")
+	check(BaseBuild.stagesFor(MissionData, "ship", 1) == BASE.STAGES_BY_ID.ship, "N: the ship keeps its steps")
+
+	-- Silo size by habitat level.
+	local silo = BASE.SILO_MAX_BY_HABITAT
+	check(#silo == HABITAT_MAX, "N: one silo size per habitat level")
+	for i = 1, #silo do
+		check(isWhole(silo[i], 1), `N: silo size {i} is a whole number`)
+		if i > 1 then
+			check(silo[i] >= silo[i - 1], `N: the silo never shrinks at habitat {i}`)
+		end
+	end
+	check(BASE.SILO_MAX == silo[#silo], "N: SILO_MAX is the biggest silo")
+	check(BaseBuild.siloMax(MissionData, { habitat = 1 }) == silo[1], "N: siloMax at habitat 1")
+	check(BaseBuild.siloMax(MissionData, { habitat = 4 }) == silo[4], "N: siloMax at habitat 4")
+	check(BaseBuild.siloMax(MissionData, {}) == silo[1], "N: siloMax with no habitat uses the smallest")
+	check(BaseBuild.siloMax(MissionData, { habitat = 99 }) == silo[#silo], "N: siloMax is clamped")
+
+	-- Antenna bonus by antenna level.
+	local antenna = BaseBuild.buildDef(MissionData, "antenna") :: BaseBuild.BuildDef
+	local bonus = BASE.ANTENNA_ALIGN_BONUS
+	check(#bonus == antenna.maxLevel, "N: one antenna bonus per antenna level")
+	check(bonus[1] == 0, "N: the first antenna pays the normal reward")
+	for i = 1, #bonus do
+		check(isWhole(bonus[i], 0), `N: antenna bonus {i} is whole`)
+		if i > 1 then
+			check(bonus[i] > bonus[i - 1], `N: antenna {i} sends more data than antenna {i - 1}`)
+		end
+	end
+	check(BaseBuild.antennaBonus(MissionData, {}) == 0, "N: no antenna, no bonus")
+	check(BaseBuild.antennaBonus(MissionData, { antenna = 3 }) == bonus[3], "N: laser link bonus")
+
+	-- Food grows faster with the second dome (plants still take time to grow).
+	local greenhouse = BaseBuild.buildDef(MissionData, "greenhouse") :: BaseBuild.BuildDef
+	local cooldown = BASE.FOOD.COOLDOWN_BY_GREENHOUSE
+	check(#cooldown == greenhouse.maxLevel, "N: one food cooldown per greenhouse level")
+	check(cooldown[1] == BASE.FOOD.COOLDOWN_SECONDS, "N: greenhouse 1 keeps COOLDOWN_SECONDS")
+	for i = 2, #cooldown do
+		check(cooldown[i] < cooldown[i - 1] and cooldown[i] >= 30, `N: greenhouse {i} grows food sooner, but not at once`)
+	end
+	check(BaseBuild.foodCooldown(MissionData, {}) == BASE.FOOD.COOLDOWN_SECONDS, "N: food cooldown without a greenhouse")
+	check(BaseBuild.foodCooldown(MissionData, { greenhouse = 2 }) == cooldown[2], "N: food cooldown with dome 2")
+end
+
+----------------------------------------------------------------------------------------------------
+-- O. Quests (Stage 9): the main quest line teaches every mechanic in order, side quests open along
+-- the way. Every step type is valid, every mission id exists, every build is reachable in order.
+
+do
+	local Missions = require("../src/shared/Missions")
+	local Quests = require("../src/shared/Quests")
+	local SITES = 5 -- exploration sites (WorldSites SITE_ORDER)
+	local skillTotal = 0
+	for _, def in BASE.SKILLS do
+		skillTotal += def.maxLevel
+	end
+
+	local seen: { [string]: boolean } = {}
+	local typesUsed: { [string]: boolean } = {}
+	local missionsUsed: { [string]: boolean } = {}
+	check(#Quests.MAIN >= 10, `O: a real main quest line ({#Quests.MAIN} quests)`)
+	check(#Quests.SIDE >= 3, `O: some side quests ({#Quests.SIDE})`)
+	check(#Quests.LIST == #Quests.MAIN + #Quests.SIDE, "O: LIST is main plus side")
+	for index, quest in Quests.LIST do
+		check(not seen[quest.id], `O: quest id {quest.id} unique`)
+		seen[quest.id] = true
+		check(string.match(quest.id, "^[%l%d_]+$") ~= nil, `O: quest id {quest.id} is lower case`)
+		check(quest.order == index, `O: {quest.id} order is its place in LIST`)
+		check(Quests.byId(quest.id) == quest, `O: byId finds {quest.id}`)
+		check(quest.kind == "main" or quest.kind == "side", `O: {quest.id} kind is main or side`)
+		check(iconExists(quest.icon), `O: {quest.id} icon "{quest.icon}" exists in Icons`)
+		check(isWhole(quest.reward.credits, 0) and isWhole(quest.reward.xp, 1), `O: {quest.id} reward is whole credits and XP`)
+		check(#quest.steps >= 1 and #quest.steps <= 4, `O: {quest.id} has 1 to 4 steps`)
+		check(Quests.titleKey(quest.id) == `quest.{quest.id}.title`, `O: {quest.id} title key`)
+		if quest.kind == "main" then
+			check(quest.after == nil, `O: main quest {quest.id} has no after (the line orders it)`)
+		else
+			local after = quest.after and Quests.byId(quest.after)
+			check(quest.after == nil or (after ~= nil and after.kind == "main"), `O: side quest {quest.id} opens after a main quest`)
+		end
+		for i, step in quest.steps do
+			typesUsed[step.type] = true
+			check(Quests.isStepType(step.type), `O: {quest.id} step {i} type "{step.type}" is valid`)
+			check(Quests.stepKey(quest.id, i) == `quest.{quest.id}.step{i}`, `O: {quest.id} step {i} key`)
+			check(isWhole(Quests.stepTarget(step), 1), `O: {quest.id} step {i} has a whole target`)
+			local kind = step.type
+			if kind == "build" then
+				local def = step.id and BaseBuild.buildDef(MissionData, step.id)
+				check(def ~= nil, `O: {quest.id} step {i} builds a real structure ({step.id})`)
+				if def then
+					check(isWhole(step.level, 1) and (step.level :: number) <= def.maxLevel, `O: {quest.id} step {i} level is 1..{def.maxLevel}`)
+				end
+			elseif kind == "mission" then
+				check(step.id ~= nil and Missions.get(step.id) ~= nil, `O: {quest.id} step {i} mission {step.id} exists`)
+				if step.id then
+					missionsUsed[step.id] = true
+				end
+			elseif kind == "gear" then
+				check(step.id ~= nil and BaseBuild.gearDef(MissionData, step.id) ~= nil, `O: {quest.id} step {i} gear {step.id} exists`)
+			elseif kind == "tool_upgrade" then
+				local up = step.id and (BASE.TOOL_UPGRADES :: any)[step.id]
+				check(up ~= nil, `O: {quest.id} step {i} tool {step.id} can be upgraded`)
+				if up then
+					check(isWhole(step.level, 2) and (step.level :: number) <= up.maxLevel, `O: {quest.id} step {i} tool level is 2..{up.maxLevel}`)
+				end
+			elseif kind == "visit" then
+				check(Quests.isPlace(step.place), `O: {quest.id} step {i} place "{step.place}" is valid`)
+			elseif kind == "vehicle" then
+				check(step.count == nil and step.id == nil, `O: {quest.id} step {i} vehicle needs nothing else`)
+			else
+				check(Quests.isCounted(kind) and isWhole(step.count, 1), `O: {quest.id} step {i} {kind} has a count >= 1`)
+			end
+			-- Finite things: never ask for more than exist.
+			if kind == "scan" then
+				check((step.count or 0) <= SITES, `O: {quest.id} scans at most {SITES} sites`)
+			elseif kind == "collectible" then
+				check((step.count or 0) <= #Missions.COLLECTIBLES, `O: {quest.id} asks at most {#Missions.COLLECTIBLES} collectibles`)
+			elseif kind == "skill" then
+				check((step.count or 0) <= skillTotal, `O: {quest.id} asks at most {skillTotal} skill levels`)
+			end
+		end
+	end
+	for _, stepType in Quests.STEP_TYPES do
+		check(typesUsed[stepType] == true, `O: some quest teaches "{stepType}"`)
+	end
+	for _, mission in Missions.LIST do
+		check(missionsUsed[mission.id] == true, `O: mission {mission.id} is a quest step`)
+	end
+
+	-- What a step needs standing before a kid can do it (tools and places come from builds).
+	local NEEDS: { [string]: string } = {
+		ice = "habitat",
+		clean = "solar",
+		silo = "drill_1",
+		scan = "antenna",
+		meteor = "antenna",
+		skill = "lab",
+		gear = "lab",
+		tool_upgrade = "lab",
+		vehicle = "garage",
+		eat = "greenhouse",
+		collectible = "habitat",
+	}
+	local PLACE_NEEDS: { [string]: string } = { lab = "lab", greenhouse = "greenhouse", garage = "garage", crater = "habitat" }
+
+	-- Walk one quest with the builds standing: build steps go up one level at a time and must be
+	-- allowed by the habitat tree and requirements; missions need earlier missions and their builds.
+	local function walk(quest: Quests.Quest, standing: BaseBuild.Levels, completed: { [string]: boolean })
+		for i, step in quest.steps do
+			local kind = step.type
+			if kind == "build" and step.id and step.level then
+				while BaseBuild.levelOf(standing, step.id) < step.level do
+					local ok, reason = BaseBuild.canBuild(MissionData, standing, 15, math.huge, step.id)
+					check(ok, `O: {quest.id} step {i}: {step.id} {BaseBuild.levelOf(standing, step.id) + 1} can be built by then ({reason})`)
+					if not ok then
+						break
+					end
+					standing[step.id] = BaseBuild.levelOf(standing, step.id) + 1
+				end
+			elseif kind == "mission" and step.id then
+				local mission = Missions.get(step.id)
+				if mission then
+					check(Missions.requiresDone(mission, completed), `O: {quest.id} step {i}: missions before {step.id} are done by then`)
+					-- Training missions build what they teach; the needs must already stand.
+					check(Missions.meetsNeeds(mission, standing), `O: {quest.id} step {i}: {step.id} needs stand by then ({Missions.missingBuild(mission, standing)})`)
+					for _, objective in mission.objectives do
+						local buildId = Missions.buildForObjective(objective.id)
+						if buildId then
+							check(BaseBuild.levelOf(standing, buildId) >= 1, `O: {quest.id} step {i}: {step.id} teaches {buildId}, built in an earlier step`)
+						end
+					end
+					completed[step.id] = true
+				end
+			elseif kind == "visit" and step.place then
+				local need = PLACE_NEEDS[step.place]
+				check(need == nil or BaseBuild.levelOf(standing, need) >= 1, `O: {quest.id} step {i}: {step.place} stands by then`)
+			else
+				local need = NEEDS[kind]
+				check(need == nil or BaseBuild.levelOf(standing, need) >= 1, `O: {quest.id} step {i}: {kind} needs {need} built by then`)
+			end
+		end
+	end
+
+	local standing: BaseBuild.Levels = {}
+	local completed: { [string]: boolean } = {}
+	local afterState: { [string]: { builds: BaseBuild.Levels, missions: { [string]: boolean } } } = {}
+	local habitatAt: { [number]: number } = {}
+	for index, quest in Quests.MAIN do
+		walk(quest, standing, completed)
+		afterState[quest.id] = { builds = table.clone(standing), missions = table.clone(completed) }
+		local hab = BaseBuild.habitatLevel(standing)
+		if habitatAt[hab] == nil then
+			habitatAt[hab] = index
+		end
+	end
+	-- The main line reaches every base level and every structure (each at least level 1).
+	for hab = 1, HABITAT_MAX do
+		check(habitatAt[hab] ~= nil, `O: the main line reaches habitat {hab}`)
+	end
+	for _, def in BASE.BUILDS do
+		check(BaseBuild.levelOf(standing, def.id) >= 1, `O: the main line builds {def.id}`)
+	end
+	local last = Quests.MAIN[#Quests.MAIN]
+	local lastStep = last.steps[#last.steps]
+	check(lastStep.type == "build" and lastStep.id == "ship", "O: the last main quest builds the Mars ship")
+	-- Missions in the main line come in the order of Missions.LIST.
+	local lastOrder = 0
+	for _, quest in Quests.MAIN do
+		for _, step in quest.steps do
+			if step.type == "mission" and step.id then
+				local mission = Missions.get(step.id)
+				if mission then
+					check(mission.order > lastOrder, `O: main mission {step.id} comes after the missions before it`)
+					lastOrder = mission.order
+				end
+			end
+		end
+	end
+	-- Side quests are reachable once their main quest is done.
+	for _, quest in Quests.SIDE do
+		local state = if quest.after then afterState[quest.after] else { builds = {}, missions = {} }
+		if state then
+			walk(quest, table.clone(state.builds), table.clone(state.missions))
+		end
+	end
+
+	-- Helpers.
+	local done: { [string]: boolean } = {}
+	check(Quests.nextMain(done) == Quests.MAIN[1], "O: the first main quest comes first")
+	check(Quests.mainIndex(Quests.MAIN[2].id) == 2, "O: mainIndex")
+	check(Quests.mainIndex(Quests.SIDE[1].id) == nil, "O: side quests have no main index")
+	check(Quests.byId("nope") == nil, "O: unknown quest")
+	local openAtStart = Quests.sideAvailable(done)
+	for _, quest in openAtStart do
+		check(quest.after == nil, `O: {quest.id} is open from the start only without after`)
+	end
+	local active = Quests.active(done)
+	check(active[1] == Quests.MAIN[1], "O: active lists the next main quest first")
+	check(Quests.isOpen(Quests.MAIN[1], done) and not Quests.isOpen(Quests.MAIN[2], done), "O: only the next main quest is open")
+	done[Quests.MAIN[1].id] = true
+	check(Quests.nextMain(done) == Quests.MAIN[2], "O: then the second")
+	for _, quest in Quests.MAIN do
+		done[quest.id] = true
+	end
+	check(Quests.nextMain(done) == nil and Quests.allMainDone(done), "O: the main line ends")
+	check(#Quests.sideAvailable(done) == #Quests.SIDE, "O: after the main line every side quest is open")
+	check(Quests.FINALE_KEY == "quest.main_done", "O: finale key")
+	check(Quests.isLifetime("scan") and Quests.isLifetime("skill") and Quests.isLifetime("collectible"), "O: finite steps use lifetime totals")
+	check(not Quests.isLifetime("ice") and not Quests.isLifetime("meteor"), "O: repeatable steps count while active")
+	check(not Quests.isStepType("fly") and not Quests.isStepType(nil), "O: unknown step types are rejected")
+	-- stepProgress / stepDone / questDone on views.
+	local buildStep: Quests.Step = { type = "build", id = "solar", level = 2 }
+	local have, need = Quests.stepProgress(buildStep, { builds = { solar = 1 } })
+	check(have == 1 and need == 2, "O: build progress is the level standing")
+	check(Quests.stepDone(buildStep, { builds = { solar = 3 } }), "O: a higher level counts")
+	have, need = Quests.stepProgress({ type = "ice", count = 4 }, { counts = { ice = 9 } })
+	check(have == 4 and need == 4, "O: counts are capped at the target")
+	check(not Quests.stepDone({ type = "ice", count = 4 }, {}), "O: an empty view has nothing")
+	check(Quests.stepDone({ type = "mission", id = "t1_steps" }, { missions = { t1_steps = true } }), "O: mission step")
+	check(Quests.stepDone({ type = "gear", id = "boots" }, { gear = { boots = 2 } }), "O: gear step (any level)")
+	check(not Quests.stepDone({ type = "tool_upgrade", id = "drill", level = 2 }, { tools = { drill = 1 } }), "O: tool level 1 is not 2")
+	check(Quests.stepDone({ type = "visit", place = "lab" }, { visited = { lab = true } }), "O: visit step")
+	check(Quests.stepDone({ type = "vehicle" }, { counts = { vehicle = 1 } }), "O: vehicle step")
+	local first = Quests.MAIN[1]
+	check(not Quests.questDone(first, {}), "O: the first quest is not done at the start")
 end
 
 ----------------------------------------------------------------------------------------------------

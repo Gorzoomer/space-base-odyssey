@@ -17,6 +17,7 @@
 -- 3) DebugMeteor (DemoKeys F2, Studio or the place owner only): an impact lands near that player now.
 --    BaseService routes the action here through BaseService.setDebugMeteorHook.
 -- Server authoritative: prompt distance, the tablet in hand and the cooldown are checked here.
+-- Stage 9: onScan tells listeners (QuestService) about every accepted scan of a site or a crater.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -104,6 +105,19 @@ local warnedNoImpact = false
 local lastScanAt: { [Player]: number } = {}
 local sessionScanned: { [Player]: { [string]: boolean } } = {} -- fallback when BaseService has no markScanned
 local poiIds: { string } = {}
+
+-- Stage 9: kind "poi" (id = site id) or "meteor" (id = ""); isNew = first scan by this player.
+export type ScanListener = (player: Player, kind: "poi" | "meteor", id: string, isNew: boolean) -> ()
+local scanListeners: { ScanListener } = {}
+
+local function fireScan(player: Player, kind: "poi" | "meteor", id: string, isNew: boolean)
+	for _, listener in scanListeners do
+		local ok, err = pcall(listener, player, kind, id, isNew)
+		if not ok then
+			warn(`[SpaceBaseOdyssey] scan listener failed: {err}`)
+		end
+	end
+end
 
 ----------------------------------------------------------------------------------------------------
 -- Helpers
@@ -266,6 +280,7 @@ local function onPoiScanned(player: Player, id: string, prompt: ProximityPrompt)
 		reward(player, "poi_scanned")
 	end
 	sendExplore(player, { kind = "poi", id = id, isNew = isNew })
+	fireScan(player, "poi", id, isNew)
 	if isNew and #poiIds > 0 and scannedSiteCount(player) >= #poiIds then
 		task.delay(2, function()
 			sayTo(player, "carl.explore.all_sites")
@@ -473,6 +488,7 @@ local function onImpactScanned(player: Player, impact: Impact)
 		player:SetAttribute("SBO_ScannedImpact", impact.serial)
 	end
 	sendExplore(player, { kind = "meteor", id = "", isNew = isNew })
+	fireScan(player, "meteor", "", isNew)
 end
 
 -- Lands a meteorite at `position` (ground point). Returns true when the world made the crater.
@@ -618,6 +634,11 @@ function ExploreService.debugMeteor(player: Player, trusted: boolean?)
 	if spot and spawnAt(spot) then
 		countdown = nextWait()
 	end
+end
+
+-- Stage 9: called after every accepted scan (site or meteorite crater), with isNew = first time.
+function ExploreService.onScan(listener: ScanListener)
+	table.insert(scanListeners, listener)
 end
 
 -- The meteorite crater on the Moon right now, or nil.

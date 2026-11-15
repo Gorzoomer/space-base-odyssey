@@ -3,9 +3,12 @@
 -- (their own avatar with the astronaut helmet and backpack).
 -- Start order: world, remotes, CrewService, ProgressService, BaseService (build and grow, building in
 -- steps), MissionService, ToolService (Stage 7 tools in hand), VehicleService (Stage 7 garage
--- vehicles), ExploreService (Stage 7 exploration sites and meteorites), SuitService, PetService.
+-- vehicles), ExploreService (Stage 7 exploration sites and meteorites), SuitService, PetService,
+-- QuestService (Stage 9 main and side quests).
 -- Each later service is started inside pcall so a missing or broken piece is reported with warn and
 -- never stops the server. Players arrive (spawn) in the lander (world.spawn).
+-- Stage 9 save slots: a player has no character until they pick a save slot on the start menu and it
+-- is loaded (ProgressService.onLoaded); then they spawn. Remotes.SLOTS carries the slot list.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -75,6 +78,7 @@ local function extraRemote(name: string): RemoteEvent
 end
 local baseStateEvent = extraRemote(Types.Remotes.BASE_STATE)
 local exploreEvent = extraRemote(Types.Remotes.EXPLORE)
+local slotsEvent = extraRemote(Types.Remotes.SLOTS) -- Stage 9: the start menu's save slots
 
 -- An optional server module (Stage 7 services may be missing while the game is being built).
 local function optionalModule(name: string): any?
@@ -87,9 +91,15 @@ local function optionalModule(name: string): any?
 end
 
 CrewService.start(world, { playerStats = remotes.playerStats, message = remotes.message })
--- Saved progress and the hidden collectibles (prompts, rewards) start before the mission loop so the
--- mission select screen knows what is unlocked.
-ProgressService.start(world, { progress = remotes.progress, collected = remotes.collected, message = remotes.message })
+-- Saved progress (three save slots per player, chosen on the start menu) and the hidden collectibles
+-- (prompts, rewards) start before the mission loop so missions know what is unlocked.
+ProgressService.start(world, {
+	progress = remotes.progress,
+	collected = remotes.collected,
+	message = remotes.message,
+	action = remotes.action, -- ChooseSlot, RequestSlots
+	slots = slotsEvent,
+})
 -- Build and grow the base: credits, XP, builds, skills, pets, wardrobe (saved by ProgressService).
 startStep("BaseService", function()
 	BaseService.start(world, { baseState = baseStateEvent, message = remotes.message }, ProgressService, CrewService)
@@ -132,6 +142,21 @@ startStep("PetService", function()
 		module.start(BaseService)
 	end
 end)
+-- Stage 9: main and side quests (optional; started after every service it listens to).
+startStep("QuestService", function()
+	local module = optionalModule("QuestService")
+	if module then
+		module.start(world, BaseService, MissionService, CrewService, {
+			message = remotes.message,
+			baseState = baseStateEvent,
+			action = remotes.action,
+			snapshot = remotes.snapshot,
+			progress = remotes.progress,
+			explore = exploreEvent,
+			slots = slotsEvent,
+		}, ProgressService)
+	end
+end)
 
 -- When the Earth hides the Sun (an eclipse seen from the Moon), C.A.R.L. explains it.
 local onEclipse = (world :: any).onEclipse
@@ -155,6 +180,26 @@ local function loadCharacter(player: Player)
 	end
 end
 
+-- The first spawn waits for the player's save slot (start menu, then loading). Only once: later
+-- spawns are respawns after a death.
+local spawning: { [Player]: boolean } = {}
+local function spawnWhenLoaded(player: Player)
+	if player.Parent == nil or player.Character ~= nil or spawning[player] then
+		return
+	end
+	if not ProgressService.isLoaded(player) then
+		return -- still on the start menu: ProgressService.onLoaded spawns them
+	end
+	spawning[player] = true
+	loadCharacter(player)
+	spawning[player] = nil
+end
+
+ProgressService.onLoaded(spawnWhenLoaded)
+Players.PlayerRemoving:Connect(function(player: Player)
+	spawning[player] = nil
+end)
+
 local function onPlayerAdded(player: Player)
 	if world.spawn then
 		player.RespawnLocation = world.spawn
@@ -172,7 +217,7 @@ local function onPlayerAdded(player: Player)
 			end)
 		end
 	end)
-	task.spawn(loadCharacter, player)
+	task.spawn(spawnWhenLoaded, player)
 end
 
 Players.PlayerAdded:Connect(onPlayerAdded)

@@ -180,6 +180,7 @@ local MARKER_NAMES = table.freeze({
 	"Silo", -- Stage 6: the ice silo's claim side (C.A.R.L. guides here when it is full)
 	"LanderDoor", -- Stage 7: the foot of the lander ramp (objective go_outside)
 	"CrateDepot", -- Stage 7: the parts crates at the lander's cargo bay
+	"MissionConsole", -- Stage 9: the mission console in the hub (missions start there)
 })
 
 -- Stage 7 construction look (visual tuning): a build in progress shows a foundation outline in

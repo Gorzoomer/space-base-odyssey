@@ -1,6 +1,8 @@
 --!strict
 -- Space Base Odyssey - server-authoritative mission loop: phases, actions, shift tasks and storms.
--- Briefing is the mission select screen. A mission (src/shared/Missions.luau) sets the number of days,
+-- Briefing is the open base between missions (Stage 9: there is no mission menu at start; players
+-- roam, build and follow the quests, and start a mission from the mission panel: the habitat's
+-- mission console or the Missions button, both on the client, which send StartMission). A mission (src/shared/Missions.luau) sets the number of days,
 -- the event schedule, which storms bring particles and the objectives counted here. Tutorials end as
 -- soon as their objectives are done and never fail; story chapters and free play are scored when the
 -- last day ends.
@@ -17,6 +19,9 @@
 -- panel brush for dusty panels, the tablet to aim the antenna, the repair kit for leaks. Without it
 -- C.A.R.L. says which tool to hold ("carl.tool.need_<id>") and nothing happens. deliverIce lets the
 -- ice hauler (VehicleService) hand in several cores at once.
+-- Stage 9: hooks for QuestService (onMissionCompleted, onIceDelivered, onIceDrilled, onPanelCleaned,
+-- onBaseAction) and isMissionUnlocked. A higher antenna level adds BaseBuild.antennaBonus credits to
+-- each alignment (BaseService.grantCredits).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -25,6 +30,7 @@ local RunService = game:GetService("RunService")
 local ServerStorage = game:GetService("ServerStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local BaseBuild = require(Shared:WaitForChild("BaseBuild"))
 local MissionData = require(Shared:WaitForChild("MissionData"))
 local Missions = require(Shared:WaitForChild("Missions"))
 local Simulation = require(Shared:WaitForChild("Simulation"))
@@ -86,6 +92,8 @@ export type BaseApi = {
 	rewardAll: (players: { Player }, kind: string, count: number?) -> (),
 	effectiveBuilds: () -> { [string]: number },
 	onBuildsChanged: (listener: (builds: { [string]: number }) -> ()) -> (),
+	-- Stage 9 (optional until BaseService has it): exact credits and XP; skill bonuses apply.
+	grantCredits: ((player: Player, credits: number, xp: number) -> ())?,
 }
 
 -- The parts of ProgressService this module uses.
@@ -97,6 +105,8 @@ export type ProgressApi = {
 	onChanged: (listener: () -> ()) -> (),
 	-- Validates and redeems a code (RedeemCode action); replies to the player through C.A.R.L.
 	redeemCode: (player: Player, code: any) -> (),
+	-- Stage 9: true once the player's save slot is loaded (players on the start menu are not playing).
+	isLoaded: ((player: Player) -> boolean)?,
 }
 
 type StormStage = "quiet" | "warning" | "storm" | "over"
@@ -198,6 +208,23 @@ local broadcastQueued = false
 local lastLive: LiveMeters? = nil -- live meters in the last snapshot sent during a shift
 local lastLivePushAt = -math.huge
 
+-- Stage 9: QuestService listeners.
+export type BaseActionStage = "before" | "after"
+local missionListeners: { (players: { Player }, missionId: string) -> () } = {}
+local iceDeliveredListeners: { (player: Player, count: number) -> () } = {}
+local iceDrilledListeners: { (player: Player) -> () } = {}
+local panelListeners: { (player: Player) -> () } = {}
+local baseActionListeners: { (player: Player, kind: string, stage: BaseActionStage) -> () } = {}
+
+local function fire(list: { any }, label: string, ...: any)
+	for _, listener in list do
+		local ok, err = pcall(listener, ...)
+		if not ok then
+			warn(`[SpaceBaseOdyssey] {label} listener failed: {err}`)
+		end
+	end
+end
+
 ----------------------------------------------------------------------------------------------------
 -- Helpers
 
@@ -266,8 +293,24 @@ local function worldCall(name: string, ...: any)
 	end
 end
 
+-- Stage 9: players still on the start menu (no save slot loaded, no character) are not in the crew.
+local function activePlayers(): { Player }
+	local api = progress
+	local isLoaded = if api then api.isLoaded else nil
+	if isLoaded == nil then
+		return Players:GetPlayers()
+	end
+	local list: { Player } = {}
+	for _, player in Players:GetPlayers() do
+		if isLoaded(player) then
+			table.insert(list, player)
+		end
+	end
+	return list
+end
+
 local function countPlayers(): number
-	return math.max(1, #Players:GetPlayers())
+	return math.max(1, #activePlayers())
 end
 
 local function countDusty(): number
@@ -933,7 +976,7 @@ local function enterReport()
 	setPhase("Report")
 	local def = missionDef
 	local api = progress
-	local players = Players:GetPlayers()
+	local players = activePlayers()
 	if def then
 		-- Every star in the report pays every player here (an early return still earns 1 star).
 		rewardPlayers(players, "star", Simulation.stars(state, MissionData))
@@ -955,6 +998,7 @@ local function enterReport()
 		end
 		rewardPlayers(first, "mission_first")
 		rewardPlayers(again, "mission_repeat")
+		fire(missionListeners, "mission completed", players, def.id)
 	end
 end
 
@@ -1017,7 +1061,7 @@ local function finishShift(forceComplete: boolean?)
 	local result = shiftResultNow(currentShift, data, crew.takeRefillCount())
 	crew.setShiftActive(false)
 	Simulation.endDay(state, MissionData, result)
-	rewardPlayers(Players:GetPlayers(), "day_finished")
+	rewardPlayers(activePlayers(), "day_finished")
 
 	finishing = true
 	addProgress("finish_day")
@@ -1361,7 +1405,7 @@ local function startMission(def: Mission)
 	broadcast()
 end
 
--- Back to the mission select screen with a clean base.
+-- Back to the open base (no mission running) with a clean mission state.
 local function returnToBriefing()
 	if phase == "Shift" then
 		abortShift()
@@ -1440,6 +1484,7 @@ local function onArrayCleaned(player: Player, index: number)
 	say("carl.panel_clean")
 	addProgress("clean_panel")
 	reward(player, "panel_cleaned")
+	fire(panelListeners, "panel cleaned", player)
 	refreshWorld()
 	broadcast()
 end
@@ -1472,9 +1517,11 @@ local function onIceDrilled(player: Player, index: number)
 		sayTo(player, "carl.ice_picked")
 		addProgress("drill_ice")
 		refreshWorld()
+		fire(iceDrilledListeners, "ice drilled", player)
 	elseif phase == "Briefing" then
 		crew.setCarrying(player, true)
 		sayTo(player, "carl.ice_picked")
+		fire(iceDrilledListeners, "ice drilled", player)
 	end
 end
 
@@ -1492,10 +1539,12 @@ local function onIceDelivered(player: Player)
 		addProgress("deliver_ice_total")
 		reward(player, "ice_delivered")
 		broadcast()
+		fire(iceDeliveredListeners, "ice delivered", player, 1)
 	elseif phase == "Briefing" or phase == "Planning" then
 		crew.setCarrying(player, false)
 		sayTo(player, "carl.ice_saved")
 		reward(player, "ice_delivered")
+		fire(iceDeliveredListeners, "ice delivered", player, 1)
 	end
 end
 
@@ -1532,6 +1581,18 @@ local function onAntennaAligned(player: Player)
 	end
 	addProgress("align_antenna")
 	reward(player, "antenna_aligned")
+	-- Stage 9: a bigger dish (antenna level 2 and 3) sends more, so each alignment pays a bonus.
+	local api = baseApi
+	if api then
+		local bonus = BaseBuild.antennaBonus(MissionData, api.effectiveBuilds())
+		local grantCredits = api.grantCredits
+		if bonus > 0 and grantCredits then
+			local ok, err = pcall(grantCredits, player, bonus, 0)
+			if not ok then
+				warn(`[SpaceBaseOdyssey] antenna bonus failed: {err}`)
+			end
+		end
+	end
 	sayLater("carl.earth_delay", {
 		moon = MissionData.REAL.MOON_EARTH_LIGHT_TIME_S,
 		mars = MissionData.REAL.MARS_LIGHT_TIME_MAX_MIN,
@@ -1685,7 +1746,13 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 		if api == nil or (BASE_DEBUG_ACTIONS[kind] and not isDebugAllowed(player, trusted)) then
 			return
 		end
+		if player then
+			fire(baseActionListeners, "base action", player, kind, "before")
+		end
 		api.handleAction(player, action, trusted)
+		if player then
+			fire(baseActionListeners, "base action", player, kind, "after")
+		end
 		return
 	end
 
@@ -1719,7 +1786,7 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 			sayTo(player, errorKey)
 		end
 	elseif kind == "StartMission" then
-		-- From mission select, or "Try again" straight from the report.
+		-- From the mission panel (console or Missions button), or "Try again" straight from the report.
 		if phase ~= "Briefing" and phase ~= "Report" then
 			return
 		end
@@ -1895,6 +1962,11 @@ function MissionService.start(worldRefs: any, crewService: Crew, progressService
 	end)
 
 	remoteEvents.action.OnServerEvent:Connect(function(player: Player, action: any)
+		-- Stage 9: the start menu's slot actions belong to ProgressService (its own listener) and must
+		-- not use up this player's action budget.
+		if type(action) == "table" and (action.type == "ChooseSlot" or action.type == "RequestSlots") then
+			return
+		end
 		if rateLimited(player) then
 			return
 		end
@@ -1962,13 +2034,50 @@ function MissionService.deliverIce(player: Player, count: number): number
 		addProgress("deliver_ice_total", cores)
 		reward(player, "ice_delivered", cores)
 		broadcast()
+		fire(iceDeliveredListeners, "ice delivered", player, cores)
 		return cores
 	elseif phase == "Briefing" or phase == "Planning" then
 		sayTo(player, "carl.ice_saved")
 		reward(player, "ice_delivered", cores)
+		fire(iceDeliveredListeners, "ice delivered", player, cores)
 		return cores
 	end
 	return 0
+end
+
+-- Stage 9: true when the mission can be started now (StartMission would accept it): its required
+-- missions are done by someone here and its builds stand (or DebugUnlockAll).
+function MissionService.isMissionUnlocked(missionId: string): boolean
+	local def = Missions.get(missionId)
+	return def ~= nil and isUnlocked(def)
+end
+
+-- Stage 9: called with every player in the server and the mission id when a mission is completed
+-- (after markCompleted and its rewards).
+function MissionService.onMissionCompleted(listener: (players: { Player }, missionId: string) -> ())
+	table.insert(missionListeners, listener)
+end
+
+-- Stage 9: called when the water machine accepts ice cores for `player` (by hand: count 1; the ice
+-- hauler: its whole load), in a shift and between shifts alike.
+function MissionService.onIceDelivered(listener: (player: Player, count: number) -> ())
+	table.insert(iceDeliveredListeners, listener)
+end
+
+-- Stage 9: called when a player drills an ice core in the crater (shift or base mode).
+function MissionService.onIceDrilled(listener: (player: Player) -> ())
+	table.insert(iceDrilledListeners, listener)
+end
+
+-- Stage 9: called when a player cleans a dusty solar array in a shift.
+function MissionService.onPanelCleaned(listener: (player: Player) -> ())
+	table.insert(panelListeners, listener)
+end
+
+-- Stage 9: called around every base action a client sends (Build, ClaimSilo, DebugResetBase...):
+-- stage "before" just before BaseService handles it and "after" right after (both synchronous).
+function MissionService.onBaseAction(listener: (player: Player, kind: string, stage: BaseActionStage) -> ())
+	table.insert(baseActionListeners, listener)
 end
 
 -- A C.A.R.L. line for everyone, from other services (for example the eclipse, in Main).

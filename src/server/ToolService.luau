@@ -16,6 +16,7 @@
 -- Tools move while used: the drill bit spins, the brush scrubs, the wrench screw and the patch roll
 -- turn, the tablet screen glows. That happens while the player holds any prompt with the tool in hand,
 -- for a moment after clicking with it, and when another service calls ToolService.pulse.
+-- Stage 9: onEat tells listeners (QuestService "eat" steps) every time a player eats fresh food.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -97,6 +98,7 @@ local baseApi: BaseApi? = nil
 local crewApi: CrewApi? = nil
 local remotes: Remotes? = nil
 local records: { [Player]: Record } = {}
+local eatListeners: { (player: Player) -> () } = {} -- Stage 9: QuestService counts "eat" steps
 
 ----------------------------------------------------------------------------------------------------
 -- Helpers
@@ -286,6 +288,12 @@ local function eat(player: Player)
 		end
 	end
 	sayTo(player, "carl.tool.food_eaten")
+	for _, listener in eatListeners do
+		local ok, err = pcall(listener, player)
+		if not ok then
+			warn(`[SpaceBaseOdyssey] eat listener failed: {err}`)
+		end
+	end
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -570,6 +578,11 @@ end
 -- Re-checks one player's tools now (for example right after an unlock, if onToolsChanged is missing).
 function ToolService.refresh(player: Player)
 	safeSync(player)
+end
+
+-- Stage 9: called (with the player) each time a player eats fresh greenhouse food.
+function ToolService.onEat(listener: (player: Player) -> ())
+	table.insert(eatListeners, listener)
 end
 
 return ToolService

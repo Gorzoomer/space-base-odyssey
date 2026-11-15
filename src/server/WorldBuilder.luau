@@ -45,6 +45,9 @@ export type World = {
 	leak: { part: BasePart, prompt: ProximityPrompt },
 	antenna: { model: Model, dish: BasePart, prompt: ProximityPrompt },
 	console: { part: BasePart, prompt: ProximityPrompt },
+	-- Stage 9: the mission console in the hub. Its "MissionConsolePrompt" (TextKey "prompt.missions") is
+	-- on while the habitat stands; the client opens the mission panel when it is triggered.
+	missionConsole: { part: BasePart, prompt: ProximityPrompt },
 	-- Workspace.Base.Markers: invisible guidance points (see MARKER_NAMES).
 	markers: Folder?,
 	setArrayDusty: (index: number, dusty: boolean) -> (),
@@ -607,6 +610,8 @@ end
 -- on top. Doors: north (toward the crater), south (toward the lander) and a west doorway into the
 -- walk-through tube to the greenhouse dome (a glass hatch closes it until the greenhouse stands).
 -- The room inside keeps the mission layout: power console, water processor, air maker, water tank.
+-- Stage 9: the habitat is the base level (1 to 5). Levels 2 to 5 add their own parts outside the room
+-- (Six.buildHabitatTiers), and a mission console on the east side starts missions (no start menu).
 local HUB_DOOR_NORTH = 0
 local HUB_DOOR_SOUTH = 8
 local HUB_DOOR_WEST = 12
@@ -616,6 +621,9 @@ type HabitatRefs = {
 	zone: Part,
 	console: Part,
 	consolePrompt: ProximityPrompt,
+	missionConsole: Part, -- Stage 9: opens the mission panel (client); no start menu any more
+	missionConsolePrompt: ProximityPrompt,
+	tierSolids: { Six.HabitatTierSolid }, -- Stage 9: habitat level parts that are solid once they stand
 	processorPrompt: ProximityPrompt,
 	leakPart: Part,
 	leakPrompt: ProximityPrompt,
@@ -718,6 +726,13 @@ local function buildHabitat(base: Instance): HabitatRefs
 	})
 	pointLight(beacon, ACCENT_SYSTEM, 10, 1, false)
 
+	-- Stage 9: what each habitat level (base level 2 to 5) adds to the hub (WorldStructures).
+	local tierSolids = Six.buildHabitatTiers(hab, o, capTop, {
+		[HUB_DOOR_NORTH] = true,
+		[HUB_DOOR_SOUTH] = true,
+		[HUB_DOOR_WEST] = true,
+	})
+
 	-- Door frames and lamps (north and south); the west doorway gets the greenhouse hatch.
 	Geo.doorDressing(hab, doorSegs[HUB_DOOR_NORTH], 10, 12, HUB_WALL)
 	Geo.doorDressing(hab, doorSegs[HUB_DOOR_SOUTH], 10, 12, HUB_WALL)
@@ -775,6 +790,33 @@ local function buildHabitat(base: Instance): HabitatRefs
 		{ color = ACCENT_SYSTEM, material = Enum.Material.Neon, shadow = false }
 	)
 	local consolePrompt = makePrompt(console, "prompt.console", "Power board", 0)
+
+	-- Stage 9: the mission console on the east side of the room. Missions start here (the client opens
+	-- the mission panel on "MissionConsolePrompt"); it works whenever the habitat stands.
+	local missionConsole = box(hab, "MissionConsole", v(24, 0.5, 1), v(27.5, 4, 7), { color = DARK_METAL, material = Enum.Material.Metal })
+	local missionScreen = part(
+		hab,
+		"MissionScreen",
+		Vector3.new(0.3, 3, 5.5),
+		CFrame.new(v(24.8, 5.6, 4)) * CFrame.Angles(0, 0, math.rad(-20)),
+		{ color = ACCENT_WARNING, material = Enum.Material.Neon, shadow = false }
+	)
+	local missionGui = Instance.new("SurfaceGui")
+	missionGui.Name = "MissionIcon"
+	missionGui.Face = Enum.NormalId.Left -- toward the middle of the room
+	missionGui.LightInfluence = 0
+	missionGui.CanvasSize = Vector2.new(110, 60)
+	missionGui.Parent = missionScreen
+	local missionIcon = Instance.new("ImageLabel")
+	missionIcon.BackgroundTransparency = 1
+	missionIcon.Size = UDim2.fromScale(0.5, 0.9)
+	missionIcon.Position = UDim2.fromScale(0.25, 0.05)
+	missionIcon.ScaleType = Enum.ScaleType.Fit
+	missionIcon.Image = Icons.target
+	missionIcon.ImageColor3 = PALETTE.night
+	missionIcon.Parent = missionGui
+	local missionConsolePrompt = makePrompt(missionConsole, "prompt.missions", "Missions", 0)
+	missionConsolePrompt.Name = "MissionConsolePrompt"
 
 	-- Water processor: melts ice and splits water into oxygen with electricity.
 	box(hab, "ProcessorBase", v(14, 0.5, -17), v(22, 1.5, -10), { color = DARK_METAL, material = Enum.Material.Metal })
@@ -963,6 +1005,9 @@ local function buildHabitat(base: Instance): HabitatRefs
 		zone = zonePart,
 		console = console,
 		consolePrompt = consolePrompt,
+		missionConsole = missionConsole,
+		missionConsolePrompt = missionConsolePrompt,
+		tierSolids = tierSolids,
 		processorPrompt = processorPrompt,
 		leakPart = leakPart,
 		leakPrompt = leakPrompt,
@@ -1959,6 +2004,7 @@ function WorldBuilder.build(data: any): World
 		IceSite = CRATER_CENTRE + Vector3.new(0, CRATER_FLOOR_Y + 1, 0),
 		Processor = habitat.processorInlet.Position + Vector3.new(0, 0, 1.5),
 		Console = habitat.console.Position + Vector3.new(0, 0, 3),
+		MissionConsole = habitat.missionConsole.Position + Vector3.new(-3, 0, 0),
 		Leak = habitat.leakPart.Position + Vector3.new(2, 0, 0),
 		Greenhouse = greenhouse.centre,
 		Arrays = Vector3.new(RIDGE_CENTRE.X, RIDGE_TOP_Y + 1, RIDGE_CENTRE.Z),
@@ -2432,6 +2478,13 @@ function WorldBuilder.build(data: any): World
 	habitatEntry.onLevel = function(level: number)
 		habitatStanding = level >= 1
 		habitat.zone.CFrame = if habitatStanding then habitatZoneHome else habitatZoneHome - Vector3.new(0, 2000, 0)
+		habitat.missionConsolePrompt.Enabled = habitatStanding
+		-- Stage 9: base level parts that stand (the side module, the mast) are solid again.
+		for _, item in habitat.tierSolids do
+			local solid = level >= item.level
+			item.part.CanCollide = solid
+			item.part.CanQuery = solid
+		end
 		refreshTeamFlag()
 	end
 
@@ -3051,6 +3104,7 @@ function WorldBuilder.build(data: any): World
 		leak = { part = habitat.leakPart :: BasePart, prompt = habitat.leakPrompt },
 		antenna = { model = antenna.model, dish = antenna.dish :: BasePart, prompt = antenna.prompt },
 		console = { part = habitat.console :: BasePart, prompt = habitat.consolePrompt },
+		missionConsole = { part = habitat.missionConsole :: BasePart, prompt = habitat.missionConsolePrompt },
 		markers = markers,
 		setArrayDusty = setArrayDusty,
 		setLeakActive = setLeakActive,

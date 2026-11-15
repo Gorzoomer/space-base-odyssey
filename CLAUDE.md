@@ -11,7 +11,7 @@ Roblox (Luau) game for NASA Space Apps 2026, challenge "Build a Junior Astronaut
 - Edit the files, never scripts inside Studio. The world is built by code (`src/server/WorldBuilder.luau`), not by hand-placed parts.
 - Tests:
   - `lune run tests/balance`: mission rules. Must pass.
-  - `lune run tests/missions` and `lune run tests/base`: missions and the build-and-grow rules. Must pass.
+  - `lune run tests/missions`, `lune run tests/base` and `lune run tests/economy`: missions, build-and-grow rules and economy pacing. Must pass.
   - `lune run tests/localization`: every key in en and es, at most 8 words.
 - Check that the project still builds with `rojo build default.project.json -o <temp>.rbxl`.
 

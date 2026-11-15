@@ -21,6 +21,10 @@
 --   Stage 8: gear just bought at the Lab (air boots, jetpack): how to switch it on and use it (key
 --   tips on keyboards, button tips on touch screens). Auto-run: once per session, the first time the
 --   player walks outside the finished habitat in base mode.
+-- Stage 9, the open world (no mission menu at the start): once per session in base mode, the first
+--   time the quest tracker shows a quest: "the quests on the left show what to do"; the first time
+--   the current quest step is a mission: "start missions at the console in your Moon home"; the
+--   first time a side quest shows: "a side quest is open, it is extra".
 -- Build steps come from BaseState.inProgress (or the pad attribute SBO_Phase when the Store does
 -- not carry it yet); a carried crate from BaseState.carryingCrate or the player attribute
 -- SBO_CarryingCrate.
@@ -34,6 +38,7 @@ local UserInputService = game:GetService("UserInputService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local MissionData = require(Shared:WaitForChild("MissionData"))
 
+local Objectives = require(script.Parent.Objectives)
 local PowerBoard = require(script.Parent.PowerBoard)
 local Store = require(script.Parent.Store)
 
@@ -224,6 +229,29 @@ function Onboarding.start(deps: Deps)
 	local shown: { [string]: boolean } = {}
 	-- Base mode tips: once per visit to base mode (cleared when a mission starts).
 	local baseShown: { [string]: boolean } = {}
+	-- Stage 9 quest tips: once per session.
+	local questShown: { [string]: boolean } = {}
+
+	local function questTips()
+		local quest = Objectives.currentQuest()
+		if quest == nil then
+			return
+		end
+		local keys: { string } = { "tip.quest_intro" }
+		local step = Objectives.currentStep(quest)
+		if step and step.def and step.def.type == "mission" then
+			table.insert(keys, "tip.mission_console")
+		end
+		if quest.kind == "side" then
+			table.insert(keys, "tip.side_quest")
+		end
+		for _, key in keys do
+			if not questShown[key] then
+				questShown[key] = true
+				deps.showTip({ key = key }, "Briefing")
+			end
+		end
+	end
 	local lastDay = 0
 	local lastMissionId: string? = nil
 	local lastGuideKey = ""
@@ -299,6 +327,7 @@ function Onboarding.start(deps: Deps)
 					end
 				end
 			end
+			questTips()
 		end
 
 		-- A mission that starts with building something: say what to build (once per mission).

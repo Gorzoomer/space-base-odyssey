@@ -19,7 +19,8 @@ export type LiveMeters = Simulation.LiveMeters
 export type MissionKind = Missions.MissionKind
 export type ObjectiveId = Missions.ObjectiveId
 
--- Briefing: lobby and guided intro. Planning: power board, no clock. Shift: real-time work outside.
+-- Briefing: free roaming between missions (Stage 9: open world, no mission menu at start; missions
+-- start from the mission console or the Missions button). Planning: power board, no clock. Shift: real-time work outside.
 -- Report: timeline of the mission with causes and stars.
 export type Phase = "Briefing" | "Planning" | "Shift" | "Report"
 
@@ -74,7 +75,7 @@ export type ObjectiveState = {
 	done: boolean,
 }
 
--- The mission being played (nil in Briefing, the mission select screen).
+-- The mission being played (nil in Briefing, between missions).
 export type MissionInfo = {
 	id: string,
 	kind: string, -- MissionKind
@@ -187,6 +188,72 @@ export type BaseState = {
 	scanned: { [string]: boolean }, -- exploration sites this player has scanned
 	gear: { [string]: number }, -- Stage 8: gear owned -> level ("boots", "jetpack"); missing = not owned
 	gearOn: { [string]: boolean }, -- Stage 8: gear switched on (worn and working)
+	-- Stage 9: the quest tracker (QuestService, src/shared/Quests.luau). nil with an older server or
+	-- before the player's data is loaded.
+	quest: QuestState?,
+}
+
+-- Stage 9: one step of a quest in the tracker. key = Quests.stepKey(id, i), shown with
+-- Store.t(key, { n = target }). progress is capped at target.
+export type QuestStepState = {
+	key: string,
+	progress: number,
+	target: number,
+	done: boolean,
+	mission: string?, -- mission steps: the mission id (the client may offer to start it)
+}
+
+-- Stage 9: one quest as the tracker shows it. stepIndex = the first step not done (#steps + 1 when
+-- every step is done).
+export type QuestView = {
+	id: string,
+	kind: string, -- "main" | "side"
+	titleKey: string, -- Quests.titleKey(id)
+	icon: string, -- key in src/shared/Icons.luau
+	stepIndex: number,
+	steps: { QuestStepState },
+	reward: { credits: number, xp: number },
+}
+
+-- Stage 9: BaseState.quest. The fields of QuestView describe the quest to show: the active main
+-- quest, or once the main line is done the first open side quest (id = "" and no steps when none is
+-- left; then show Quests.FINALE_KEY). sides lists every open side quest. mainCount / mainTotal: main
+-- quests done and in the line.
+export type QuestState = {
+	id: string,
+	kind: string,
+	titleKey: string,
+	icon: string,
+	stepIndex: number,
+	steps: { QuestStepState },
+	reward: { credits: number, xp: number },
+	mainDone: boolean,
+	mainCount: number,
+	mainTotal: number,
+	sides: { QuestView },
+}
+
+-- Stage 9 save slots: one row of the start menu (Remotes.SLOTS). used = false for an empty slot.
+export type SlotMode = "solo" | "friends"
+export type SlotInfo = {
+	used: boolean,
+	habitat: number?,
+	level: number?,
+	credits: number?,
+	savedAt: number?, -- os.time() of the last save (0 = unknown: the save from before slots, now slot 1)
+	mode: SlotMode?,
+}
+
+-- Stage 9: sent to one client before a slot is chosen and after it changes ("p_<userId>_meta"):
+-- once the slot list is read, after RequestSlots, and after the slot is loaded. ProgressService
+-- always fills every SlotInfo field. Until the player attribute SBO_SlotChosen is true the client
+-- shows the start menu, or a loading card while SBO_SlotLoading is true (a solo trip, or a slot on
+-- its way, or a reserved solo server choosing the slot from TeleportData).
+export type SlotsMeta = {
+	slots: { SlotInfo }, -- [1..3]
+	last: number?, -- the slot played last
+	current: number?, -- the slot this player plays in this server (nil on the start menu)
+	offline: boolean?, -- true = saves could not be read: progress is kept only for this visit
 }
 
 export type BuildProgress = {
@@ -207,14 +274,20 @@ export type ExploreEvent = {
 -- Client -> server requests.
 export type Action =
 	{ type: "SetCells", system: SystemId, cells: number }
-	-- missionId nil = the next unlocked mission. Allowed in Briefing and Report ("Try again").
+	-- missionId nil = the next unlocked mission. Allowed in Briefing and Report ("Try again"); the
+	-- client sends it from the mission panel (habitat console or Missions button).
 	| { type: "StartMission", missionId: string? }
 	| { type: "StartShift" }
-	| { type: "Restart" } -- Report -> Briefing (mission select)
+	| { type: "Restart" } -- Report -> Briefing (back to the open base)
 	| { type: "SetLanguage", language: "en" | "es" }
 	-- Settings panel: at most 24 characters, trimmed, any case. The server replies through C.A.R.L.
 	-- (carl.code_ok, carl.code_used, carl.code_bad); one attempt every 2 seconds per player.
 	| { type: "RedeemCode", code: string }
+	-- Stage 9 start menu: load save slot 1..3 ("solo" = a private world, "friends" = this server).
+	-- fresh = New Game in that slot (wipes it). Accepted once per join, before a character exists.
+	-- ProgressService validates slot, mode and fresh.
+	| { type: "ChooseSlot", slot: number, mode: SlotMode, fresh: boolean }
+	| { type: "RequestSlots" } -- send Remotes.SLOTS again (at most once a second)
 	-- Stage 6 (BaseService validates: level, credits, requirements, ownership, distance for prompts).
 	| { type: "Build", id: string } -- build or upgrade to the next level (also from the world prompt)
 	| { type: "LearnSkill", id: string }
@@ -249,6 +322,7 @@ local Remotes = table.freeze({
 	COLLECTED = "Collected", -- server -> one client: Collected (right after a pickup)
 	BASE_STATE = "BaseState", -- server -> one client: BaseState (Stage 6)
 	EXPLORE = "Explore", -- server -> one client: ExploreEvent (Stage 7)
+	SLOTS = "Slots", -- server -> one client: SlotsMeta (Stage 9 start menu)
 })
 
 return table.freeze({

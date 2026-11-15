@@ -1210,4 +1210,126 @@ function Geo.carriedCrate(character: Model, rootPart: BasePart)
 	end
 end
 
+------------------------------------------------------------------------------------------------
+-- Stage 9: the habitat is the base level (the "town hall", 1 to 5). Each habitat level adds its own
+-- visible parts to the hub, tagged with upgrade(p, level) so they only show (and rise in, step by
+-- step, with crates and the wrench) from that level on:
+--   2 Science outpost: a second ring of lit windows on the dome and a small dish on the roof.
+--   3 Mining base: a side module (below the window band) with an orange work beacon.
+--   4 Explorer base: a bigger dome cap (glass lookout) and a solar wrap around the dome.
+--   5 Moon spaceport: a tall comms mast with a gold beacon and gold trim on the hub.
+-- None of these parts closes a doorway or touches the inside zone. Returns the parts that should be
+-- solid once their level stands (upgrade() makes every tagged part non-solid; WorldBuilder turns
+-- these back on in the habitat's onLevel).
+------------------------------------------------------------------------------------------------
+
+export type HabitatTierSolid = { part: BasePart, level: number }
+
+function Six.buildHabitatTiers(hab: Instance, centre: Vector3, capTop: number, doorSegments: { [number]: boolean }): { HabitatTierSolid }
+	local rx = WorldParts.HUB_DOME_RX
+	local ry = WorldParts.HUB_DOME_RY
+	local roofY = WorldParts.HUB_ROOF_Y
+	local segments = WorldParts.HUB_SEGMENTS
+	local outer = WorldParts.HUB_APOTHEM + WorldParts.HUB_WALL
+	local gold = PALETTE.gold
+	local solids: { HabitatTierSolid } = {}
+	local function tier(p: BasePart, level: number, solid: boolean?): BasePart
+		upgrade(p, level)
+		if solid then
+			table.insert(solids, { part = p, level = level })
+		end
+		return p
+	end
+	-- A frame on the dome's outer surface at distance r from the centre, facing out along the normal
+	-- (local -Z = out, local Y = up the slope), lifted `lift` studs off the surface.
+	local function onDome(r: number, angle: number, lift: number): CFrame
+		local h = Geo.domeHeightAt(rx, ry, r)
+		local dir = dirFromAngle(angle)
+		local normal = (dir * (r / (rx * rx)) + Vector3.yAxis * (h / (ry * ry))).Unit
+		local at = centre + dir * r + Vector3.new(0, roofY + h, 0) + normal * lift
+		return CFrame.lookAt(at, at + normal, Vector3.yAxis)
+	end
+	local function roofFoot(x: number, z: number): Vector3
+		local r = Vector3.new(x, 0, z).Magnitude
+		return centre + Vector3.new(x, roofY + Geo.domeHeightAt(rx, ry, r) - 0.3, z)
+	end
+	local noShadow = function(color: Color3, material: Enum.Material): Style
+		return { color = color, material = material, collide = false, shadow = false }
+	end
+
+	-- Level 2: lit windows around the lower dome (warm light from the rooms) and a small dish.
+	local windowStyle: Style = { color = PALETTE.cream, material = Enum.Material.Neon, transparency = 0.15, collide = false, shadow = false }
+	for k = 0, segments - 1 do
+		local angle = (k + 0.5) * 2 * math.pi / segments
+		tier(part(hab, "Tier2Window", Vector3.new(3.4, 1.5, 0.3), onDome(30.3, angle, 0.45), windowStyle), 2)
+	end
+	local dishFoot = roofFoot(-8, -6)
+	tier(vcylinder(hab, "Tier2DishMast", 3.4, 0.45, dishFoot + Vector3.new(0, 1.7, 0), noShadow(METAL, Enum.Material.Metal)), 2)
+	tier(cylinder(hab, "Tier2Dish", 0.35, 3.4, CFrame.new(dishFoot + Vector3.new(0, 3.8, 0)) * CFrame.Angles(0, math.rad(35), math.rad(55)), noShadow(WHITE_HULL, Enum.Material.SmoothPlastic)), 2)
+	tier(ball(hab, "Tier2DishTip", 0.85, dishFoot + Vector3.new(0.5, 4.6, -0.35), noShadow(ACCENT_SYSTEM, Enum.Material.Neon)), 2)
+
+	-- Level 3: a side module on the north-west wall (segment 14: no door, path or pad there), below
+	-- the window band so the room keeps its view, and an orange work beacon on its roof.
+	local moduleSegment = 14
+	local moduleAngle = moduleSegment * 2 * math.pi / segments
+	local moduleDir = dirFromAngle(moduleAngle)
+	local depth = 7
+	local moduleFrame = CFrame.lookAt(centre + moduleDir * (outer + depth / 2), centre + moduleDir * (outer + depth + 1))
+	local function onModule(x: number, y: number, z: number): CFrame
+		return moduleFrame * CFrame.new(x, y, z)
+	end
+	tier(part(hab, "Tier3Module", Vector3.new(12, 6, depth), onModule(0, 3.5, 0), { color = WHITE_HULL, material = Enum.Material.SmoothPlastic }), 3, true)
+	tier(part(hab, "Tier3ModuleRoof", Vector3.new(12.6, 0.5, depth + 0.6), onModule(0, 6.75, 0), noShadow(HULL_TRIM, Enum.Material.SmoothPlastic)), 3)
+	tier(part(hab, "Tier3ModuleStripe", Vector3.new(12.1, 0.5, 0.2), onModule(0, 1.4, -(depth / 2 + 0.1)), noShadow(ACCENT_WARNING, Enum.Material.Neon)), 3)
+	tier(part(hab, "Tier3ModuleWindow", Vector3.new(6, 1.6, 0.2), onModule(0, 4.2, -(depth / 2 + 0.1)), {
+		color = ACCENT_SYSTEM:Lerp(PALETTE.night, 0.45),
+		material = Enum.Material.Glass,
+		reflectance = 0.2,
+		collide = false,
+		shadow = false,
+	}), 3)
+	tier(part(hab, "Tier3BeaconMast", Vector3.new(0.4, 2.2, 0.4), onModule(4.5, 8.1, 1.5), noShadow(METAL, Enum.Material.Metal)), 3)
+	local beacon = ball(hab, "Tier3Beacon", 1.3, onModule(4.5, 9.6, 1.5).Position, noShadow(ACCENT_WARNING, Enum.Material.Neon))
+	pointLight(beacon, ACCENT_WARNING, 12, 1, false)
+	tier(beacon, 3)
+
+	-- Level 4: a glass lookout on top of the dome (bigger cap) and blue solar cells around the dome.
+	tier(vcylinder(hab, "Tier4CapRing", 0.6, 12, Vector3.new(centre.X, capTop + 0.4, centre.Z), noShadow(HULL_TRIM, Enum.Material.SmoothPlastic)), 4)
+	tier(ball(hab, "Tier4Lookout", 9, Vector3.new(centre.X, capTop + 0.7, centre.Z), {
+		color = ACCENT_SYSTEM:Lerp(PALETTE.night, 0.3),
+		material = Enum.Material.Glass,
+		transparency = 0.35,
+		reflectance = 0.25,
+		collide = false,
+		shadow = false,
+	}), 4)
+	local solarStyle: Style = { color = PANEL_CLEAN, material = Enum.Material.Glass, reflectance = 0.15, collide = false, shadow = false }
+	for k = 0, segments - 1 do
+		local angle = k * 2 * math.pi / segments
+		tier(part(hab, "Tier4SolarWrap", Vector3.new(7, 3.4, 0.25), onDome(25.5, angle, 0.45), solarStyle), 4)
+	end
+
+	-- Level 5: a tall comms mast with a gold beacon, and gold trim on the walls, the roof edge and the
+	-- lookout (the side module's segment keeps its own roof line).
+	local mastFoot = roofFoot(-7, 9)
+	tier(box(hab, "Tier5MastBase", mastFoot + Vector3.new(-1.3, -0.4, -1.3), mastFoot + Vector3.new(1.3, 0.8, 1.3), { color = DARK_METAL, material = Enum.Material.Metal }), 5, true)
+	tier(vcylinder(hab, "Tier5Mast", 20, 0.8, mastFoot + Vector3.new(0, 10.8, 0), { color = METAL, material = Enum.Material.Metal }), 5, true)
+	for i, y in { 7, 13, 18 } do
+		local width = 4.4 - i
+		tier(part(hab, "Tier5MastBar", Vector3.new(width, 0.25, 0.25), CFrame.new(mastFoot + Vector3.new(0, y, 0)) * CFrame.Angles(0, math.rad(30 * i), 0), noShadow(METAL, Enum.Material.Metal)), 5)
+	end
+	tier(vcylinder(hab, "Tier5MastRing", 0.35, 1.5, mastFoot + Vector3.new(0, 10, 0), noShadow(gold, Enum.Material.Neon)), 5)
+	local topBeacon = ball(hab, "Tier5Beacon", 1.5, mastFoot + Vector3.new(0, 21.4, 0), noShadow(gold, Enum.Material.Neon))
+	pointLight(topBeacon, gold, 16, 1, false)
+	tier(topBeacon, 5)
+	tier(vcylinder(hab, "Tier5GoldEdge", 0.3, outer * 2 + 3, centre + Vector3.new(0, WorldParts.HUB_WALL_HEIGHT + 0.35, 0), noShadow(gold, Enum.Material.SmoothPlastic)), 5)
+	tier(vcylinder(hab, "Tier5GoldCap", 0.3, 12.8, Vector3.new(centre.X, capTop + 0.15, centre.Z), noShadow(gold, Enum.Material.SmoothPlastic)), 5)
+	for _, seg in Geo.ringSegments(CFrame.new(centre), WorldParts.HUB_APOTHEM, WorldParts.HUB_WALL, segments, 0) do
+		if not doorSegments[seg.index] and seg.index ~= moduleSegment then
+			tier(part(hab, "Tier5GoldTrim", Vector3.new(seg.width, 0.4, 0.2), seg.cf * CFrame.new(0, 6.6, -(WorldParts.HUB_WALL / 2 + 0.14)), noShadow(gold, Enum.Material.SmoothPlastic)), 5)
+		end
+	end
+	return solids
+end
+
 return Six

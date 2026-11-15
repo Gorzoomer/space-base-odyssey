@@ -5,19 +5,23 @@
 -- (tests/base.luau) as well as on the server (BaseService) and the client (panels).
 -- Builds are shared by everyone in a server: a structure stands at the HIGHEST level any present
 -- player has built ("effective" builds). Credits, XP, skills and pets belong to each player.
+-- Stage 9: the habitat is the town hall. Its level is the base level, and every structure level
+-- needs a minimum habitat level (MissionData.BASE.BUILDS[*].hab); the player level gates only
+-- skills, gear, tool upgrades and pets.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 export type Levels = { [string]: number } -- build or skill id -> level (missing = 0)
 
 -- Why a build, upgrade, skill or pet is not available right now. Localization: "base.why.<reason>".
-export type Reason = "unknown" | "max" | "requires" | "level" | "credits" | "points" | "owned" | "collectible"
+-- "habitat" (Stage 9) = the habitat (base level) is too low for that structure level.
+export type Reason = "unknown" | "max" | "requires" | "habitat" | "level" | "credits" | "points" | "owned" | "collectible"
 
 export type BuildDef = {
 	id: string,
 	icon: string,
 	maxLevel: number,
 	costs: { number },
-	minLevel: { number },
+	hab: { number }, -- habitat level needed for each level (Stage 9)
 	requires: { [string]: number },
 }
 
@@ -134,8 +138,24 @@ function BaseBuild.nextCost(data: any, effective: Levels, id: string): number?
 	return def.costs[nextLevel]
 end
 
+-- The base level: the habitat's level (0 before it stands).
+function BaseBuild.habitatLevel(effective: Levels?): number
+	return levelOf(effective, "habitat")
+end
+
+-- Habitat level needed for `level` of build `id` (nil for an unknown build or level).
+function BaseBuild.habitatNeeded(data: any, id: string, level: number): number?
+	local def = BaseBuild.buildDef(data, id)
+	if def == nil or level < 1 or level > def.maxLevel then
+		return nil
+	end
+	return def.hab[level]
+end
+
 -- Can this player build (or upgrade) `id` to its next level? effective = builds standing in the server.
-function BaseBuild.canBuild(data: any, effective: Levels, playerLevel: number, credits: number, id: string): (boolean, Reason?)
+-- Checks in order: known, not maxed, `requires` stand, the habitat level (reason "habitat"), credits.
+-- playerLevel is kept in the signature for older callers; since Stage 9 it does not gate structures.
+function BaseBuild.canBuild(data: any, effective: Levels, _playerLevel: number, credits: number, id: string): (boolean, Reason?)
 	local def = BaseBuild.buildDef(data, id)
 	if def == nil then
 		return false, "unknown"
@@ -149,13 +169,93 @@ function BaseBuild.canBuild(data: any, effective: Levels, playerLevel: number, c
 			return false, "requires"
 		end
 	end
-	if playerLevel < def.minLevel[nextLevel] then
-		return false, "level"
+	if levelOf(effective, "habitat") < (def.hab[nextLevel] or 0) then
+		return false, "habitat"
 	end
 	if credits < def.costs[nextLevel] then
 		return false, "credits"
 	end
 	return true, nil
+end
+
+-- Structure levels that open at exactly habitat level `habLevel` (the "what is new" list for a
+-- habitat upgrade), in MissionData.BASE.BUILDS order: { { id = "lab", level = 1 }, ... }. The
+-- habitat's own next level is not listed.
+function BaseBuild.unlocksAt(data: any, habLevel: number): { { id: string, level: number } }
+	local list: { { id: string, level: number } } = {}
+	for _, def in data.BASE.BUILDS do
+		if def.id ~= "habitat" then
+			for level = 1, def.maxLevel do
+				if def.hab[level] == habLevel then
+					table.insert(list, { id = def.id, level = level })
+				end
+			end
+		end
+	end
+	return list
+end
+
+-- The highest level of build `id` allowed by habitat level `habLevel` (0 = none yet).
+function BaseBuild.maxLevelAt(data: any, id: string, habLevel: number): number
+	local def = BaseBuild.buildDef(data, id)
+	if def == nil then
+		return 0
+	end
+	local best = 0
+	for level = 1, def.maxLevel do
+		if def.hab[level] <= habLevel then
+			best = level
+		end
+	end
+	return best
+end
+
+-- The lowest habitat level that allows every structure level in `builds` (at least 1 once anything
+-- stands). For old saves (Stage 8 and before, habitat max 1): raising the habitat to this level keeps
+-- every structure the player already built valid under the habitat tree.
+function BaseBuild.habitatForBuilds(data: any, builds: Levels?): number
+	local need = 0
+	if builds == nil then
+		return 0
+	end
+	for _, def in data.BASE.BUILDS do
+		local level = math.min(levelOf(builds, def.id), def.maxLevel)
+		if level >= 1 then
+			need = math.max(need, if def.id == "habitat" then level else def.hab[level], 1)
+		end
+	end
+	return need
+end
+
+-- Ice the silo holds at the current habitat level (SILO_MAX_BY_HABITAT; SILO_MAX when missing).
+function BaseBuild.siloMax(data: any, effective: Levels?): number
+	local byHab = data.BASE.SILO_MAX_BY_HABITAT
+	local hab = levelOf(effective, "habitat")
+	if byHab and #byHab > 0 then
+		return byHab[math.clamp(hab, 1, #byHab)]
+	end
+	return data.BASE.SILO_MAX
+end
+
+-- Extra credits for aligning the antenna at its current level (ANTENNA_ALIGN_BONUS; 0 without one).
+function BaseBuild.antennaBonus(data: any, effective: Levels?): number
+	local level = levelOf(effective, "antenna")
+	local bonus = data.BASE.ANTENNA_ALIGN_BONUS
+	if level < 1 or bonus == nil then
+		return 0
+	end
+	return bonus[math.clamp(level, 1, #bonus)] or 0
+end
+
+-- Seconds between two fresh foods from the greenhouse at its current level.
+function BaseBuild.foodCooldown(data: any, effective: Levels?): number
+	local food = data.BASE.FOOD
+	local level = levelOf(effective, "greenhouse")
+	local byLevel = food.COOLDOWN_BY_GREENHOUSE
+	if byLevel and level >= 1 then
+		return byLevel[math.clamp(level, 1, #byLevel)]
+	end
+	return food.COOLDOWN_SECONDS
 end
 
 -- XP for building or upgrading something that cost `cost` credits.
@@ -302,7 +402,8 @@ function BaseBuild.drillHoldFactor(data: any, toolLevel: number?): number
 	return up.holdFactor[level]
 end
 
--- Steps needed to build `level` of build `id` (Stage 7: building happens in steps).
+-- Steps needed to build `level` of build `id` (Stage 7: building happens in steps). Stage 9: a
+-- habitat upgrade (a new base level) has its own step count, STAGES_UPGRADE_BY_ID.
 function BaseBuild.stagesFor(data: any, id: string, level: number): number
 	local byId = data.BASE.STAGES_BY_ID[id]
 	if byId and level == 1 then
@@ -310,6 +411,10 @@ function BaseBuild.stagesFor(data: any, id: string, level: number): number
 	end
 	if id == "ship" and byId then
 		return byId
+	end
+	local upgradeById = data.BASE.STAGES_UPGRADE_BY_ID
+	if level > 1 and upgradeById and upgradeById[id] then
+		return upgradeById[id]
 	end
 	return if level <= 1 then data.BASE.STAGES_FIRST else data.BASE.STAGES_UPGRADE
 end

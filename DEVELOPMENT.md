@@ -282,6 +282,38 @@ Tested in Studio (assistant-driven):
 - Holding Space with the jetpack climbed 42 studs in 2.5 s.
 - X auto-run moved 46 studs in 2 s; pressing A stopped it at once.
 
+**About 06:30 – Team feedback, round 6.** The team asked for:
+- An open world guided by main quests (like Palworld) instead of a mission menu at the start.
+- A start menu with three save slots, for single-player or friends worlds.
+- A Clash-of-Clans-style base hierarchy with the habitat as the town hall.
+- An economy calibrated so players cannot unlock everything at once.
+
+**07:45 – Stage 9: open-world progression.**
+- **Start menu:** Continue, New game, Load game (three slots showing base level, player level, credits and date), Settings and Credits (team, data sources, AI disclosure). Then Solo or With friends.
+  - Saves use Roblox DataStores, which have no cost.
+  - Solo uses a reserved server in the published game.
+  - The character spawns only after a slot loads.
+- **Main quests:** 21 main quests and 9 side quests guide every mechanic in order. The existing training and story missions are quest steps, started from the mission console in the habitat. The quest tracker and C.A.R.L.'s beam follow the current step.
+- **Base hierarchy:** the habitat is the base level, 1 to 5:
+  - 1, landing camp: what one mission day needs;
+  - 2, science outpost: lab, first drill, second greenhouse dome;
+  - 3, mining base: cargo robot, moon buggy, bigger dish;
+  - 4, explorer base: ice hauler, laser link, landing pad;
+  - 5, spaceport: the ship.
+  - Each habitat level looks different, and each structure level states what it improves.
+- **Economy:** a new Lune simulator of a typical kid (tests/economy.luau) asserts the pacing:
+  - base level 2 about 7 min, lab 16, base level 3 34, garage 44, base level 4 92, base level 5 179, ship 254;
+  - income never jumps more than 2.5x between 10-minute windows;
+  - the silo stays a helper, never an idle farm.
+- **Debug keys:** F3 now builds in base-level order.
+
+Tested in Studio (assistant-driven):
+- The start menu, then New game, slot 1, Solo.
+- Spawn in the lander.
+- The first main quest shown in the tracker, with no mission menu.
+- F3 builds following the base tree.
+- The mission console prompt active in the habitat.
+
 ## Decisions
 
 | Decision | Who decided | Why |
@@ -308,13 +340,16 @@ Tested in Studio (assistant-driven):
 | Start in the lander, build in steps, tools needed for tasks | Team | Longer, more hands-on game; teaches what each tool is for. |
 | Remove the Base menu; skills only at the Lab | Team | Players upgraded everything while standing still. |
 | Real south-pole missions as exploration sites | Team, on AI recommendation | Real references kids can look up. |
+| Open world with main quests; three save slots; habitat as base level | Team | Progress as you play, keep progress, coherent growth. |
+| Economy paced by a simulated player | Team, on AI recommendation | Stops players from unlocking everything in minutes. |
 | Roblox Studio as the engine | Team | Team skills; Roblox was used in earlier Space Apps editions. |
 
 ## Testing evidence
 
 | What | How | Result |
 | :--- | :--- | :--- |
-| Mission balance | `lune run tests/balance` | 643 checks pass. |
+| Mission balance | `lune run tests/balance` | 671 checks pass. |
+| Economy pacing | `lune run tests/economy` | 221 checks pass (simulated kid timeline). |
 | Missions and the build-and-grow rules | `lune run tests/missions`, `lune run tests/base` | 609 and 307 checks pass. |
 | Text length and translations | `lune run tests/localization` | All keys in en and es, at most 8 words. |
 | Full mission in Roblox | Studio playtest driven by the assistant | 7 days, report reached, no script errors. |

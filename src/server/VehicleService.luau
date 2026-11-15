@@ -16,6 +16,8 @@
 --     (CrewService) up to VEHICLES.hauler.cargo, shown on the bed. Near the habitat's water machine
 --     (UNLOAD_RANGE of the world's processor prompt) "prompt.unload_ice" hands them all to
 --     MissionService.deliverIce(player, count).
+--   * Stage 9: onDrive tells listeners (QuestService "vehicle" steps) when a player sits in a driver
+--     seat; nearGarage says whether a player stands in the garage (its "visit" step).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -87,6 +89,8 @@ local folder: Instance? = nil
 local messageRemote: RemoteEvent? = nil
 local processorAt: Vector3? = nil
 local slots: { Slot } = {}
+local driveListeners: { (player: Player, vehicleId: string) -> () } = {} -- Stage 9
+local GARAGE_VISIT_RADIUS = 30 -- studs (flat) from a bay that count as "in the garage"
 
 ----------------------------------------------------------------------------------------------------
 -- Helpers
@@ -494,6 +498,15 @@ local function spawnRig(slot: Slot)
 			end
 			slot.lastUsed = os.clock()
 			updateOwner(rig)
+			local driver = if seat == rig.seat then playerIn(seat) else nil
+			if driver then
+				for _, listener in driveListeners do
+					local ok, err = pcall(listener, driver, slot.def.id)
+					if not ok then
+						warn(`[SpaceBaseOdyssey] drive listener failed: {err}`)
+					end
+				end
+			end
 		end)
 	end
 end
@@ -767,6 +780,28 @@ function VehicleService.unseat(player: Player)
 		seatWeld:Destroy()
 	end
 	humanoid.Sit = false
+end
+
+-- Stage 9: called (with the player and the vehicle id) when a player sits in a vehicle's driver seat.
+function VehicleService.onDrive(listener: (player: Player, vehicleId: string) -> ())
+	table.insert(driveListeners, listener)
+end
+
+-- Stage 9: true when the garage stands and the player is in it (near one of its bays).
+function VehicleService.nearGarage(player: Player): boolean
+	if levelOf(builds(), "garage") < 1 then
+		return false
+	end
+	local root = rootOf(player)
+	if root == nil then
+		return false
+	end
+	for _, slot in slots do
+		if flatDistance(root.Position, slot.bay.Position) <= GARAGE_VISIT_RADIUS then
+			return true
+		end
+	end
+	return false
 end
 
 -- The vehicle the player is sitting in (driver or passenger), or nil.

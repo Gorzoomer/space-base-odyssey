@@ -129,42 +129,76 @@ MissionData.STORM = table.freeze({
 	FLARE_AT_SECONDS = 40, -- seconds into the shift when the flare is spotted
 })
 
--- Build and grow the base (GAME, Stages 6-8). A new player lands in the arrival lander (the spawn)
+-- Build and grow the base (GAME, Stages 6-9). A new player lands in the arrival lander (the spawn)
 -- and builds the whole base: the habitat first, then everything else. Credits come from useful work
--- (ice, repairs, days finished, data sent, exploring); experience (XP) raises the player level, which
--- unlocks bigger builds and gives skill points. Pure numbers; the rules live in BaseBuild.luau.
+-- (ice, repairs, days finished, data sent, exploring, quests); experience (XP) raises the player
+-- level, which gives skill points and opens skills, gear and pets. Pure numbers; the rules live in
+-- BaseBuild.luau.
+--
+-- Stage 9 (team feedback): the HABITAT is the "town hall". Its level (1 to 5) is the BASE LEVEL, and
+-- every level of every structure needs a minimum habitat level (hab[i] for level i). The player level
+-- no longer gates structures. The tree below is the design; tests/base and tests/economy check it.
+--
+--   Habitat | Name             | Opens (new structure levels)                     | What changes vs. before
+--   --------+------------------+--------------------------------------------------+---------------------------------------------
+--   1       | Landing camp     | solar 1-3, greenhouse 1, antenna 1, shelter 1    | everything one mission day needs: power
+--           | (free)           |                                                  | cells, food, a radio link, a storm shelter
+--   2       | Science outpost  | lab, drill_1 L1 (+ the ice silo), greenhouse 2   | skills, tool upgrades, gear and pets; the
+--           |                  |                                                  | first automatic ice; dome 2 grows food faster
+--   3       | Mining base      | drill_1 L2, drill_2 L1, cargo_bot, garage 1,     | more ice per minute, the robot empties the
+--           |                  | antenna 2                                        | silo for you, the moon buggy, bigger dish
+--   4       | Explorer base    | drill_1 L3, drill_2 L2, drill_3 L1, garage 2,    | the ice hauler (4 cores a trip), laser link,
+--           |                  | antenna 3, landing_pad                           | a pad for ships; the silo grows again
+--   5       | Moon spaceport   | drill_2 L3, drill_3 L2-3, ship                   | the Mars ship (the long goal); biggest silo
+--
+-- Per-level effects (data below, read through BaseBuild):
+--   habitat  : the base level itself (gates the table above) and the silo size, SILO_MAX_BY_HABITAT.
+--   solar    : level = solar arrays standing = power cells on the board (POWER.ARRAYS).
+--   greenhouse: 2 = second dome; fresh food grows faster, FOOD.COOLDOWN_BY_GREENHOUSE.
+--   antenna  : 2 = bigger dish, 3 = laser link; a wider link sends more data, so aligning it pays
+--              ANTENNA_ALIGN_BONUS extra credits (by antenna level).
+--   drill_n  : ice per minute into the silo, DRILL_ICE_PER_MINUTE (by drill level).
+--   cargo_bot: empties the silo for its owner every CARGO_BOT_SECONDS.
+--   garage   : 1 = moon buggy bay, 2 = ice hauler bay (VEHICLES).
+--   lab, shelter, landing_pad, ship: one level each (lab = skills/gear/pets; pad = needed for the ship).
 -- Build ids: "habitat" (the main module; the lander is the only shelter until it stands), "solar"
 -- (level = solar arrays standing, 1 to POWER.ARRAYS), "greenhouse" (2 = second dome), "lab" (skills,
 -- tool upgrades, pets), "antenna" (2 = bigger dish, 3 = laser link), "shelter", "drill_1".."drill_3"
 -- (automatic ice drills; each needs one more solar array: machines need electricity), "cargo_bot"
 -- (carries silo ice for you), "garage" (1 = moon buggy bay, 2 = ice hauler bay), "landing_pad",
 -- "ship" (a ship for the future trip to Mars: decoration and the long-term goal).
--- costs[i] / minLevel[i] = credits and player level for level i of that build.
+-- costs[i] / hab[i] = credits and habitat level (base level) needed for level i of that build.
+-- requires = other builds that must stand (any level of this build). Habitat level i needs habitat i-1.
+-- Costs are tuned with tests/economy (a simulated kid player): habitat 2 in about 7 minutes, the Lab
+-- in about 15, habitat 3 in about 35, habitat 4 in about 90, habitat 5 in about 3 hours and the ship
+-- in about 4 hours of play, with income growing step by step (never a jump that skips a tier).
 -- Building happens in STEPS (Stage 7, team feedback: not all at once). Paying starts the level; each
 -- step needs one parts crate carried from the lander cargo bay to the build pad, then the player
 -- holds "Assemble" with the wrench tool in hand. The structure rises a bit with every step.
 MissionData.BASE = table.freeze({
 	START_CREDITS = 25,
 	BUILDS = table.freeze({
-		table.freeze({ id = "habitat", icon = "home", maxLevel = 1, costs = table.freeze({ 0 }), minLevel = table.freeze({ 1 }), requires = table.freeze({}) }),
-		table.freeze({ id = "solar", icon = "solar", maxLevel = 3, costs = table.freeze({ 0, 30, 60 }), minLevel = table.freeze({ 1, 2, 3 }), requires = table.freeze({ habitat = 1 }) }),
-		table.freeze({ id = "greenhouse", icon = "plant", maxLevel = 2, costs = table.freeze({ 15, 120 }), minLevel = table.freeze({ 1, 4 }), requires = table.freeze({ solar = 1 }) }),
-		table.freeze({ id = "lab", icon = "flask", maxLevel = 1, costs = table.freeze({ 40 }), minLevel = table.freeze({ 2 }), requires = table.freeze({ habitat = 1, solar = 1 }) }),
-		table.freeze({ id = "antenna", icon = "antenna", maxLevel = 3, costs = table.freeze({ 20, 90, 200 }), minLevel = table.freeze({ 1, 4, 6 }), requires = table.freeze({ solar = 1 }) }),
-		table.freeze({ id = "shelter", icon = "shield", maxLevel = 1, costs = table.freeze({ 40 }), minLevel = table.freeze({ 1 }), requires = table.freeze({ antenna = 1 }) }),
-		table.freeze({ id = "drill_1", icon = "drill", maxLevel = 3, costs = table.freeze({ 60, 120, 240 }), minLevel = table.freeze({ 2, 3, 5 }), requires = table.freeze({ shelter = 1, solar = 1 }) }),
-		table.freeze({ id = "drill_2", icon = "drill", maxLevel = 3, costs = table.freeze({ 150, 250, 400 }), minLevel = table.freeze({ 4, 5, 7 }), requires = table.freeze({ drill_1 = 1, solar = 2 }) }),
-		table.freeze({ id = "drill_3", icon = "drill", maxLevel = 3, costs = table.freeze({ 300, 450, 650 }), minLevel = table.freeze({ 6, 7, 9 }), requires = table.freeze({ drill_2 = 1, solar = 3 }) }),
-		table.freeze({ id = "cargo_bot", icon = "robot", maxLevel = 1, costs = table.freeze({ 250 }), minLevel = table.freeze({ 5 }), requires = table.freeze({ drill_1 = 1 }) }),
-		table.freeze({ id = "garage", icon = "car", maxLevel = 2, costs = table.freeze({ 120, 220 }), minLevel = table.freeze({ 3, 5 }), requires = table.freeze({ lab = 1, shelter = 1 }) }),
-		table.freeze({ id = "landing_pad", icon = "flag", maxLevel = 1, costs = table.freeze({ 300 }), minLevel = table.freeze({ 6 }), requires = table.freeze({ garage = 1 }) }),
-		table.freeze({ id = "ship", icon = "rocket", maxLevel = 1, costs = table.freeze({ 800 }), minLevel = table.freeze({ 8 }), requires = table.freeze({ landing_pad = 1 }) }),
+		table.freeze({ id = "habitat", icon = "home", maxLevel = 5, costs = table.freeze({ 0, 15, 60, 300, 800 }), hab = table.freeze({ 0, 1, 2, 3, 4 }), requires = table.freeze({}) }),
+		table.freeze({ id = "solar", icon = "solar", maxLevel = 3, costs = table.freeze({ 0, 25, 35 }), hab = table.freeze({ 1, 1, 1 }), requires = table.freeze({ habitat = 1 }) }),
+		table.freeze({ id = "greenhouse", icon = "plant", maxLevel = 2, costs = table.freeze({ 10, 50 }), hab = table.freeze({ 1, 2 }), requires = table.freeze({ solar = 1 }) }),
+		table.freeze({ id = "lab", icon = "flask", maxLevel = 1, costs = table.freeze({ 30 }), hab = table.freeze({ 2 }), requires = table.freeze({ habitat = 1, solar = 1 }) }),
+		table.freeze({ id = "antenna", icon = "antenna", maxLevel = 3, costs = table.freeze({ 10, 90, 200 }), hab = table.freeze({ 1, 3, 4 }), requires = table.freeze({ solar = 1 }) }),
+		table.freeze({ id = "shelter", icon = "shield", maxLevel = 1, costs = table.freeze({ 15 }), hab = table.freeze({ 1 }), requires = table.freeze({ antenna = 1 }) }),
+		table.freeze({ id = "drill_1", icon = "drill", maxLevel = 3, costs = table.freeze({ 40, 100, 220 }), hab = table.freeze({ 2, 3, 4 }), requires = table.freeze({ shelter = 1, solar = 1 }) }),
+		table.freeze({ id = "drill_2", icon = "drill", maxLevel = 3, costs = table.freeze({ 120, 200, 350 }), hab = table.freeze({ 3, 4, 5 }), requires = table.freeze({ drill_1 = 1, solar = 2 }) }),
+		table.freeze({ id = "drill_3", icon = "drill", maxLevel = 3, costs = table.freeze({ 250, 400, 500 }), hab = table.freeze({ 4, 5, 5 }), requires = table.freeze({ drill_2 = 1, solar = 3 }) }),
+		table.freeze({ id = "cargo_bot", icon = "robot", maxLevel = 1, costs = table.freeze({ 140 }), hab = table.freeze({ 3 }), requires = table.freeze({ drill_1 = 1 }) }),
+		table.freeze({ id = "garage", icon = "car", maxLevel = 2, costs = table.freeze({ 90, 220 }), hab = table.freeze({ 3, 4 }), requires = table.freeze({ lab = 1, shelter = 1 }) }),
+		table.freeze({ id = "landing_pad", icon = "flag", maxLevel = 1, costs = table.freeze({ 300 }), hab = table.freeze({ 4 }), requires = table.freeze({ garage = 1, antenna = 2 }) }),
+		table.freeze({ id = "ship", icon = "rocket", maxLevel = 1, costs = table.freeze({ 1000 }), hab = table.freeze({ 5 }), requires = table.freeze({ landing_pad = 1 }) }),
 	}),
 	-- Steps per build level: STAGES_FIRST for a new structure, STAGES_UPGRADE for an upgrade, unless
-	-- STAGES_BY_ID says otherwise (the habitat and first panels are quick; the ship is a big project).
+	-- STAGES_BY_ID (level 1; the ship: every level) or STAGES_UPGRADE_BY_ID (levels 2+) say otherwise:
+	-- the habitat and first panels are quick, a habitat upgrade (a new base level) and the ship are big.
 	STAGES_FIRST = 3,
 	STAGES_UPGRADE = 2,
 	STAGES_BY_ID = table.freeze({ habitat = 2, solar = 2, ship = 6 }),
+	STAGES_UPGRADE_BY_ID = table.freeze({ habitat = 4 }),
 	ASSEMBLE_HOLD_SECONDS = 2.5,
 	-- Rewards: credits and XP for each kind of work (counted for the player who did it).
 	REWARDS = table.freeze({
@@ -185,15 +219,25 @@ MissionData.BASE = table.freeze({
 	}),
 	BUILD_XP_BASE = 10, -- XP for finishing any build level ...
 	BUILD_XP_PER_CREDIT = 0.25, -- ... plus a quarter of its cost (rounded down)
-	-- Automatic drills fill the ice silo while at least one player is in the server.
-	DRILL_ICE_PER_MINUTE = table.freeze({ 2, 4, 7 }), -- per drill, by drill level
-	SILO_MAX = 40,
-	CREDITS_PER_SILO_ICE = 2,
+	-- Automatic drills fill the ice silo while at least one player is in the server. Silo ice pays
+	-- less than ice carried by hand (REWARDS.ice_delivered): the drills help, but playing matters
+	-- most, so waiting in the server never unlocks the base (tests/economy caps it per base level).
+	DRILL_ICE_PER_MINUTE = table.freeze({ 1, 2, 3 }), -- per drill, by drill level
+	-- The silo holds SILO_MAX_BY_HABITAT[habitat level] ice (BaseBuild.siloMax); a bigger base has a
+	-- bigger silo. SILO_MAX is the biggest one (habitat 5), kept for older readers.
+	SILO_MAX = 60,
+	SILO_MAX_BY_HABITAT = table.freeze({ 20, 20, 30, 45, 60 }),
+	CREDITS_PER_SILO_ICE = 1,
 	XP_PER_SILO_ICE = 1,
-	CARGO_BOT_SECONDS = 30, -- the cargo robot empties the silo for its owner this often
+	CARGO_BOT_SECONDS = 60, -- the cargo robot empties the silo for its owner this often
+	-- Extra credits on top of REWARDS.antenna_aligned, by antenna level (BaseBuild.antennaBonus): the
+	-- bigger dish and the laser link send more data each time they are linked.
+	ANTENNA_ALIGN_BONUS = table.freeze({ 0, 3, 6 }),
 	-- Player level i needs LEVEL_XP[i] total XP. Each level gives one skill point: at the top
 	-- level a player has exactly enough points for every skill at its top level (team playtest).
-	LEVEL_XP = table.freeze({ 0, 40, 100, 180, 280, 400, 550, 730, 940, 1200, 1500, 1850, 2250, 2700, 3200 }),
+	-- Stage 9: the upper levels need more XP, so the top level comes after about 2 hours, with the
+	-- base growing alongside (tests/economy).
+	LEVEL_XP = table.freeze({ 0, 40, 100, 180, 280, 400, 550, 750, 1000, 1350, 1800, 2400, 3100, 3900, 4800 }),
 	-- Skills (learned at the Lab): each level costs one skill point and needs the player level in minLevel.
 	-- Stage 8 (team feedback): the jump skill became the air boots (GEAR); three new skills took its place.
 	-- speed: faster walking/running; tank: bigger suit air tank; credits: more credits from every reward;
@@ -220,7 +264,7 @@ MissionData.BASE = table.freeze({
 	-- make it last longer). costs[i] / minLevel[i] for gear level i (level 1 = buying it).
 	GEAR = table.freeze({
 		table.freeze({ id = "boots", icon = "boots", key = "B", maxLevel = 3, costs = table.freeze({ 60, 100, 160 }), minLevel = table.freeze({ 3, 5, 7 }), use = table.freeze({ 25, 18, 12 }) }),
-		table.freeze({ id = "jetpack", icon = "jetpack", key = "J", maxLevel = 3, costs = table.freeze({ 200, 260, 340 }), minLevel = table.freeze({ 6, 8, 10 }), use = table.freeze({ 30, 22, 15 }) }),
+		table.freeze({ id = "jetpack", icon = "jetpack", key = "J", maxLevel = 3, costs = table.freeze({ 200, 300, 400 }), minLevel = table.freeze({ 8, 10, 12 }), use = table.freeze({ 30, 22, 15 }) }),
 	}),
 	GAS = table.freeze({
 		MAX = 100,
@@ -242,10 +286,12 @@ MissionData.BASE = table.freeze({
 	}),
 	-- Tool upgrades bought at the Lab with credits (level 1 comes with the tool).
 	TOOL_UPGRADES = table.freeze({
-		drill = table.freeze({ maxLevel = 3, costs = table.freeze({ 0, 80, 160 }), minLevel = table.freeze({ 1, 3, 5 }), holdFactor = table.freeze({ 1, 0.7, 0.5 }) }),
+		drill = table.freeze({ maxLevel = 3, costs = table.freeze({ 0, 60, 150 }), minLevel = table.freeze({ 1, 3, 5 }), holdFactor = table.freeze({ 1, 0.7, 0.5 }) }),
 	}),
 	-- Fresh food from the greenhouse: pick one every COOLDOWN_SECONDS, eat it for a short speed boost.
-	FOOD = table.freeze({ COOLDOWN_SECONDS = 90, BOOST_SECONDS = 20, BOOST_SPEED = 4 }),
+	-- Stage 9: COOLDOWN_BY_GREENHOUSE[greenhouse level] (BaseBuild.foodCooldown): the second dome grows
+	-- more plants, so food is ready sooner. Plants still take time to grow.
+	FOOD = table.freeze({ COOLDOWN_SECONDS = 90, COOLDOWN_BY_GREENHOUSE = table.freeze({ 90, 60 }), BOOST_SECONDS = 20, BOOST_SPEED = 4 }),
 	-- Meteorite impacts (random event): a flash, a fresh small crater to scan with the tablet.
 	METEOR = table.freeze({ MIN_SECONDS = 240, MAX_SECONDS = 420, LIFETIME_SECONDS = 300, RING_MIN = 120, RING_MAX = 420 }),
 	-- Vehicles from the garage. cargo = ice cores the hauler carries.
@@ -259,7 +305,7 @@ MissionData.BASE = table.freeze({
 		table.freeze({ id = "laika", collectible = "laika" }),
 		table.freeze({ id = "cheese", collectible = "cheese" }),
 		table.freeze({ id = "rabbit", cost = 120, minLevel = 3 }),
-		table.freeze({ id = "monkey", cost = 200, minLevel = 5 }),
+		table.freeze({ id = "monkey", cost = 200, minLevel = 7 }),
 	}),
 })
 

@@ -21,6 +21,20 @@
 -- part; "clean a panel" is always the cleaning prompt of a DUSTY array, never a clean row); with no
 -- such objective during a shift, the most useful task (ice to deliver, leak, dusty arrays, antenna,
 -- ice). In base mode (Briefing, no mission running), in this order:
+--   0) right after carried ice (rule 1), Stage 9: the CURRENT QUEST STEP (BaseState.quest, read
+--      through Objectives.currentQuest; the step's type comes from src/shared/Quests.luau):
+--        build    the habitat first when the base level is too low, then a missing required build,
+--                 then the build's own step logic (pad or crate depot, as in 2); a build the player
+--                 cannot pay for yet: earn credits (the silo when it has ice, else the crater ice);
+--        mission  the mission console in the habitat ("MissionConsolePrompt"; else the Console
+--                 marker);
+--        ice      the crater ice (the water machine while carrying ice); silo: the silo with ice;
+--        clean    a DUSTY array; meteor: a fresh crater; scan: the nearest unscanned site (any range);
+--        skill / gear / tool_upgrade  the Lab prompt ("LabPrompt", else the lab pad);
+--        eat      the greenhouse food prompt; vehicle: a vehicle prompt (else the garage pad);
+--        visit    that place (lab, greenhouse, crater ice site, garage);
+--        collectible  nothing (secrets are found by exploring).
+--      A step with nowhere to go now falls through to the rules below.
 --   1) carried ice: the water machine;
 --   2) a build being built in steps (Stage 7: the pad attribute SBO_Phase "crate" | "assemble",
 --      else BaseState.inProgress): the nearest step needing assembly (its pad); a step needing a
@@ -51,9 +65,11 @@ local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local MissionData = require(Shared:WaitForChild("MissionData"))
+local BaseBuild = require(Shared:WaitForChild("BaseBuild"))
 local Types = require(Shared:WaitForChild("Types"))
 
 local Store = require(script.Parent.Store)
+local Objectives = require(script.Parent.Objectives)
 local Theme = require(Shared:WaitForChild("Theme"))
 local Icons = require(Shared:WaitForChild("Icons"))
 
@@ -424,6 +440,20 @@ local function affordablePad(): BasePart?
 		if type(cost) ~= "number" or pad:GetAttribute("SBO_Locked") == true then
 			continue
 		end
+		-- Stage 9: the base level (habitat) is too low for this structure's next level.
+		local habNeed = pad:GetAttribute("SBO_HabNeed")
+		if type(habNeed) ~= "number" then
+			local level = pad:GetAttribute("SBO_Level")
+			local buildId = pad:GetAttribute("BuildId")
+			habNeed = BaseBuild.habitatNeeded(
+				MissionData,
+				if type(buildId) == "string" then buildId else pad.Name,
+				(if type(level) == "number" then level else 0) + 1
+			)
+		end
+		if type(habNeed) == "number" and Store.buildLevel("habitat") < habNeed then
+			continue
+		end
 		-- A build already under way is not "next" (the step guidance handles it).
 		local phase = pad:GetAttribute("SBO_Phase")
 		if phase == "crate" or phase == "assemble" then
@@ -665,8 +695,9 @@ local function poiParts(): { BasePart }
 	return found
 end
 
--- The nearest exploration site within POI_GUIDE_RANGE this player has not scanned, or nil.
-local function poiTarget(needTablet: boolean): BasePart?
+-- The nearest exploration site within `range` studs (default POI_GUIDE_RANGE) this player has not
+-- scanned, or nil.
+local function poiTarget(needTablet: boolean, range: number?): BasePart?
 	local root = rootPart()
 	if not root or (needTablet and not hasTool("tablet")) then
 		return nil
@@ -674,7 +705,7 @@ local function poiTarget(needTablet: boolean): BasePart?
 	local state = baseState()
 	local scanned: { [string]: any } = if state and type(state.scanned) == "table" then state.scanned else {}
 	local best: BasePart? = nil
-	local bestDistance = POI_GUIDE_RANGE
+	local bestDistance = range or POI_GUIDE_RANGE
 	for _, part in poiParts() do
 		local id = part:GetAttribute("PoiId")
 		if part.Parent == nil or type(id) ~= "string" then
@@ -864,14 +895,212 @@ local function usefulTaskTarget(): Instance?
 	return Store.findMarker("IceSite")
 end
 
--- Base mode (Briefing): carried ice, build steps, a fresh meteorite crater, the next build the
--- player can pay for, a nearby unscanned site, else ice.
+-- Stage 9 quests ---------------------------------------------------------------------------------
+
+local LAB_PROMPT_NAME = "LabPrompt"
+local CONSOLE_PROMPT_NAME = "MissionConsolePrompt"
+local FOOD_PROMPT_KEYS: { [string]: boolean } = { ["prompt.pick_food"] = true }
+local VEHICLE_PROMPT_KEYS: { [string]: boolean } = { ["prompt.take_vehicle"] = true }
+local DRILL_PROMPT_KEYS: { [string]: boolean } = { ["prompt.drill"] = true }
+local QUEST_BUILD_DEPTH = 3 -- habitat -> required build -> build: never deeper
+
+-- The point of the nearest enabled prompt with this Name, or nil.
+local function namedPromptPoint(name: string): Instance?
+	local root = rootPart()
+	local best: Instance? = nil
+	local bestDistance = math.huge
+	for prompt in knownPrompts do
+		if prompt.Parent == nil or prompt.Name ~= name or not prompt.Enabled then
+			continue
+		end
+		local point = promptPoint(prompt)
+		local position = targetPosition(point)
+		if point and position then
+			local distance = if root then (position - root.Position).Magnitude else 0
+			if distance < bestDistance then
+				best = point
+				bestDistance = distance
+			end
+		end
+	end
+	return best
+end
+
+local function credits(): number
+	local state = baseState()
+	return if state and type(state.credits) == "number" then state.credits else 0
+end
+
+-- Builds standing in this server (BaseState.builds; empty before it arrives).
+local function effectiveBuilds(): { [string]: number }
+	local state = baseState()
+	return if state and type(state.builds) == "table" then state.builds else {}
+end
+
+-- The crater ice (the water machine while carrying ice).
+local function iceTarget(): Instance?
+	if carryingIce() then
+		return Store.findMarker("Processor")
+	end
+	return Store.findMarker("IceSite") or nearestPromptPoint(DRILL_PROMPT_KEYS)
+end
+
+-- Not enough credits: the silo when it has ice to claim, else the crater ice.
+local function earnTarget(): Instance?
+	local state = baseState()
+	local siloIce = if state and type(state.siloIce) == "number" then state.siloIce else 0
+	if siloIce >= 1 and not carryingIce() then
+		local silo = siloPart()
+		if silo then
+			return silo
+		end
+	end
+	return iceTarget()
+end
+
+local function labTarget(): Instance?
+	return namedPromptPoint(LAB_PROMPT_NAME) or buildPad("lab")
+end
+
+-- Where to go to build `id` up to `level`: the habitat first when the base level is too low, then a
+-- missing required build, then the build's own steps; short of credits: earn them.
+local function questBuildTarget(id: string, level: number, depth: number): Instance?
+	local current = Store.buildLevel(id)
+	if current >= level or depth > QUEST_BUILD_DEPTH then
+		return nil
+	end
+	local pad = buildPad(id)
+	if stepNeed(id, pad) ~= nil then
+		return buildStepTarget(id) -- already under way: the crate or the wrench
+	end
+	local nextLevel = current + 1
+	if id ~= "habitat" then
+		local habNeed = BaseBuild.habitatNeeded(MissionData, id, nextLevel)
+		if habNeed ~= nil and BaseBuild.habitatLevel(effectiveBuilds()) < habNeed then
+			return questBuildTarget("habitat", habNeed, depth + 1)
+		end
+	end
+	local def = BaseBuild.buildDef(MissionData, id)
+	if def then
+		for needId, needLevel in def.requires do
+			if Store.buildLevel(needId) < needLevel then
+				return questBuildTarget(needId, needLevel, depth + 1)
+			end
+		end
+	end
+	local cost = BaseBuild.nextCost(MissionData, effectiveBuilds(), id)
+	if cost ~= nil and credits() < cost then
+		return earnTarget()
+	end
+	return buildStepTarget(id)
+end
+
+-- Where one quest step happens now, or nil (nowhere to go yet: the other rules lead on).
+local function questStepTarget(step: Objectives.QuestStep): Instance?
+	local def = step.def
+	if def == nil or step.done then
+		return nil
+	end
+	local kind = def.type
+	if kind == "build" then
+		return if def.id then questBuildTarget(def.id, def.level or 1, 0) else nil
+	elseif kind == "mission" then
+		if Store.isMissionSelectOpen() then
+			return nil -- choosing a mission right now
+		end
+		return namedPromptPoint(CONSOLE_PROMPT_NAME) or Store.findMarker("Console") or Store.findMarker("HabitatDoor")
+	elseif kind == "ice" then
+		return iceTarget()
+	elseif kind == "silo" then
+		local state = baseState()
+		local siloIce = if state and type(state.siloIce) == "number" then state.siloIce else 0
+		return if siloIce >= 1 then siloPart() else nil
+	elseif kind == "clean" then
+		return dustyArrayTarget()
+	elseif kind == "meteor" then
+		return impactTarget(true)
+	elseif kind == "scan" then
+		return poiTarget(true, math.huge)
+	elseif kind == "skill" then
+		local state = baseState()
+		local points = if state and type(state.skillPoints) == "number" then state.skillPoints else 0
+		return if points >= 1 then labTarget() else nil
+	elseif kind == "tool_upgrade" then
+		local toolId = def.id or "drill"
+		local cost = BaseBuild.toolUpgradeCost(MissionData, toolId, Store.toolLevel(toolId))
+		if cost ~= nil and credits() < cost then
+			return earnTarget()
+		end
+		return labTarget()
+	elseif kind == "gear" then
+		local gear = if def.id then BaseBuild.gearDef(MissionData, def.id) else nil
+		local state = baseState()
+		local playerLevel = if state and type(state.level) == "number" then state.level else 1
+		if gear and playerLevel < gear.minLevel[1] then
+			return nil -- not yet: the player level grows with everything else
+		end
+		if gear and credits() < gear.costs[1] then
+			return earnTarget()
+		end
+		return labTarget()
+	elseif kind == "eat" then
+		return nearestPromptPoint(FOOD_PROMPT_KEYS)
+	elseif kind == "vehicle" then
+		if seatedIn() ~= nil then
+			return nil
+		end
+		return nearestPromptPoint(VEHICLE_PROMPT_KEYS) or buildPad("garage")
+	elseif kind == "visit" then
+		local place = def.place
+		if place == "lab" then
+			return labTarget()
+		elseif place == "greenhouse" then
+			return buildPad("greenhouse") or nearestPromptPoint(FOOD_PROMPT_KEYS)
+		elseif place == "crater" then
+			return Store.findMarker("IceSite") or nearestPromptPoint(DRILL_PROMPT_KEYS)
+		elseif place == "garage" then
+			return buildPad("garage") or nearestPromptPoint(VEHICLE_PROMPT_KEYS)
+		end
+	end
+	return nil -- collectible: secrets are found by exploring
+end
+
+-- The current quest step's place (base mode), or nil.
+local function questTarget(): Instance?
+	local quest = Objectives.currentQuest()
+	local step = Objectives.currentStep(quest)
+	if step then
+		local target = questStepTarget(step)
+		if target then
+			return target
+		end
+	end
+	-- The current step has nowhere to go now: try the quest's other open steps.
+	if quest then
+		for _, other in quest.steps do
+			if other ~= step and not other.done then
+				local target = questStepTarget(other)
+				if target then
+					return target
+				end
+			end
+		end
+	end
+	return nil
+end
+
+-- Base mode (Briefing): carried ice, the current quest step, build steps, a fresh meteorite crater,
+-- the next build the player can pay for, a nearby unscanned site, else ice.
 local function baseModeTarget(): Instance?
 	if carryingIce() then
 		local processor = Store.findMarker("Processor")
 		if processor then
 			return processor
 		end
+	end
+	local quest = questTarget()
+	if quest then
+		return quest
 	end
 	local step = stepTarget()
 	if step then

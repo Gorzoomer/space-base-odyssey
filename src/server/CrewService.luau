@@ -13,6 +13,8 @@
 -- whole round room, the greenhouse tube and domes, the lab and its tube, the lander), so suits refill
 -- and food can be eaten anywhere in the base. The player attribute SBO_Inside mirrors "inside" for the
 -- client (gear gas refills there). The regolith shelter stays a storm shelter, as before.
+-- Stage 9: onRoomChanged tells listeners (QuestService "visit" steps) when a player walks into another
+-- room ("lab", "greenhouse_a", ... the inside zone ids, or "shelter"; nil = outside or no character).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -76,6 +78,10 @@ local roamDrain = false -- suits drain outside between shifts too (Briefing / Pl
 local refillCount = 0
 local started = false
 local zoneListeners: { ZoneListener } = {}
+
+-- Stage 9: called when the room a player stands in changes (room = inside zone id, "shelter" or nil).
+export type RoomListener = (player: Player, room: string?, oldRoom: string?) -> ()
+local roomListeners: { RoomListener } = {}
 
 local function insideBox(zone: BasePart?, position: Vector3): boolean
 	if zone == nil then
@@ -309,7 +315,25 @@ local function notifyZone(player: Player, inside: boolean, sheltered: boolean, w
 	end
 end
 
+local function notifyRoom(player: Player, room: string?, oldRoom: string?)
+	for _, listener in roomListeners do
+		local ok, err = pcall(listener, player, room, oldRoom)
+		if not ok then
+			warn(`[SpaceBaseOdyssey] room listener failed: {err}`)
+		end
+	end
+end
+
+-- The room as room listeners see it: the inside zone id, "shelter", or nil outside.
+local function roomKey(crew: Crew): string?
+	if crew.sheltered then
+		return "shelter"
+	end
+	return crew.room
+end
+
 local function updateCrew(player: Player, crew: Crew, dt: number, built: BuiltNow)
+	local oldRoom = roomKey(crew)
 	local root = getRoot(player)
 	if root == nil then
 		-- No living character: no reading. The next spawn starts a fresh measurement, so dying or
@@ -321,6 +345,9 @@ local function updateCrew(player: Player, crew: Crew, dt: number, built: BuiltNo
 		crew.room = nil
 		crew.measured = false
 		setInsideAttribute(player, false)
+		if oldRoom ~= nil then
+			notifyRoom(player, nil, oldRoom)
+		end
 		return
 	end
 
@@ -340,6 +367,10 @@ local function updateCrew(player: Player, crew: Crew, dt: number, built: BuiltNo
 	crew.inLander = room == LANDER_ROOM
 	crew.inside = crew.sheltered or room ~= nil
 	setInsideAttribute(player, crew.inside)
+	local newRoom = roomKey(crew)
+	if newRoom ~= oldRoom then
+		notifyRoom(player, newRoom, oldRoom)
+	end
 	if not crew.measured then
 		crew.measured = true
 	elseif wasInside ~= crew.inside or wasSheltered ~= crew.sheltered then
@@ -617,6 +648,13 @@ end
 -- are counted from these (MissionService).
 function CrewService.onZoneChanged(listener: ZoneListener)
 	table.insert(zoneListeners, listener)
+end
+
+-- Stage 9: room changes (QuestService counts "visit" steps from them). The listener gets the new room
+-- (an inside zone id such as "lab", "lab_tube", "greenhouse_a", "greenhouse_b", "greenhouse_tube",
+-- "hub", "lander"; "shelter"; nil = outside or no character) and the room before.
+function CrewService.onRoomChanged(listener: RoomListener)
+	table.insert(roomListeners, listener)
 end
 
 -- Players whose living character is inside the regolith shelter right now.

@@ -4,7 +4,8 @@
 -- Builds happen only at the build pads in the world. The panel opens ONLY when the player uses the
 -- Lab's prompt (a ProximityPrompt named "LabPrompt", wired in Main.client) and closes when they walk
 -- away from it.
---   * Header: credits, player level with an XP bar, skill points.
+--   * Header: credits, player level with an XP bar, skill points, and (Stage 9) the base level (the
+--     habitat's level: structures need it; skills, gear, tools and pets keep the player level).
 --   * Skills tab: speed, tank, credits, xp, builder cards with level pips, the effect at the next
 --     level (whole numbers only) and a Learn button (Action LearnSkill). Stage 8: the old "jump" skill
 --     is gone; the double jump comes from the air boots.
@@ -12,7 +13,7 @@
 --     (B / J), level pips, the gas it uses (and what the next level uses: lower is better), a Buy /
 --     Upgrade button (Action BuyGear) and, once owned, an On / Off button (Action ToggleGear).
 --   * Tools tab: every tool of MissionData.BASE.TOOLS: what it is for, whether the player has it (or
---     which build unlocks it), and for tools with upgrades (the ice drill) level pips, the next cost
+--     which build unlocks it, with the base level that build needs), and for tools with upgrades (the ice drill) level pips, the next cost
 --     and an Upgrade button (Action UpgradeTool).
 --   * Pets tab: the four pets with a small 3D preview (Santiago's PetModels), how to get each one and
 --     an Adopt button (Action BuyPet); owned pets get a Use button (Action Equip, slot "pet").
@@ -547,9 +548,20 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 	pointsPill.label.Size = UDim2.fromScale(0.74, 0.8)
 	pointsPill.label.Position = UDim2.fromScale(0.22, 0.5)
 
+	-- Stage 9: the base level (habitat level). Builds need it; the Lab's own items use the player level.
+	local basePill = makePill(panel, {
+		name = "BaseLevel",
+		size = UDim2.fromScale(0.15, STATS_H),
+		position = UDim2.fromScale(0.695, STATS_Y),
+		textColor = ROLE.accent,
+		maxText = 22,
+	}, Ui.Icons.home, ROLE.accent, Z + 2)
+	basePill.label.Size = UDim2.fromScale(0.68, 0.8)
+	basePill.label.Position = UDim2.fromScale(0.28, 0.5)
+
 	local labHint = Ui.body(panel, {
 		name = "LabHint",
-		size = UDim2.fromScale(0.28, STATS_H),
+		size = UDim2.fromScale(0.12, STATS_H),
 		position = UDim2.fromScale(0.975, STATS_Y),
 		anchor = Vector2.new(1, 0),
 		alignX = Enum.TextXAlignment.Right,
@@ -1340,9 +1352,15 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 				row.cost.frame.Visible = false
 				row.button.Visible = false
 				local unlock = def.unlock
-				row.status.Text = if unlock
+				local status = if unlock
 					then Store.t("panel.needs_build", { name = Store.t("build." .. unlock .. ".name") })
 					else Store.t("base.why.not_owned")
+				-- Stage 9: that build waits for a higher base level too.
+				local habNeed = if unlock then BaseBuild.habitatNeeded(MissionData, unlock, 1) else nil
+				if habNeed ~= nil and BaseBuild.habitatLevel(base.builds) < habNeed then
+					status = `{status} ({Store.t("ui.base_level", { n = habNeed })})`
+				end
+				row.status.Text = status
 				row.status.TextColor3 = ROLE.warning
 				row.allowed = false
 				row.stroke.Color = ROLE.stroke
@@ -1625,6 +1643,7 @@ function BasePanel.new(root: Frame, _deps: Deps): BasePanelView
 			Ui.setButton(button, Store.t(tab.key))
 			Ui.setButtonColor(button, if currentTab == tab.id then tab.color else Ui.COLORS.secondary)
 		end
+		basePill.label.Text = Store.t("ui.base_level", { n = if base then BaseBuild.habitatLevel(base.builds) else 0 })
 		if base == nil then
 			credits.label.Text = "-"
 			levelPill.label.Text = Store.t("panel.level", { n = 1 })

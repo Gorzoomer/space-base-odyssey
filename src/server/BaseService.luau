@@ -32,6 +32,15 @@
 -- its prompt). Tools the player may carry come from the builds standing (BaseBuild.toolsUnlocked);
 -- ToolService gives them and reports what is in hand through setToolChecker.
 --
+-- Stage 9 (team feedback: a Clash-of-Clans-like tree): the habitat is the town hall. Its level is the
+-- BASE LEVEL (1 to 5) and every structure level needs a minimum habitat level (BUILDS[*].hab,
+-- BaseBuild.canBuild reason "habitat"). A pad whose next level needs a higher base level is locked
+-- (pad attributes SBO_Locked = true, SBO_HabNeed = n) but its BuildPrompt stays on with the text
+-- "prompt.need_habitat" {n}, so a kid who walks up learns what to do next. The habitat level also sets
+-- the silo size (BaseBuild.siloMax), the greenhouse level the food time (BaseBuild.foodCooldown) and
+-- the antenna level an extra align bonus (BaseService.antennaBonus, paid by MissionService).
+-- Workspace attribute SBO_BaseLevel = the habitat level standing in the server.
+-- QuestService (optional) adds BaseState.quest through setQuestProvider and listens to silo claims.
 -- The rules live in src/shared/BaseBuild.luau and every number in MissionData.BASE. This module
 -- validates every request (server authoritative), keeps the world (build pads, silo, cargo robot)
 -- in sync, applies skill effects and sends each player their Types.BaseState (Remotes.BASE_STATE).
@@ -89,6 +98,7 @@ local SILO_TICK_SECONDS = 1
 local PROMPT_EXTRA_RANGE = 8 -- studs beyond the prompt's own range (lag), checked on the server
 local LAB_RANGE_STUDS = 30 -- Lab purchases need the player this close to the Lab prompt (the panel closes at 30)
 local DEBUG_MAX_GRANT = 100000
+local HABITAT_TIER_LINE_DELAY = 4 -- seconds between "Base level N!" and what that level opens
 
 -- Action types this module handles (MissionService routes them here).
 local ACTION_TYPES: { [string]: boolean } = {
@@ -133,6 +143,7 @@ local foodReady: { [Player]: number } = {} -- server time when the greenhouse ha
 local toolsSent: { [Player]: string } = {} -- last tool set announced to onToolsChanged listeners
 local toolChecker: ((Player, string) -> boolean)? = nil
 local debugMeteorHook: ((Player, boolean?) -> ())? = nil
+local questProvider: ((Player) -> any)? = nil -- Stage 9: BaseState.quest (QuestService)
 
 local present: { [Player]: boolean } = {}
 local connections: { [Player]: { RBXScriptConnection } } = {}
@@ -145,6 +156,8 @@ local buildListeners: { (Levels) -> () } = {}
 local equippedListeners: { (Player) -> () } = {}
 local toolsListeners: { (Player) -> () } = {}
 local gearListeners: { (Player) -> () } = {}
+local siloListeners: { (Player, number) -> () } = {} -- Stage 9: a player collected silo ice by hand
+local buildDoneListeners: { (Player, string, number) -> () } = {} -- Stage 9: a build level was finished
 
 -- Player attribute per gear id: the gear level while it is on, else 0 (Movement and SuitService read it).
 local GEAR_ATTRIBUTES: { [string]: string } = {
@@ -165,6 +178,16 @@ end
 
 local function reject(player: Player, reason: string)
 	sayTo(player, "base.why." .. reason)
+end
+
+-- Stage 9: "this needs base level {n}" for level `level` of build `id` (the plain line when n is unknown).
+local function rejectHabitat(player: Player, id: string, level: number)
+	local need = BaseBuild.habitatNeeded(MissionData, id, level)
+	if need then
+		sayTo(player, "base.why.habitat_n", { n = need })
+	else
+		reject(player, "habitat")
+	end
 end
 
 local function worldCall(name: string, ...: any)
@@ -522,7 +545,7 @@ local function buildState(player: Player): BaseState?
 		pets = ownedPets(player, base),
 		equipped = equippedOf(player, base),
 		siloIce = math.floor(silo),
-		siloMax = BASE.SILO_MAX,
+		siloMax = BaseBuild.siloMax(MissionData, effective),
 		icePerMinute = BaseBuild.icePerMinute(MissionData, effective),
 		inProgress = progressState(),
 		carryingCrate = carrying[player] == true,
@@ -534,12 +557,27 @@ local function buildState(player: Player): BaseState?
 	}
 end
 
+-- Stage 9: BaseState plus the quest tracker from QuestService (when one is set).
+local function fullState(player: Player): BaseState?
+	local state = buildState(player)
+	local provider = questProvider
+	if state and provider then
+		local ok, quest = pcall(provider, player)
+		if ok then
+			(state :: any).quest = quest
+		else
+			warn(`[SpaceBaseOdyssey] quest provider failed: {quest}`)
+		end
+	end
+	return state
+end
+
 local function sendNow(player: Player)
 	local events = remotes
 	if events == nil or player.Parent == nil or not present[player] then
 		return
 	end
-	local state = buildState(player)
+	local state = fullState(player)
 	if state then
 		lastSentAt[player] = os.clock()
 		events.baseState:FireClient(player, state)
@@ -642,6 +680,11 @@ local function refreshPrompts()
 				prompt.HoldDuration = hold -- never changes while shown (see the header)
 			end
 			local objectKey = `build.{def.id}.name`
+			if def.id == "habitat" and level >= 1 and level < def.maxLevel then
+				-- Stage 9: the habitat pad names the base level it builds next ("Science outpost").
+				local nextTier = if job then job.level else level + 1
+				objectKey = `habitat.tier.{nextTier}.name`
+			end
 			if prompt:GetAttribute("ObjectKey") ~= objectKey then
 				prompt:SetAttribute("ObjectKey", objectKey)
 			end
@@ -673,21 +716,28 @@ local function refreshPrompts()
 				setPadAttribute(pad, "SBO_Stages", job.stages)
 				setPadAttribute(pad, "SBO_BuildingLevel", job.level)
 				setPadAttribute(pad, "SBO_Cost", nil)
-				setPadAttribute(pad, "SBO_MinLevel", nil)
+				setPadAttribute(pad, "SBO_HabNeed", nil)
 				setPadAttribute(pad, "SBO_Locked", false)
 				continue
 			end
 
 			local cost = BaseBuild.nextCost(MissionData, effective, def.id)
-			local locked = false
+			local missing = false -- another build must stand first: the prompt is off
+			local habNeed: number? = if cost ~= nil then def.hab[level + 1] else nil
+			local habLocked = habNeed ~= nil and BaseBuild.habitatLevel(effective) < habNeed
 			if cost ~= nil then
 				for needId, needLevel in def.requires do
 					if BaseBuild.levelOf(effective, needId) < needLevel then
-						locked = true
+						missing = true
 					end
 				end
 			end
-			if cost ~= nil then
+			local locked = missing or habLocked
+			if cost ~= nil and habLocked and not missing and habNeed ~= nil then
+				-- Stage 9: the base level is too low. The prompt stays on and says which level is needed
+				-- (triggering it answers "base.why.habitat_n").
+				setPromptText(prompt, "prompt.need_habitat", { n = habNeed })
+			elseif cost ~= nil then
 				local textKey = if level > 0 then "prompt.upgrade" elseif cost == 0 then "prompt.build_free" else "prompt.build"
 				setPromptText(prompt, textKey, { n = cost })
 			elseif prompt:GetAttribute("TextParams") == nil then
@@ -695,13 +745,13 @@ local function refreshPrompts()
 				setPromptText(prompt, "prompt.upgrade", { n = 0 })
 			end
 			setEnabled(assemble, false)
-			setEnabled(prompt, cost ~= nil and not locked)
+			setEnabled(prompt, cost ~= nil and not missing)
 			setPadAttribute(pad, "SBO_Phase", "idle")
 			setPadAttribute(pad, "SBO_Stage", 0)
 			setPadAttribute(pad, "SBO_Stages", if cost ~= nil then BaseBuild.stagesFor(MissionData, def.id, level + 1) else 0)
 			setPadAttribute(pad, "SBO_BuildingLevel", nil)
 			setPadAttribute(pad, "SBO_Cost", cost)
-			setPadAttribute(pad, "SBO_MinLevel", if cost ~= nil then def.minLevel[level + 1] else nil)
+			setPadAttribute(pad, "SBO_HabNeed", habNeed)
 			setPadAttribute(pad, "SBO_Locked", locked)
 		end
 	end
@@ -778,6 +828,16 @@ local function recompute(animate: boolean): boolean
 	effective = newEffective
 	refreshPrompts()
 	if changed then
+		-- Stage 9: the silo size follows the base level (after a player with a bigger base leaves,
+		-- the silo keeps only what fits).
+		local cap = BaseBuild.siloMax(MissionData, effective)
+		silo = math.min(silo, cap)
+		worldCall("setSilo", silo, cap)
+		-- Stage 9: the base level for anything in the world that only needs that one number.
+		local baseLevel = BaseBuild.habitatLevel(effective)
+		if workspace:GetAttribute("SBO_BaseLevel") ~= baseLevel then
+			workspace:SetAttribute("SBO_BaseLevel", baseLevel)
+		end
 		fireBuilds()
 		refreshToolsAll()
 	end
@@ -831,8 +891,13 @@ end
 ----------------------------------------------------------------------------------------------------
 -- Silo and cargo robot
 
+-- Stage 9: the silo holds more ice at a higher base level (MissionData.BASE.SILO_MAX_BY_HABITAT).
+local function siloCap(): number
+	return BaseBuild.siloMax(MissionData, effective)
+end
+
 local function setSiloVisual()
-	worldCall("setSilo", silo, BASE.SILO_MAX)
+	worldCall("setSilo", silo, siloCap())
 	local whole = math.floor(silo)
 	if whole ~= siloSent then
 		siloSent = whole
@@ -854,6 +919,15 @@ local function claimSiloFor(player: Player, quiet: boolean): boolean
 	setSiloVisual()
 	if not quiet then
 		sayTo(player, "carl.base.silo_claimed", { n = credits })
+		-- Stage 9: quests count silo ice collected by hand (not the cargo robot's trips).
+		for _, listener in siloListeners do
+			task.spawn(function()
+				local ok, err = pcall(listener, player, ice)
+				if not ok then
+					warn(`[SpaceBaseOdyssey] silo listener failed: {err}`)
+				end
+			end)
+		end
 	end
 	return true
 end
@@ -870,8 +944,9 @@ local function siloTick(dt: number)
 		return
 	end
 	local perMinute = BaseBuild.icePerMinute(MissionData, effective)
-	if perMinute > 0 and silo < BASE.SILO_MAX then
-		silo = math.min(BASE.SILO_MAX, silo + perMinute / 60 * dt)
+	local cap = siloCap()
+	if perMinute > 0 and silo < cap then
+		silo = math.min(cap, silo + perMinute / 60 * dt)
 		setSiloVisual()
 	end
 
@@ -975,6 +1050,20 @@ local function completeJob(finisher: Player, id: string, job: Job)
 	end
 
 	local told: { [Player]: boolean } = {}
+	if id == "habitat" and job.level >= 2 then
+		-- Stage 9: a new base level opens new structures for everyone in the server.
+		local tierKey = `habitat.tier.{job.level}.desc`
+		for player in present do
+			told[player] = true
+			sayTo(player, "carl.base.habitat_up", { n = job.level })
+			-- Then what the new base level opens ("Opens the Lab and the first ice drill.").
+			task.delay(HABITAT_TIER_LINE_DELAY, function()
+				if player.Parent ~= nil then
+					sayTo(player, tierKey)
+				end
+			end)
+		end
+	end
 	for _, player in { owner, finisher } do
 		if not told[player] then
 			told[player] = true
@@ -986,6 +1075,14 @@ local function completeJob(finisher: Player, id: string, job: Job)
 		end
 	end
 	grant(owner, 0, BaseBuild.buildXp(MissionData, job.cost))
+	for _, listener in buildDoneListeners do
+		task.spawn(function()
+			local ok, err = pcall(listener, owner, id, job.level)
+			if not ok then
+				warn(`[SpaceBaseOdyssey] build listener failed: {err}`)
+			end
+		end)
+	end
 	scheduleSendAll()
 end
 
@@ -1002,11 +1099,15 @@ local function startBuild(player: Player, id: string)
 	end
 	local ok, reason = BaseBuild.canBuild(MissionData, effective, levelOf(base), base.credits, id)
 	local def = BaseBuild.buildDef(MissionData, id)
+	local nextLevel = BaseBuild.levelOf(effective, id) + 1
+	if reason == "habitat" then
+		rejectHabitat(player, id, nextLevel) -- Stage 9: "this needs base level {n}"
+		return
+	end
 	if not ok or def == nil then
 		reject(player, reason or "unknown")
 		return
 	end
-	local nextLevel = BaseBuild.levelOf(effective, id) + 1
 	local cost = def.costs[nextLevel]
 	api.updateBase(player, function(saved: BaseRecord)
 		saved.credits -= cost
@@ -1091,15 +1192,20 @@ local function usePad(player: Player, id: string, force: boolean)
 	end
 end
 
--- Debug (F1 / F5 in DemoKeys): finish the build in progress, or build the next structure in the order
+-- Debug (F3 in DemoKeys): finish the build in progress, or build the next structure in the order
 -- C.A.R.L. follows: every build's first level in MissionData.BASE.BUILDS order, then the upgrades,
 -- lowest level first. Free, with no player level needed, so testers can reach any stage fast.
+-- Stage 9: it follows the habitat tree like a player would: everything the current base level allows
+-- is built first, and only then the habitat goes up one level (a level whose base level is not
+-- reached yet waits).
 local function nextDebugBuild(): string?
 	local bestId: string? = nil
 	local bestLevel = math.huge
+	local habLevel = BaseBuild.habitatLevel(effective)
+	local habitatReady = false
 	for _, def in MissionData.BASE.BUILDS do
 		local level = BaseBuild.levelOf(effective, def.id)
-		local ready = level < def.maxLevel
+		local ready = level < def.maxLevel and (def.hab[level + 1] or 0) <= habLevel
 		if ready then
 			for needId, needLevel in def.requires do
 				if BaseBuild.levelOf(effective, needId) < needLevel then
@@ -1108,10 +1214,15 @@ local function nextDebugBuild(): string?
 				end
 			end
 		end
-		if ready and level < bestLevel then
+		if ready and def.id == "habitat" and level >= 1 then
+			habitatReady = true -- the next base level waits until this one is complete
+		elseif ready and level < bestLevel then
 			bestId = def.id
 			bestLevel = level
 		end
+	end
+	if bestId == nil and habitatReady then
+		return "habitat"
 	end
 	return bestId
 end
@@ -1771,7 +1882,7 @@ function BaseService.start(worldRefs: any, remoteEvents: Remotes, progressServic
 	end
 	connectPrompts()
 	refreshPrompts()
-	worldCall("setSilo", silo, BASE.SILO_MAX)
+	setSiloVisual()
 
 	progressService.onLoaded(onLoaded)
 	progressService.onCollectible(onCollectible)
@@ -1866,7 +1977,7 @@ end
 
 -- The player's BaseState right now (also used by tests in Studio).
 function BaseService.getState(player: Player): BaseState?
-	return buildState(player)
+	return fullState(player)
 end
 
 -- Stage 7: builds in progress (a copy: build id -> level, stage, stages, crate).
@@ -1911,7 +2022,8 @@ function BaseService.foodReadyAt(player: Player): number?
 end
 
 -- Stage 7: picks the player's food in the greenhouse. True when food was ready (then the next one
--- grows for FOOD.COOLDOWN_SECONDS: plants take time). ToolService checks the prompt and the hands.
+-- grows for BaseBuild.foodCooldown seconds: plants take time; the second dome grows more of them).
+-- ToolService checks the prompt and the hands.
 function BaseService.takeFood(player: Player): boolean
 	if not present[player] or BaseBuild.levelOf(effective, "greenhouse") < 1 then
 		return false
@@ -1920,7 +2032,7 @@ function BaseService.takeFood(player: Player): boolean
 	if now < (foodReady[player] or 0) then
 		return false
 	end
-	foodReady[player] = now + BASE.FOOD.COOLDOWN_SECONDS
+	foodReady[player] = now + BaseBuild.foodCooldown(MissionData, effective)
 	scheduleSend(player)
 	return true
 end
@@ -1974,6 +2086,54 @@ end
 -- Stage 7: ExploreService handles DebugMeteor (Studio / place owner only; checked here first).
 function BaseService.setDebugMeteorHook(fn: (player: Player, trusted: boolean?) -> ())
 	debugMeteorHook = fn
+end
+
+-- Stage 9: credits and XP for work that is not a REWARDS kind (the antenna align bonus, quest
+-- rewards). The "credits" and "xp" skills add their bonus, as for every grant. Returns what was given.
+function BaseService.grantCredits(player: Player, credits: number, xp: number?): (number, number)
+	if not present[player] or not isLoaded(player) then
+		return 0, 0
+	end
+	local addCredits = if type(credits) == "number" and credits == credits then credits else 0
+	local addXp = if type(xp) == "number" and xp == xp then xp else 0
+	if addCredits <= 0 and addXp <= 0 then
+		return 0, 0
+	end
+	return grant(player, addCredits, addXp)
+end
+
+-- Stage 9: the base level (the habitat level standing in this server; 0 before it stands).
+function BaseService.habitatLevel(): number
+	return BaseBuild.habitatLevel(effective)
+end
+
+-- Stage 9: extra credits for aligning the antenna at its current level (MissionData
+-- ANTENNA_ALIGN_BONUS). MissionService pays it with grantCredits after REWARDS.antenna_aligned.
+function BaseService.antennaBonus(): number
+	return BaseBuild.antennaBonus(MissionData, effective)
+end
+
+-- Stage 9: QuestService gives BaseState.quest for a player (nil = no tracker). It is called on every
+-- BaseState push; errors are caught and logged.
+function BaseService.setQuestProvider(fn: (player: Player) -> any)
+	questProvider = fn
+end
+
+-- Stage 9: sends the player a fresh BaseState soon (for example after quest progress).
+function BaseService.pushState(player: Player)
+	scheduleSend(player)
+end
+
+-- Stage 9: called with (player, ice) when a player collects silo ice by hand (the quest step "silo";
+-- the cargo robot's trips do not count).
+function BaseService.onSiloClaimed(listener: (player: Player, ice: number) -> ())
+	table.insert(siloListeners, listener)
+end
+
+-- Stage 9: called with (owner, build id, level) when a build level is finished (owner = the player
+-- whose save got it).
+function BaseService.onBuildCompleted(listener: (player: Player, id: string, level: number) -> ())
+	table.insert(buildDoneListeners, listener)
 end
 
 return BaseService

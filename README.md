@@ -60,6 +60,7 @@ Every number and its source is listed in [DATA_SOURCES.md](DATA_SOURCES.md).
 - [x] Stage 6: build and grow the base (tycoon loop with credits, levels, skills, automatic ice drills), pets, wardrobe, helmet that keeps the player's avatar, C.A.R.L. as a tracked rover
 - [x] Stage 7: start in the lander, building in steps, tools, lab, garage with drivable rovers, landing pad and ship, exploration sites, meteorites
 - [x] Stage 8: pressurized modules, air boots and jetpack with a gas tank, new skills, auto-run
+- [x] Stage 9: start menu with three save slots, open world with main quests, habitat base levels 1-5, paced economy
 - [ ] Playtests with people outside the team
 - [ ] Public release
 

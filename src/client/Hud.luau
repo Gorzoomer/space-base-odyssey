@@ -9,7 +9,8 @@
 --   Roblox top bar (GuiService.TopbarInset), and the build-progress signs are small screen-sized
 --   signs high above the pads, clear of the pad's own prompt.
 --   Wallet (Stage 6: shift, roaming, base mode and mission select): credits, player level and an XP
---   bar, with a "+N" pop when credits rise.
+--   bar, with a "+N" pop when credits rise. Stage 9: a third row with the base level (the habitat's
+--   level, the town hall of the habitat tree), which pops when it goes up.
 --   Stage 7 (field): a "Carrying parts" pill while the player carries a parts crate from the lander,
 --   a food boost timer while player attribute SBO_FoodBoostUntil (server time) is in the future, and a
 --   small build-progress sign (a local BillboardGui) over every build pad with a build in progress
@@ -20,7 +21,7 @@
 --   is on (Sprint.luau).
 --   Top bar (Hud.newTopBar): Missions and Wardrobe buttons beside the Settings button, and the "Build
 --   your base" hint pill in base mode until the habitat and the solar panels stand (Stage 8: it used
---   to wait for every core build). Stage 7: no Base button (team feedback: building from a menu
+--   to wait for every core build; Stage 9: never while the quest tracker shows a quest). Stage 7: no Base button (team feedback: building from a menu
 --   let players upgrade everything while standing still; builds happen at the pads in the world).
 -- Screen layout (fractions of the screen):
 --   top centre   y 0.02-0.09  shift timer 0.25-0.49 | today's event 0.51-0.75
@@ -30,7 +31,8 @@
 --                elsewhere:  an icon-only Wardrobe square at the right edge, under the settings
 --                            button (y 0.115: mission select, roaming) or under the Earth link or
 --                            sources button (y 0.195: shift, power board)
---   left column  x 0.01-0.21  objectives (Objectives.luau, from y 0.10-0.12), then the meters panel
+--   left column  x 0.01-0.21  objectives or, in base mode, the quest tracker (Objectives.luau, from
+--                             y 0.10-0.12), then the meters panel
 --                             right under it (air, food, radiation, water, data waiting), then the
 --                             wallet (at y 0.105 when nothing is above it, lower when the Roblox top
 --                             bar is taller, e.g. on phones)
@@ -57,6 +59,7 @@ local Simulation = require(Shared:WaitForChild("Simulation"))
 local Types = require(Shared:WaitForChild("Types"))
 
 local Meters = require(script.Parent.Meters)
+local Objectives = require(script.Parent.Objectives)
 local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
 
@@ -79,7 +82,9 @@ local COLUMN_TOP = 0.12 -- when no objectives panel is shown
 local COLUMN_GAP = 0.012
 local METERS_HEIGHT = 0.19
 local WALLET_TOP = 0.105 -- under the Roblox menu buttons when nothing else is in the column
-local WALLET_HEIGHT = 0.09
+local WALLET_HEIGHT = 0.125 -- Stage 9: three rows (credits and level, XP, base level)
+-- The first two rows keep their Stage 6 size: fractions of the old 0.09-tall wallet scaled by this.
+local WALLET_K = 0.09 / WALLET_HEIGHT
 local TOPBAR_GAP_PIXELS = 8 -- under the Roblox top bar (menu and chat buttons)
 local POP_SECONDS = 0.9
 local FOOD_BOOST_ATTRIBUTE = "SBO_FoodBoostUntil"
@@ -406,16 +411,16 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	})
 	Ui.icon(wallet, Ui.Icons.coin, {
 		name = "CoinIcon",
-		size = UDim2.fromScale(0.13, 0.42),
-		position = UDim2.fromScale(0.03, 0.28),
+		size = UDim2.fromScale(0.13, 0.42 * WALLET_K),
+		position = UDim2.fromScale(0.03, 0.28 * WALLET_K),
 		anchor = Vector2.new(0, 0.5),
 		tint = ROLE.star,
 		zindex = 16,
 	})
 	local creditsText = Ui.label(wallet, {
 		name = "Credits",
-		size = UDim2.fromScale(0.4, 0.44),
-		position = UDim2.fromScale(0.17, 0.28),
+		size = UDim2.fromScale(0.4, 0.44 * WALLET_K),
+		position = UDim2.fromScale(0.17, 0.28 * WALLET_K),
 		anchor = Vector2.new(0, 0.5),
 		alignX = Enum.TextXAlignment.Left,
 		textColor = ROLE.star,
@@ -425,8 +430,8 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	})
 	local levelPill = Ui.label(wallet, {
 		name = "Level",
-		size = UDim2.fromScale(0.4, 0.4),
-		position = UDim2.fromScale(0.97, 0.28),
+		size = UDim2.fromScale(0.4, 0.4 * WALLET_K),
+		position = UDim2.fromScale(0.97, 0.28 * WALLET_K),
 		anchor = Vector2.new(1, 0.5),
 		color = ROLE.panelRaised,
 		textColor = ROLE.accent,
@@ -439,21 +444,44 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	levelScale.Parent = levelPill
 	Ui.icon(wallet, Ui.Icons.xp, {
 		name = "XpIcon",
-		size = UDim2.fromScale(0.13, 0.38),
-		position = UDim2.fromScale(0.03, 0.73),
+		size = UDim2.fromScale(0.13, 0.38 * WALLET_K),
+		position = UDim2.fromScale(0.03, 0.73 * WALLET_K),
 		anchor = Vector2.new(0, 0.5),
 		tint = ROLE.reward,
 		zindex = 16,
 	})
 	local xpBar = Ui.bar(wallet, {
 		name = "XpBar",
-		size = UDim2.fromScale(0.8, 0.34),
-		position = UDim2.fromScale(0.17, 0.73),
+		size = UDim2.fromScale(0.8, 0.34 * WALLET_K),
+		position = UDim2.fromScale(0.17, 0.73 * WALLET_K),
 		anchor = Vector2.new(0, 0.5),
 		maxText = 14,
 		zindex = 16,
 	})
 	xpBar.label.Size = UDim2.fromScale(0.9, 0.9)
+	-- Stage 9: the base level (the habitat's level, 1-5): a cyan house and "Base level N".
+	local baseRowY = (0.73 + (0.73 - 0.28)) * WALLET_K -- one row step below the XP bar
+	Ui.icon(wallet, Ui.Icons.home, {
+		name = "BaseIcon",
+		size = UDim2.fromScale(0.13, 0.36 * WALLET_K),
+		position = UDim2.fromScale(0.03, baseRowY),
+		anchor = Vector2.new(0, 0.5),
+		tint = ROLE.accent,
+		zindex = 16,
+	})
+	local baseLevelText = Ui.label(wallet, {
+		name = "BaseLevel",
+		size = UDim2.fromScale(0.8, 0.36 * WALLET_K),
+		position = UDim2.fromScale(0.17, baseRowY),
+		anchor = Vector2.new(0, 0.5),
+		alignX = Enum.TextXAlignment.Left,
+		textColor = ROLE.accent,
+		maxText = 16,
+		minText = 7,
+		zindex = 16,
+	})
+	local baseLevelScale = Instance.new("UIScale")
+	baseLevelScale.Parent = baseLevelText
 
 	local visible = false
 	local mode: Mode = "none"
@@ -461,6 +489,7 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	local walletTop = WALLET_TOP
 	local shownCredits: number? = nil
 	local shownLevel: number? = nil
+	local shownBaseLevel: number? = nil
 	local player = Players.LocalPlayer
 
 	local function viewportHeight(): number
@@ -604,6 +633,16 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 			popLevel()
 		end
 		shownLevel = state.level
+		-- Stage 9: the base level is the habitat's level.
+		local baseLevel = BaseBuild.habitatLevel(state.builds)
+		baseLevelText.Text = Store.t("ui.base_level", { n = baseLevel })
+		if shownBaseLevel ~= nil and baseLevel > (shownBaseLevel :: number) and wallet.Visible then
+			baseLevelScale.Scale = 1.5
+			TweenService:Create(baseLevelScale, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+				Scale = 1,
+			}):Play()
+		end
+		shownBaseLevel = baseLevel
 		local nextXp = state.nextLevelXp
 		if nextXp ~= nil and nextXp > state.levelXp then
 			local into = math.max(0, state.xp - state.levelXp)
@@ -1125,7 +1164,9 @@ function Hud.newTopBar(root: Frame, deps: TopBarDeps): TopBarView
 		-- Stage 8 (team feedback): once the habitat and the solar panels stand, the player knows the
 		-- way (C.A.R.L. and the tips lead on), so the hint goes away.
 		local firstBuilds = Store.buildLevel("habitat") >= 1 and Store.buildLevel("solar") >= 1
-		local showHint = mode == "base" and hasState and not Store.coreBuilt() and not firstBuilds
+		-- Stage 9: the quest tracker already says what to build, so the hint waits for an older server.
+		local questShown = Objectives.currentQuest() ~= nil
+		local showHint = mode == "base" and hasState and not Store.coreBuilt() and not firstBuilds and not questShown
 		hint.frame.Visible = showHint
 		if showHint and pulseConnection == nil then
 			pulseConnection = RunService.Heartbeat:Connect(function()
@@ -1144,6 +1185,7 @@ function Hud.newTopBar(root: Frame, deps: TopBarDeps): TopBarView
 		render()
 	end
 
+	Objectives.onQuestChanged(render)
 	render()
 	return { setMode = setMode, render = render }
 end

@@ -12,11 +12,21 @@
 -- During a storm warning or storm, task markers hide and a shelter marker shows the way to safety.
 -- Hidden collectibles (prompts with a "CollectibleId" attribute, or "prompt.collect") never get a
 -- marker: they are secrets to discover by exploring.
+-- Stage 9 (habitat tree): in base mode a LOCKED build pad near the player (Workspace.Base.BuildPads)
+-- shows a grey lock marker with what it waits for: "Needs base level N" when the habitat is too low
+-- for the pad's next level (pad attribute SBO_HabNeed, else BaseBuild.habitatNeeded), or "Build X
+-- first" when a required build is missing (SBO_Locked). Pads at their top level or under way never
+-- get one.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local MissionData = require(Shared:WaitForChild("MissionData"))
+local BaseBuild = require(Shared:WaitForChild("BaseBuild"))
 
 local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
@@ -26,6 +36,9 @@ local TEXT_KEY_ATTRIBUTE = "TextKey"
 local TEXT_PARAMS_ATTRIBUTE = "TextParams"
 local CONSOLE_KEY = "prompt.console" -- the power board inside: no marker
 local DRILL_KEY = "prompt.drill"
+-- Stage 9: a pad locked by the base level keeps its prompt on with this text; its grey lock marker
+-- (refreshLocks) already says so, so it gets no task marker.
+local HABITAT_LOCK_KEY = "prompt.need_habitat"
 local DELIVER_KEY = "prompt.deliver"
 local CRATE_KEY = "prompt.take_crate"
 local SHELTER_MARKER = "ShelterDoor"
@@ -45,6 +58,8 @@ local NEAR_SHOW = 25 -- studs: any task marker this close shows (kept small: a c
 local CARL_MATCH_RADIUS = 10 -- studs: prompts this close to C.A.R.L.'s guidance marker part
 local FADE_SECONDS = 0.3
 local REFRESH_SECONDS = 0.5 -- storm stage follows server time, so re-check a few times per second
+local LOCK_SHOW = 30 -- studs: a locked pad this close shows what it waits for
+local LOCK_HEIGHT = 3 -- studs above the top of the pad
 
 local ROLE = Ui.ROLE
 local ICON = Ui.Icons
@@ -97,10 +112,24 @@ type Entry = {
 	connections: { RBXScriptConnection },
 }
 
+-- Stage 9: a lock marker over a locked build pad. `text` = what it waits for (nil = not locked).
+type LockEntry = {
+	pad: BasePart,
+	gui: BillboardGui,
+	bounce: Frame,
+	label: TextLabel,
+	fades: { Fade },
+	phase: number,
+	text: string?,
+	alpha: number,
+	shownAlpha: number,
+}
+
 local Markers = {}
 
 local player = Players.LocalPlayer
 local entries: { [ProximityPrompt]: Entry } = {}
+local lockEntries: { [BasePart]: LockEntry } = {}
 local objectivePrompts: { [ProximityPrompt]: boolean } = {}
 local started = false
 local playerGui: Instance? = nil
@@ -235,7 +264,10 @@ local function collectFades(root: Instance): { Fade }
 	return fades
 end
 
-local function applyAlpha(entry: Entry)
+-- Task markers and lock markers fade the same way.
+type Fadeable = { gui: BillboardGui, fades: { Fade }, alpha: number, shownAlpha: number }
+
+local function applyAlpha(entry: Fadeable)
 	local alpha = entry.alpha
 	if alpha == entry.shownAlpha then
 		return
@@ -286,7 +318,7 @@ end
 local function isEligible(entry: Entry, stage: Store.StormStage): boolean
 	local prompt = entry.prompt
 	local key = promptKey(prompt)
-	if key == nil or key == CONSOLE_KEY or not prompt.Enabled or isSecret(prompt) then
+	if key == nil or key == CONSOLE_KEY or key == HABITAT_LOCK_KEY or not prompt.Enabled or isSecret(prompt) then
 		return false
 	end
 	local phase = Store.phase()
@@ -399,12 +431,107 @@ local function renderEntry(entry: Entry)
 	end
 end
 
+-- Stage 9: what a locked pad waits for, or nil (not locked, at its top level, or under way).
+local function lockText(pad: BasePart): string?
+	local phase = pad:GetAttribute("SBO_Phase")
+	if phase == "crate" or phase == "assemble" then
+		return nil
+	end
+	local idValue = pad:GetAttribute("BuildId")
+	local id = if type(idValue) == "string" then idValue else pad.Name
+	local def = BaseBuild.buildDef(MissionData, id)
+	if def == nil then
+		return nil
+	end
+	local levelValue = pad:GetAttribute("SBO_Level")
+	local level = if type(levelValue) == "number" then levelValue else Store.buildLevel(id)
+	if level >= def.maxLevel then
+		return nil
+	end
+	local habNeed = pad:GetAttribute("SBO_HabNeed")
+	if type(habNeed) ~= "number" then
+		habNeed = BaseBuild.habitatNeeded(MissionData, id, level + 1)
+	end
+	if id ~= "habitat" and type(habNeed) == "number" and Store.buildLevel("habitat") < habNeed then
+		return Store.t("base.why.habitat_n", { n = habNeed })
+	end
+	if pad:GetAttribute("SBO_Locked") == true then
+		for needId, needLevel in def.requires do
+			if Store.buildLevel(needId) < needLevel then
+				return Store.t("panel.needs_build", { name = Store.t("build." .. needId .. ".name") })
+			end
+		end
+	end
+	return nil
+end
+
+-- Lock markers follow the pads in Workspace.Base.BuildPads (pads can be rebuilt).
+local function refreshLocks()
+	for pad, entry in lockEntries do
+		if pad.Parent == nil then
+			entry.gui:Destroy()
+			lockEntries[pad] = nil
+		end
+	end
+	local base = workspace:FindFirstChild("Base")
+	local pads = if base then base:FindFirstChild("BuildPads") else nil
+	local showLocks = Store.isBaseMode() and Store.stormStage() == "none"
+	if pads == nil then
+		return
+	end
+	for _, item in pads:GetChildren() do
+		if not item:IsA("BasePart") then
+			continue
+		end
+		local pad = item :: BasePart
+		local text = if showLocks then lockText(pad) else nil
+		local entry = lockEntries[pad]
+		if entry == nil then
+			if text == nil then
+				continue
+			end
+			local gui, bounce, badge, icon, label =
+				makeBillboard("SBO_LockMarker", pad, Vector3.new(0, pad.Size.Y / 2 + LOCK_HEIGHT, 0))
+			-- Grey and orange: not yet, but it will open.
+			icon.Image = ICON.lock
+			icon.ImageColor3 = ROLE.textDim
+			local badgeStroke = badge:FindFirstChildOfClass("UIStroke")
+			if badgeStroke then
+				badgeStroke.Color = ROLE.warning
+			end
+			local labelStroke = label:FindFirstChildOfClass("UIStroke")
+			if labelStroke then
+				labelStroke.Color = ROLE.warning
+			end
+			entry = {
+				pad = pad,
+				gui = gui,
+				bounce = bounce,
+				label = label,
+				fades = collectFades(gui),
+				phase = math.random() * math.pi * 2,
+				text = nil,
+				alpha = 0,
+				shownAlpha = -1,
+			}
+			lockEntries[pad] = entry
+			applyAlpha(entry :: LockEntry)
+		end
+		local lock = entry :: LockEntry
+		lock.text = text
+		if text then
+			lock.label.Text = text
+		end
+	end
+end
+
 local function refresh()
 	local stage = Store.stormStage()
 	for _, entry in entries do
 		entry.eligible = isEligible(entry, stage)
 	end
 	refreshObjectivePrompts()
+	refreshLocks()
 	-- Shelter marker: during the warning and the storm, until the player is inside the shelter.
 	local stats = Store.getStats()
 	local showShelter = stage ~= "none" and not (stats ~= nil and stats.sheltered)
@@ -561,6 +688,22 @@ function Markers.start()
 			if entry.alpha > 0 then
 				local lift = math.abs(math.sin(t * BOUNCE_SPEED + entry.phase)) * BOUNCE_PIXELS
 				entry.bounce.Position = UDim2.fromOffset(0, -lift)
+			end
+		end
+		-- Locked pads close by: what they wait for.
+		for pad, lock in lockEntries do
+			local wanted = false
+			if lock.text ~= nil and here then
+				wanted = (pad.Position - here).Magnitude <= LOCK_SHOW
+			end
+			local goal = if wanted then 1 else 0
+			if lock.alpha ~= goal then
+				lock.alpha = if wanted then math.min(1, lock.alpha + step) else math.max(0, lock.alpha - step)
+			end
+			applyAlpha(lock)
+			if lock.alpha > 0 then
+				local lift = math.abs(math.sin(t * BOUNCE_SPEED * 0.6 + lock.phase)) * BOUNCE_PIXELS * 0.5
+				lock.bounce.Position = UDim2.fromOffset(0, -lift)
 			end
 		end
 		if shelterGui and shelterGui.Enabled and shelterBounce then

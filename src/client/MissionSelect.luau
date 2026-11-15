@@ -7,10 +7,17 @@
 -- Stage 6: the screen can be closed ("Explore the base", base mode) and reopened with the Missions
 -- top button; Main.client decides when it is open. A card locked by a missing build
 -- (MissionCard.missingBuild) says which build it needs.
+-- Stage 9 (open world): this screen is the habitat's mission console. It never opens by itself at
+-- the start (the start menu comes first); Main.client opens it from the console prompt, the Missions
+-- top button and after a report. The title says "Choose a mission" and the subtitle names the active
+-- quest; the mission the active quest asks for wears a "Quest" badge and pulses.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+
+local Quests = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Quests"))
 
 local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
@@ -62,7 +69,28 @@ type CardView = {
 	status: Frame,
 	statusIcon: ImageLabel,
 	shake: UIScale,
+	questBadge: Ui.IconText,
 }
+
+-- Stage 9: the mission the active quest asks for (its first mission step not done yet), or nil.
+local function questMissionId(): string?
+	local quest = Store.quest()
+	local id = if quest then quest.id else nil
+	if quest == nil or id == nil then
+		return nil
+	end
+	local def = Quests.byId(id)
+	if def == nil then
+		return nil
+	end
+	for index, step in def.steps do
+		local shown = quest.steps[index]
+		if step.type == "mission" and step.id ~= nil and not (shown ~= nil and shown.done) then
+			return step.id
+		end
+	end
+	return nil
+end
 
 local function kindColor(kind: string): Color3
 	return (Ui.KIND_COLORS :: any)[kind] or ROLE.accent
@@ -450,8 +478,27 @@ function MissionSelect.new(root: Frame, deps: Deps): MissionSelectView
 			anchor = Vector2.new(0.5, 0.5),
 			zindex = 15,
 		})
+		-- Stage 9: "Quest" badge across the top edge of the card the active quest asks for.
+		local questBadge = Ui.iconText(button, {
+			name = "QuestBadge",
+			size = UDim2.fromScale(0.66, 0.17),
+			position = UDim2.fromScale(0.5, 0),
+			anchor = Vector2.new(0.5, 0.5),
+			color = ROLE.background,
+			stroke = 2,
+			strokeColor = ROLE.warning,
+			corner = 0.5,
+			icon = Ui.ICONS.flag,
+			tint = ROLE.warning,
+			textColor = ROLE.warning,
+			maxText = 16,
+			zindex = 16,
+		})
+		questBadge.frame.Visible = false
+		questBadge.label.Text = Store.t("ui.menu_quest_badge")
 		view = {
 			id = id,
+			questBadge = questBadge,
 			button = button,
 			stroke = stroke,
 			icon = icon,
@@ -503,10 +550,19 @@ function MissionSelect.new(root: Frame, deps: Deps): MissionSelectView
 			rebuildCards(list)
 		end
 		nextId = nil
+		local questId = questMissionId()
 		for _, card in list do
-			if card.unlocked and not card.completed then
+			if card.id == questId and card.unlocked then
 				nextId = card.id
 				break
+			end
+		end
+		if nextId == nil then
+			for _, card in list do
+				if card.unlocked and not card.completed then
+					nextId = card.id
+					break
+				end
 			end
 		end
 		for index, view in cards do
@@ -516,6 +572,8 @@ function MissionSelect.new(root: Frame, deps: Deps): MissionSelectView
 			end
 			local color = kindColor(card.kind)
 			local unlocked = card.unlocked == true
+			view.questBadge.frame.Visible = card.id == questId
+			view.questBadge.label.Text = Store.t("ui.menu_quest_badge")
 			view.stroke.Color = if unlocked then color else ROLE.stroke
 			view.stroke.Thickness = Ui.STROKE
 			view.button.BackgroundColor3 = if unlocked then ROLE.panelRaised else ROLE.panel
@@ -614,8 +672,11 @@ function MissionSelect.new(root: Frame, deps: Deps): MissionSelectView
 	end
 
 	local function render()
-		title.Text = Store.t("ui.title")
-		subtitle.Text = Store.t("ui.missions_title")
+		title.Text = Store.t("ui.missions_title")
+		-- The active quest's name (the game's one-line pitch when there is none).
+		local quest = Store.quest()
+		local questId = if quest then quest.id else nil
+		subtitle.Text = if questId then Store.t(Quests.titleKey(questId)) else Store.t("ui.pitch")
 		trainingHeader.label.Text = Store.t("ui.training")
 		storyHeader.label.Text = Store.t("ui.story")
 		freeHeader.label.Text = Store.t("ui.free_play")

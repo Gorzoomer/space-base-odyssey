@@ -1,8 +1,8 @@
 --!strict
 -- Space Base Odyssey - client entry point: builds the UI, listens to the server and shows the right screen.
 -- Stage 6 "base mode": in Briefing the mission select can be closed to roam the base, build and
--- gather ice. It opens by itself for a new player (no mission completed yet) and after a report;
--- the Missions top button opens it again. The Wardrobe opens from the top bar.
+-- gather ice. The Missions top button opens it (Stage 9: it never opens by itself). The Wardrobe opens
+-- from the top bar.
 -- Stage 7: there is no Base menu any more (builds happen only at the pads in the world). The Lab panel
 -- (BasePanel.luau: skills, tool upgrades, pets) opens only when the player uses the Lab's prompt
 -- ("LabPrompt") and closes when they walk away. Exploration scans show an ExploreCard. The vehicle
@@ -13,6 +13,11 @@
 -- sits at the bottom centre while the player walks around with tools.
 -- Stage 8: gear (Gear.luau: air boots and jetpack, keys B / J, the client-side gas tank) is loaded
 -- with pcall and feeds the HUD gas bar; auto-run (Sprint.luau, key X) stops while a panel is open.
+-- Stage 9 (open world): the start menu (StartMenu.luau: Continue, New game, Load game with 3 save
+-- slots, Settings, Credits) is the first screen; the player has no character until the server loads
+-- a slot (player attribute SBO_SlotChosen). The mission select never opens by itself at the start any
+-- more: missions start from the habitat's mission console (prompt "MissionConsolePrompt") or the
+-- Missions top button, and main quests guide the player. After a report the player is back in the base.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -57,10 +62,14 @@ local COLLECTED_REMOTE: string = (Types.Remotes :: any).COLLECTED or "Collected"
 local BASE_STATE_REMOTE: string = (Types.Remotes :: any).BASE_STATE or "BaseState"
 local EXPLORE_REMOTE: string = (Types.Remotes :: any).EXPLORE or "Explore"
 local REMOTE_WAIT_SECONDS = 60 -- an older server never creates the Stage 6 remote
-local PROGRESS_WAIT_SECONDS = 5 -- first join: wait this long for saved progress, then decide
+-- Stage 9 save slots: the server sends the slot list on this remote (nil = an older server).
+local SLOTS_REMOTE: string = (Types.Remotes :: any).SLOTS or "Slots"
+local SLOTS_WAIT_SECONDS = 20
 -- Stage 7 Lab panel: opened by the prompt with this name, closed this far (studs) from it.
 local LAB_PROMPT_NAME = "LabPrompt"
 local LAB_CLOSE_DISTANCE = 30
+-- Stage 9: the habitat's mission console opens the mission select.
+local MISSION_CONSOLE_PROMPT_NAME = "MissionConsolePrompt"
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -97,7 +106,7 @@ end
 -- Full-screen panels (by their frame names under the root). While one is open the mouse is freed,
 -- the tool bar is hidden and auto-run stops.
 local MODAL_PANELS = {
-	"MissionSelect", "Report", "PowerBoard", "Settings", "Sources", "Collection", "FindCard",
+	"StartMenu", "MissionSelect", "Report", "PowerBoard", "Settings", "Sources", "Collection", "FindCard",
 	"BasePanel", "Wardrobe", "ExploreCard",
 }
 local function anyPanelOpen(): boolean
@@ -173,6 +182,28 @@ local report = Report.new(root, sources.addButton)
 local settings = Settings.new(root)
 
 local basePanel = loadPanel("BasePanel", { showMessage = messages.show }) -- the Lab panel
+
+-- Stage 9 start menu (pcall: if it ever breaks, the player still gets into the game, see below).
+type StartMenuView = { render: () -> (), isOpen: () -> boolean, hide: () -> () }
+local startMenu: StartMenuView? = nil
+do
+	local ok, result = pcall(function(): any
+		local moduleScript = Client:WaitForChild("StartMenu", 5)
+		if moduleScript == nil then
+			error("StartMenu not found")
+		end
+		local module: any = require(moduleScript :: any)
+		return module.new(root, {
+			openSettings = settings.open,
+			closeSettings = settings.close,
+		})
+	end)
+	if ok and type(result) == "table" and type(result.render) == "function" then
+		startMenu = result
+	else
+		warn(`[SpaceBaseOdyssey] StartMenu unavailable: {result}`)
+	end
+end
 local wardrobe = loadPanel("Wardrobe", { showMessage = messages.show })
 
 -- Stage 7 exploration card (pcall: a broken card never breaks the client).
@@ -370,29 +401,13 @@ local function updateBoard(phase: string)
 	applyView()
 end
 
--- First join: the mission select opens by itself only for a new player (decided once the saved
--- progress arrives, or after PROGRESS_WAIT_SECONDS).
-local joinDecided = false
-local progressWaitOver = false
-local function decideOnJoin()
-	if joinDecided or Store.getSnapshot() == nil or not (Store.hasProgress() or progressWaitOver) then
-		return
-	end
-	joinDecided = true
-	if Store.phase() == "Briefing" and Store.completedCount() == 0 then
-		setSelectOpen(true)
-	end
-end
-
 local function showPhase(phase: string)
-	local previous = shownPhase
 	shownPhase = phase
 	if phase == "Briefing" then
-		-- Back from a report ("Continue" / "Try again" goes to mission select): open it.
-		if previous ~= nil and previous ~= "Briefing" then
-			joinDecided = true
-			Store.setMissionSelectOpen(true)
-		end
+		-- Stage 9 open world: the mission select never opens by itself (not on join, not after a
+		-- report). Back from a report the player is in the base with the quest tracker; missions
+		-- start from the habitat's mission console or the top Missions button.
+		Store.setMissionSelectOpen(false)
 	else
 		Store.setMissionSelectOpen(false)
 	end
@@ -427,6 +442,9 @@ local function renderAll()
 	if exploreCard then
 		exploreCard.render()
 	end
+	if startMenu then
+		startMenu.render()
+	end
 	for _, panel in { basePanel, wardrobe } do
 		local render = (panel :: any).render
 		if type(render) == "function" then
@@ -445,17 +463,25 @@ Store.onChanged(function(kind: Store.ChangeKind)
 	if kind == "base" then
 		hud.renderBase()
 		topBar.render()
+		if Store.isMissionSelectOpen() then
+			missionSelect.render() -- the quest badge follows the active quest
+		end
 		return
 	end
 	if kind == "explore" then
 		return -- the ExploreCard shows it (CarlDrone and Onboarding read the Store themselves)
+	end
+	if kind == "slots" then
+		if startMenu then
+			startMenu.render()
+		end
+		return
 	end
 	if kind == "stats" then
 		hud.render()
 		return
 	end
 	if kind == "progress" then
-		decideOnJoin()
 		missionSelect.render()
 		collection.render()
 		report.render()
@@ -467,9 +493,6 @@ Store.onChanged(function(kind: Store.ChangeKind)
 		showPhase(phase)
 	else
 		updateBoard(phase) -- the mission can change without a phase change ("Try again")
-	end
-	if kind == "snapshot" then
-		decideOnJoin()
 	end
 	if kind == "language" then
 		renderAll()
@@ -600,9 +623,19 @@ do
 		end
 	end)
 end
-task.delay(PROGRESS_WAIT_SECONDS, function()
-	progressWaitOver = true
-	decideOnJoin()
+-- Stage 9: the habitat's mission console opens the mission select (in Briefing only: a mission
+-- that is running keeps its own screens).
+ProximityPromptService.PromptTriggered:Connect(function(prompt: ProximityPrompt, who: Player)
+	if who ~= player or prompt.Name ~= MISSION_CONSOLE_PROMPT_NAME then
+		return
+	end
+	if Store.phase() ~= "Briefing" or (startMenu ~= nil and startMenu.isOpen()) then
+		return
+	end
+	closePanels()
+	settings.close()
+	sources.close()
+	setSelectOpen(true)
 end)
 
 -- Countdowns use server time, refreshed a few times per second.
@@ -701,3 +734,33 @@ task.spawn(function()
 end)
 
 Store.send({ type = "SetLanguage", language = Store.getLanguage() })
+
+-- Stage 9 save slots: the start menu lists them. With an older server (no "Slots" remote) the menu
+-- closes so the player is never stuck on it. If the start menu module failed to load, the player
+-- still gets in: the last used world (or world 1) loads in this server.
+task.spawn(function()
+	local slotsRemote = remotes:WaitForChild(SLOTS_REMOTE, SLOTS_WAIT_SECONDS)
+	if slotsRemote == nil or not slotsRemote:IsA("RemoteEvent") then
+		if startMenu then
+			startMenu.hide()
+		end
+		return
+	end
+	local fallbackSent = false
+	slotsRemote.OnClientEvent:Connect(function(meta: any)
+		if type(meta) ~= "table" then
+			return
+		end
+		Store.setSlots(meta)
+		if startMenu == nil and not fallbackSent and not Store.isSlotChosen() then
+			fallbackSent = true
+			local slot = Store.continueSlot()
+			Store.chooseSlot(slot or 1, "friends", false)
+		end
+	end)
+	-- Ask once for the slot list, in case it was sent before this listener existed.
+	if not Store.isSlotChosen() then
+		local request: any = { type = "RequestSlots" }
+		Store.send(request)
+	end
+end)

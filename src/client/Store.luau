@@ -4,6 +4,8 @@
 -- pets, what they wear; Stage 7: builds in progress, the parts crate, tools, greenhouse food, scanned
 -- sites), chosen language, local settings, the screen mode (mission select open or base mode), the
 -- last exploration scan (Stage 7) and the Action sender.
+-- Stage 9: the three save slots ("worlds") from the "Slots" remote (start menu), the ChooseSlot
+-- action, and the player's active quest (BaseState.quest, read with Store.quest()).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -20,7 +22,17 @@ export type LiveWeather = Types.LiveWeather
 export type Language = "en" | "es"
 -- "base": a new BaseState arrived. "view": the mission select opened or closed (base mode changed).
 -- "explore" (Stage 7): the server sent an ExploreEvent (a site or meteorite crater was scanned).
-export type ChangeKind = "snapshot" | "stats" | "language" | "progress" | "settings" | "base" | "view" | "explore"
+-- "slots" (Stage 9): the save slot list arrived (start menu).
+export type ChangeKind =
+	"snapshot"
+	| "stats"
+	| "language"
+	| "progress"
+	| "settings"
+	| "base"
+	| "view"
+	| "explore"
+	| "slots"
 export type StormStage = "none" | "warning" | "storm"
 
 -- Stage 4 parts of the Snapshot (see Types.luau). Read through the helpers below.
@@ -33,6 +45,36 @@ export type BaseState = Types.BaseState
 export type Equipped = Types.Equipped
 export type BuildProgress = Types.BuildProgress
 export type ExploreEvent = Types.ExploreEvent
+
+-- Stage 9 save slots: one entry per slot from the server's meta record ("p_<userId>_meta").
+export type SlotMode = "solo" | "friends"
+export type SlotInfo = {
+	used: boolean,
+	habitat: number, -- base level (habitat level, 0 = nothing built)
+	level: number, -- player level
+	credits: number,
+	savedAt: number?, -- os.time() of the last save (nil = never saved)
+	mode: SlotMode,
+}
+export type SlotsMeta = {
+	slots: { SlotInfo }, -- always Store.SLOT_COUNT entries
+	last: number?, -- the slot used last time (nil = none yet)
+}
+
+-- Stage 9 quests: the active quest as the server sends it in BaseState.quest.
+export type QuestStepView = {
+	key: string, -- localization key of the step text (takes {n})
+	progress: number,
+	target: number,
+	done: boolean,
+}
+export type QuestView = {
+	id: string?, -- nil once there is no active quest
+	kind: string, -- "main" | "side"
+	stepIndex: number,
+	steps: { QuestStepView },
+	mainDone: boolean,
+}
 
 local Store = {}
 
@@ -69,6 +111,8 @@ local progress: Progress = { completed = {}, collectibles = {}, cosmetics = {} }
 local progressReceived = false
 local base: BaseState? = nil
 local lastExplore: ExploreEvent? = nil
+local slotsMeta: SlotsMeta? = nil
+local quest: QuestView? = nil
 local missionSelectOpen = false
 local language: Language = "en"
 local actionRemote: RemoteEvent? = nil
@@ -330,6 +374,7 @@ function Store.setBase(value: BaseState)
 			end
 		end
 	end
+	quest = Store.parseQuest(raw.quest)
 	local xp = numberOr(raw.xp, 0)
 	base = {
 		credits = numberOr(raw.credits, 0),
@@ -355,6 +400,41 @@ function Store.setBase(value: BaseState)
 		gearOn = gearOn,
 	}
 	emit("base")
+end
+
+-- Stage 9: the active quest from a BaseState (nil when the server sends none). Checked field by
+-- field so a partial table never breaks the UI.
+function Store.parseQuest(value: any): QuestView?
+	if type(value) ~= "table" then
+		return nil
+	end
+	local steps: { QuestStepView } = {}
+	if type(value.steps) == "table" then
+		for index = 1, #value.steps do
+			local step = value.steps[index]
+			if type(step) == "table" and type(step.key) == "string" then
+				local target = math.max(1, numberOr(step.target, 1))
+				table.insert(steps, {
+					key = step.key,
+					progress = math.clamp(numberOr(step.progress, 0), 0, target),
+					target = target,
+					done = step.done == true,
+				})
+			end
+		end
+	end
+	return {
+		id = if type(value.id) == "string" and value.id ~= "" then value.id else nil,
+		kind = if value.kind == "side" then "side" else "main",
+		stepIndex = math.max(1, numberOr(value.stepIndex, 1)),
+		steps = steps,
+		mainDone = value.mainDone == true,
+	}
+end
+
+-- Stage 9: the player's active quest (nil until a BaseState with a quest arrives).
+function Store.quest(): QuestView?
+	return quest
 end
 
 -- What this player wears (defaults until a BaseState arrives).
@@ -448,6 +528,84 @@ end
 -- Briefing with the mission select closed: the player roams the base, builds and gathers ice.
 function Store.isBaseMode(): boolean
 	return Store.phase() == "Briefing" and not missionSelectOpen
+end
+
+-- Stage 9: save slots ("worlds") and the start menu ------------------------------------------
+
+Store.SLOT_COUNT = 3 -- contract with ProgressService: slots 1..3
+Store.SLOT_CHOSEN_ATTRIBUTE = "SBO_SlotChosen" -- player attribute, true once a slot is loaded
+
+local function slotFrom(value: any): SlotInfo
+	if type(value) ~= "table" then
+		return { used = false, habitat = 0, level = 1, credits = 0, savedAt = nil, mode = "solo" }
+	end
+	return {
+		used = value.used == true,
+		habitat = math.max(0, math.floor(numberOr(value.habitat, 0))),
+		level = math.max(1, math.floor(numberOr(value.level, 1))),
+		credits = math.max(0, math.floor(numberOr(value.credits, 0))),
+		savedAt = if type(value.savedAt) == "number" and value.savedAt > 0 then value.savedAt else nil,
+		mode = if value.mode == "friends" then "friends" else "solo",
+	}
+end
+
+-- Store the meta table from the "Slots" remote. A sparse table can arrive with string keys
+-- ("2"), so both spellings are read.
+function Store.setSlots(value: any)
+	if type(value) ~= "table" then
+		return
+	end
+	local raw: any = if type(value.slots) == "table" then value.slots else {}
+	local slots: { SlotInfo } = {}
+	for index = 1, Store.SLOT_COUNT do
+		local entry = raw[index]
+		if entry == nil then
+			entry = raw[tostring(index)]
+		end
+		slots[index] = slotFrom(entry)
+	end
+	local last = tonumber(value.last)
+	if last ~= nil and (last ~= math.floor(last) or last < 1 or last > Store.SLOT_COUNT) then
+		last = nil
+	end
+	slotsMeta = { slots = slots, last = last }
+	emit("slots")
+end
+
+-- The slot list (nil until the server sends it).
+function Store.getSlots(): SlotsMeta?
+	return slotsMeta
+end
+
+function Store.slotInfo(slot: number): SlotInfo?
+	local meta = slotsMeta
+	return if meta then meta.slots[slot] else nil
+end
+
+-- The slot "Continue" loads: the last one used, if it still holds a world.
+function Store.continueSlot(): number?
+	local meta = slotsMeta
+	if meta == nil then
+		return nil
+	end
+	local last = meta.last
+	if last and meta.slots[last] and meta.slots[last].used then
+		return last
+	end
+	return nil
+end
+
+-- True once the server has loaded a slot for this player (the start menu then closes).
+function Store.isSlotChosen(): boolean
+	local player = game:GetService("Players").LocalPlayer
+	return player ~= nil and player:GetAttribute(Store.SLOT_CHOSEN_ATTRIBUTE) == true
+end
+
+-- Ask the server to load a slot. fresh = New Game in that slot (the server wipes it).
+-- "solo" may teleport the player to their own reserved server.
+function Store.chooseSlot(slot: number, mode: SlotMode, fresh: boolean)
+	local action: any = { type = "ChooseSlot", slot = slot, mode = mode, fresh = fresh }
+	Store.send(action)
 end
 
 -- Local settings ------------------------------------------------------------------------------

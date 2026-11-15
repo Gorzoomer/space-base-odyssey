@@ -1,11 +1,11 @@
 --!strict
 -- Space Base Odyssey - demo keys for testing and recording. Only in Studio or for the place owner:
 --   F2: a meteorite lands near this player now, to scan with the tablet (DebugMeteor).
---   F3: finish the build in progress, or build the next structure in C.A.R.L.'s order, free
---       (DebugBuildNext).
+--   F3: finish the build in progress, or build the next structure free (DebugBuildNext). Stage 9: it
+--       follows the habitat tree: everything the current base level allows, then the next base level.
 --   F4: start an eclipse now (DebugEclipse).
---   F6: unlock every mission (DebugUnlockAll) and get just enough credits and XP to unlock everything
---       else (DebugMaxResources).
+--   F6: unlock every mission (DebugUnlockAll) and get just enough credits (every build level with the
+--       habitat tiers, tool upgrade, gear level and pet) and XP for everything else (DebugMaxResources).
 --   F7: grant the next hidden collectible this player does not own yet (DebugGrantCollectible).
 --   F8: force today's event to a solar storm (the server accepts it in the lobby or while planning).
 --   F9: end the current shift now.
