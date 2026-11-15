@@ -25,7 +25,7 @@ A mission lasts 7 days. Each day has three phases:
 
 Nobody dies. If a meter runs out, the crew returns home early, and the report explains what to try next time.
 
-Between missions, the base is yours to grow. You start with only the habitat and build the solar panels, greenhouse, antenna and shelter yourself. Ice and good work earn credits and experience. Spend them on automatic ice drills, a cargo robot, upgrades, skills (like a double jump from a backpack gas puff) and pets.
+Between missions, the base is yours to grow. You land in a small lander and build everything yourself, step by step: carry parts crates from the lander and assemble them with your wrench. Tools unlock as you go (ice drill, tablet, brush, repair kit, fresh food), a garage gives you a moon buggy and an ice hauler to drive, and five real exploration sites and random meteorite craters wait to be scanned. Ice and good work earn credits and experience. Spend them on automatic ice drills, a cargo robot, upgrades, skills (like a double jump from a backpack gas puff) and pets.
 
 ## NASA data
 
@@ -55,6 +55,7 @@ Every number and its source is listed in [DATA_SOURCES.md](DATA_SOURCES.md).
 - [x] Stage 4: training and story missions, hidden secrets, visual identity with icons
 - [x] Stage 5: live meters, water and antenna consequences, real rotating Earth with eclipses, astronaut suit, C.A.R.L. guidance and fun facts, settings and codes
 - [x] Stage 6: build and grow the base (tycoon loop with credits, levels, skills, automatic ice drills), pets, wardrobe, helmet that keeps the player's avatar, C.A.R.L. as a tracked rover
+- [x] Stage 7: start in the lander, building in steps, tools, lab, garage with drivable rovers, landing pad and ship, exploration sites, meteorites
 - [ ] Playtests with people outside the team
 - [ ] Public release
 

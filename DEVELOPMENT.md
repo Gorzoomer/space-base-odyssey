@@ -208,6 +208,50 @@ Tested in Studio (assistant-driven, real remote actions):
 
 Fixed after that playtest: the visor rendered pale grey (now dark and reflective), the helmet was too large, a tab label wrapped mid-word, and the drills were invisible from the rim (beacon masts added).
 
+**About 23:30 – Team playtest feedback, round 3.** The team asked for:
+- A longer game with more to do.
+- Tools to unlock, each needed for its task (no drill, no ice): a drill, a tablet for the antenna, food from the greenhouse to eat.
+- Building in steps instead of all at once.
+- More to explore, with real references.
+- A drivable rover, a garage for two vehicles, a landing pad and a ship to build (decoration).
+- A random meteorite event to investigate.
+- A lab building for equipment upgrades.
+- Removing the Base menu, because players could upgrade everything while standing still.
+- Starting in the lander that brought the crew, and a base layout like a modern lunar base concept (hub, tubes, glass domes, solar rows).
+- More detailed pets.
+- A bug: in first person the mouse could not reach the buttons of the new-secret card.
+
+**Sunday 15 November, 00:45 – Stage 7: lander start, steps, tools, vehicles, exploring.**
+- **First-person fix:** Roblox locks the mouse to the screen centre in first person. A hidden Modal button now frees it whenever a card or panel is open.
+- **No Base menu:** building only happens at the pads in the world.
+- **Start in the lander:** the player spawns in the arrival lander, the only shelter at first. The habitat is the first build.
+- **Building in steps:** paying starts a level. Each step needs a parts crate carried from the lander's cargo bay to the pad, then "Assemble" with the wrench in hand. The structure rises from the ground step by step; the ship takes six steps.
+- **Tools in the backpack bar:**
+  - The wrench and drill come from the start; the brush comes with the panels, the repair kit with the habitat and the tablet with the antenna.
+  - Fresh food is picked in the greenhouse and eaten for a short speed boost.
+  - A task needs its tool in hand.
+- **Lab:** skills, drill upgrades and pet adoption. It opens only at the lab building.
+- **Garage:** a drivable moon buggy inspired by the Apollo Lunar Roving Vehicle, and an ice hauler that carries four ice cores to the water machine.
+- **Landing pad and ship:** a long-term build linked to the "next mission: Mars" teaser.
+- **Exploring:** five sites based on real south-pole missions and science, scanned with the tablet: a tipped-over robotic lander, the LCROSS impact crater, rolling-boulder tracks, the Lunar Prospector crash site and a peak with sunlight most of the year.
+- **Meteorites:** they land at random. There is only a flash, no burning streak: the Moon has almost no air.
+- **Base layout:** inspired by a lunar base concept. A hub with a dome and a tube to the greenhouse domes, the shelter as a regolith-covered mound, solar panels in rows. No logos.
+- **Other changes:**
+  - Pets have about 20–35 parts each, with tail and ear animations.
+  - There are 15 player levels.
+  - Stage 6 saves keep their base.
+
+Tested in Studio (assistant-driven):
+- Clean start in the lander with holograms of every build.
+- The habitat build starting from its pad with a real key press.
+- Step-by-step reveal of the half-built hub.
+- Every structure built through the debug path.
+- Both vehicles appearing in the garage; the buggy driving 87 studs in 3 s and staying upright.
+- The space chimp pet following the player.
+- A meteorite crater appearing, with C.A.R.L. pointing at it.
+
+Found in that test: Roblox refuses to set a script source over 200,000 characters, so the 238,000-character world builder stopped Rojo live sync. It was split into smaller modules.
+
 ## Decisions
 
 | Decision | Who decided | Why |
@@ -231,6 +275,9 @@ Fixed after that playtest: the visor rendered pale grey (now dark and reflective
 | Keep the player's avatar; only a helmet and backpack | Team | Kids paid for their skins. |
 | C.A.R.L. as a tracked rover with gas-thruster hops | Team, on AI recommendation | Propellers need air; thrusters work in a vacuum. |
 | Space chimp instead of space monkey | AI recommendation, team to confirm | Ham, who flew in 1961, was a chimpanzee. |
+| Start in the lander, build in steps, tools needed for tasks | Team | Longer, more hands-on game; teaches what each tool is for. |
+| Remove the Base menu; skills only at the Lab | Team | Players upgraded everything while standing still. |
+| Real south-pole missions as exploration sites | Team, on AI recommendation | Real references kids can look up. |
 | Roblox Studio as the engine | Team | Team skills; Roblox was used in earlier Space Apps editions. |
 
 ## Testing evidence
