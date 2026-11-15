@@ -4,14 +4,21 @@
 --   * Continue   - loads the slot used last time (Store.continueSlot()),
 --   * New game   - pick one of the 3 worlds; a world that is already used asks before it is wiped,
 --   * Load game  - the 3 world cards: base level, player level, credits, last save, how it was played,
+--   * Join a friend (Stage 10 fix) - the open worlds of the player's Roblox friends (name, base level,
+--                  players n of 4), then "Pick your explorer save": which of the player's own slots
+--                  comes along (an empty one starts a new explorer; nothing is ever wiped from here),
 --   * Settings   - opens the existing Settings panel (it draws above this screen),
 --   * Credits    - the team, the event and the data credits as text.
--- After a world is picked the player chooses "Just me" (solo: the server may move them to their own
--- reserved server) or "With friends" (this server; friends join with Roblox's Join button), and the
--- client sends Action ChooseSlot { slot, mode, fresh }. The player has no character until the server
--- loads the slot and sets the player attribute SBO_SlotChosen = true; then this screen closes.
--- A player teleported into their solo server (TeleportData { slot, mode }) never sees the menu again:
--- the server picks the slot there, so the screen only says "getting your base ready".
+-- After a world is picked the player chooses "Just me" (nobody else) or "With friends" (up to 3
+-- Roblox friends may join with Join a friend), and the client sends Action ChooseSlot { slot, mode,
+-- fresh }. Stage 10 fix (private worlds): the public server is only a lobby, so both modes fly the
+-- player to their own world server; Join a friend sends JoinWorld { owner, slot }. The player has no
+-- character until the server loads the slot and sets the player attribute SBO_SlotChosen = true; then
+-- this screen closes. A trip that fails brings the wait screen's reason (SBO_TripFailedReason) and a
+-- Back button. A player teleported into a world server (TeleportData { owner, slot, ... }) never sees
+-- the menu again: the server picks the slot there, so the screen only says "getting your base ready"
+-- (or why that world sent them back: SBO_WorldNotice). Back in the lobby, TeleportData { notice }
+-- (for example "your friend left") shows under the buttons.
 -- Stage 10 (team request): the background is no longer drawn in 2D. Cinematic.luau plays the shots
 -- of CinematicShots.MENU_ORDER (the Earth about to hide the Sun, a plant close-up, the greenhouse
 -- tube, the ice drills in the crater, the antenna, the base from the air, the ship, a pull-back) on the
@@ -33,8 +40,11 @@ local RunService = game:GetService("RunService")
 local TeleportService = game:GetService("TeleportService")
 local UserInputService = game:GetService("UserInputService")
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
 local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
+local Worlds = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Worlds"))
 
 type SlotInfo = Store.SlotInfo
 type SlotMode = Store.SlotMode
@@ -72,8 +82,18 @@ export type StartMenuView = {
 	hide: () -> (),
 }
 
-type ScreenName = "home" | "slots" | "mode" | "credits" | "wait"
-type Flow = "new" | "load"
+type ScreenName = "home" | "slots" | "mode" | "credits" | "wait" | "friends"
+type Flow = "new" | "load" | "join" -- join (Stage 10 fix): pick which own slot goes to a friend's world
+type WaitKind = "solo" | "friends" | "join"
+
+type FriendCard = {
+	button: TextButton,
+	stroke: UIStroke,
+	name: TextLabel,
+	base: Ui.IconText,
+	players: Ui.IconText,
+	fullPill: TextLabel,
+}
 
 type SlotCard = {
 	button: TextButton,
@@ -147,20 +167,30 @@ local function modeColor(mode: SlotMode): Color3
 	return if mode == "friends" then ROLE.good else ROLE.accent
 end
 
--- The slot and mode this player was teleported with (their own solo server), if any.
-local function teleportSlot(): (number?, SlotMode?)
+-- What this player was teleported with: a world trip (the slot, and solo / friends / join), or a
+-- notice from a world that sent them back to the lobby (Worlds.NOTICES).
+local function teleportInfo(): (number?, WaitKind?, string?)
 	local ok, data = pcall(function(): any
 		return TeleportService:GetLocalPlayerTeleportData()
 	end)
 	if not ok or type(data) ~= "table" then
-		return nil, nil
+		return nil, nil, nil
 	end
+	local notice = if type(data.notice) == "string" and Worlds.NOTICES[data.notice] then data.notice else nil
 	local slot = tonumber(data.slot)
 	if slot == nil or slot ~= math.floor(slot) or slot < 1 or slot > Store.SLOT_COUNT then
-		return nil, nil
+		return nil, nil, notice
 	end
-	local mode: SlotMode = if data.mode == "friends" then "friends" else "solo"
-	return slot, mode
+	local kind: WaitKind = if data.guest == true then "join" elseif data.mode == "friends" then "friends" else "solo"
+	return slot, kind, nil
+end
+
+-- The text for why a trip or a world refused the player ("ui.menu_notice_<reason>").
+local function noticeKey(reason: string?): string
+	if reason ~= nil and Worlds.NOTICES[reason] then
+		return `ui.menu_notice_{reason}`
+	end
+	return "ui.menu_wait_fail"
 end
 
 function StartMenu.new(root: Frame, deps: Deps): StartMenuView
@@ -309,8 +339,9 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		position = UDim2.fromScale(0.06, 0.345),
 		zindex = Z + 6,
 	})
-	local ROW = 0.205
-	local ROW_STEP = 0.265
+	-- Stage 10 fix: five rows (Join a friend is new): Continue, New, Load, Join, Settings + Credits.
+	local ROW = 0.165
+	local ROW_STEP = 0.209
 
 	local lastPress = 0
 	local function pressAllowed(): boolean
@@ -325,6 +356,7 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 	local showScreen: (name: ScreenName) -> ()
 	local openSlots: (flow: Flow) -> ()
 	local openMode: (slot: number, fresh: boolean, back: ScreenName) -> ()
+	local sendJoin: (slot: number) -> ()
 
 	local continueButton = Ui.button(column, {
 		name = "Continue",
@@ -397,10 +429,27 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			openSlots("load")
 		end
 	end)
+	local openFriends: () -> ()
+	local joinButton = Ui.button(column, {
+		name = "JoinFriend",
+		size = UDim2.fromScale(1, ROW),
+		position = UDim2.fromScale(0, ROW_STEP * 3),
+		color = ROLE.secondaryButton,
+		strokeColor = ROLE.good,
+		icon = ICONS.language,
+		tint = ROLE.good,
+		maxText = 34,
+		zindex = Z + 7,
+	}, function()
+		if Store.getSlots() and pressAllowed() then
+			openFriends()
+		end
+	end)
+	local joinStroke = joinButton:FindFirstChildOfClass("UIStroke") :: UIStroke
 	local settingsButton = Ui.button(column, {
 		name = "Settings",
 		size = UDim2.fromScale(0.485, ROW),
-		position = UDim2.fromScale(0, ROW_STEP * 3),
+		position = UDim2.fromScale(0, ROW_STEP * 4),
 		color = ROLE.secondaryButton,
 		strokeColor = ROLE.stroke,
 		icon = ICONS.repair,
@@ -415,7 +464,7 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 	local creditsButton = Ui.button(column, {
 		name = "Credits",
 		size = UDim2.fromScale(0.485, ROW),
-		position = UDim2.fromScale(0.515, ROW_STEP * 3),
+		position = UDim2.fromScale(0.515, ROW_STEP * 4),
 		color = ROLE.secondaryButton,
 		strokeColor = ROLE.stroke,
 		icon = ICONS.star,
@@ -532,7 +581,9 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			if info == nil or confirm.Visible or not pressAllowed() then
 				return
 			end
-			if flow == "new" and info.used then
+			if flow == "join" then
+				sendJoin(slot) -- Stage 10 fix: this slot's explorer goes to the friend's world
+			elseif flow == "new" and info.used then
 				confirmSlot = slot
 				confirm.Visible = true
 			else
@@ -836,7 +887,10 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		zindex = Z + 12,
 	})
 	local waitFailed = false
-	local waitSolo = false
+	local waitKind: WaitKind = "friends"
+	local waitReason: string? = nil -- Stage 10 fix: why the trip failed (SBO_TripFailedReason)
+	local waitNotice: string? = nil -- Stage 10 fix: why this world sends the player back (SBO_WorldNotice)
+	local lobbyNotice: string? = nil -- Stage 10 fix: why a world sent the player back here (TeleportData)
 	local waitToken = 0
 	local waitBack = Ui.button(waitView, {
 		name = "Back",
@@ -853,6 +907,125 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 	}, function()
 		if pressAllowed() then
 			showScreen("home")
+		end
+	end)
+
+	-- Friends (Stage 10 fix): open worlds of the player's Roblox friends ------------------------------
+
+	local friendsView = content("Friends")
+	local chosenOwner: number? = nil -- the friend whose world the "join" slot pick is for
+	local lastFriendsRequest = -math.huge
+	local friendsStatus = Ui.label(friendsView, {
+		name = "Status",
+		size = UDim2.fromScale(0.8, 0.1),
+		position = UDim2.fromScale(0.5, 0.32),
+		anchor = Vector2.new(0.5, 0),
+		textColor = ROLE.text,
+		maxText = 32,
+		zindex = Z + 12,
+	})
+	local friendsHint = Ui.body(friendsView, {
+		name = "Hint",
+		size = UDim2.fromScale(0.7, 0.08),
+		position = UDim2.fromScale(0.5, 0.45),
+		anchor = Vector2.new(0.5, 0),
+		alignX = Enum.TextXAlignment.Center,
+		textColor = ROLE.textDim,
+		maxText = 22,
+		zindex = Z + 12,
+	})
+	local FRIEND_COLUMNS = 3
+	local FRIEND_CARD_WIDTH = 0.31
+	local FRIEND_CARD_HEIGHT = 0.38
+	local friendCards: { FriendCard } = {}
+	for index = 1, Worlds.LIST_LIMIT do
+		local column = (index - 1) % FRIEND_COLUMNS
+		local row = math.floor((index - 1) / FRIEND_COLUMNS)
+		local x = (1 - FRIEND_CARD_WIDTH * FRIEND_COLUMNS - CARD_GAP * (FRIEND_COLUMNS - 1)) / 2
+			+ (FRIEND_CARD_WIDTH + CARD_GAP) * column
+		local button = Ui.button(friendsView, {
+			name = `Friend{index}`,
+			size = UDim2.fromScale(FRIEND_CARD_WIDTH, FRIEND_CARD_HEIGHT),
+			position = UDim2.fromScale(x, 0.04 + row * (FRIEND_CARD_HEIGHT + 0.04)),
+			color = ROLE.panelRaised,
+			corner = 0.08,
+			strokeColor = ROLE.good,
+			zindex = Z + 12,
+			visible = false,
+		}, function()
+			local view = Store.friendWorlds()
+			local world = if view then view.worlds[index] else nil
+			if world == nil or world.full or not pressAllowed() then
+				return
+			end
+			chosenOwner = world.owner
+			openSlots("join")
+			backTarget = "friends" -- Back on the slot pick returns to this list
+		end)
+		local stroke = button:FindFirstChildOfClass("UIStroke") :: UIStroke
+		local name = Ui.label(button, {
+			name = "Name",
+			size = UDim2.fromScale(0.86, 0.24),
+			position = UDim2.fromScale(0.5, 0.12),
+			anchor = Vector2.new(0.5, 0),
+			textColor = ROLE.good,
+			maxText = 28,
+			zindex = Z + 13,
+		})
+		local baseRow = Ui.iconText(button, {
+			name = "Base",
+			size = UDim2.fromScale(0.86, 0.18),
+			position = UDim2.fromScale(0.07, 0.46),
+			icon = ICONS.home,
+			tint = ROLE.good,
+			textColor = ROLE.text,
+			font = Ui.BODY_FONT,
+			maxText = 20,
+			zindex = Z + 13,
+		})
+		local playersRow = Ui.iconText(button, {
+			name = "Players",
+			size = UDim2.fromScale(0.86, 0.18),
+			position = UDim2.fromScale(0.07, 0.7),
+			icon = ICONS.helmet,
+			tint = ROLE.accent,
+			textColor = ROLE.text,
+			font = Ui.BODY_FONT,
+			maxText = 20,
+			zindex = Z + 13,
+		})
+		local fullPill = pill(button, {
+			name = "Full",
+			size = UDim2.fromScale(0.5, 0.15),
+			position = UDim2.fromScale(0.5, 0),
+			anchor = Vector2.new(0.5, 0.5),
+			textColor = ROLE.warning,
+			zindex = Z + 15,
+			visible = false,
+		})
+		table.insert(friendCards, {
+			button = button,
+			stroke = stroke,
+			name = name,
+			base = baseRow,
+			players = playersRow,
+			fullPill = fullPill,
+		})
+	end
+	local friendsRefresh = Ui.button(friendsView, {
+		name = "Refresh",
+		size = UDim2.fromScale(0.3, 0.11),
+		position = UDim2.fromScale(0.5, 0.88),
+		anchor = Vector2.new(0.5, 0),
+		color = ROLE.secondaryButton,
+		strokeColor = ROLE.accent,
+		icon = ICONS.restart,
+		tint = ROLE.accent,
+		maxText = 26,
+		zindex = Z + 12,
+	}, function()
+		if pressAllowed() then
+			openFriends()
 		end
 	end)
 
@@ -918,6 +1091,7 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		Ui.setButton(continueButton, Store.t("ui.continue"))
 		Ui.setButton(newButton, Store.t("ui.menu_new_game"))
 		Ui.setButton(loadButton, Store.t("ui.menu_load_game"))
+		Ui.setButton(joinButton, Store.t("ui.menu_join_friend"))
 		Ui.setButton(settingsButton, Store.t("ui.settings"))
 		Ui.setButton(creditsButton, Store.t("ui.menu_credits"))
 		Ui.setButtonLook(continueButton, slot ~= nil, ROLE.primaryButton)
@@ -934,17 +1108,23 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		local newPrimary = ready and slot == nil
 		Ui.setButtonLook(newButton, ready, if newPrimary then ROLE.primaryButton else ROLE.secondaryButton)
 		Ui.setButtonLook(loadButton, ready, ROLE.secondaryButton)
+		Ui.setButtonLook(joinButton, ready, ROLE.secondaryButton)
 		if ready then
 			tintIcon(newButton, if newPrimary then ROLE.primaryButtonText else ROLE.accent)
 			tintIcon(loadButton, ROLE.accent)
+			tintIcon(joinButton, ROLE.good)
 		end
 		newStroke.Color = if newPrimary then ROLE.stroke else ROLE.accent
+		joinStroke.Color = ROLE.good
 		-- Stage 10: once the list is here, say that the game saves by itself (playtest feedback).
 		-- Not when saves could not be read (meta.offline): then nothing is saved this visit.
-		homeStatus.Text = if meta == nil
-			then Store.t("ui.menu_loading")
+		homeStatus.Text = if lobbyNotice ~= nil
+			then Store.t(noticeKey(lobbyNotice))
+			elseif meta == nil then Store.t("ui.menu_loading")
 			elseif meta.offline then ""
 			else Store.t("ui.save_auto")
+		-- Stage 10 fix: a world that sent the player back says why, in orange, until the next choice.
+		homeStatus.TextColor3 = if lobbyNotice ~= nil then ROLE.warning else ROLE.accent
 	end
 
 	local function renderSlots()
@@ -981,7 +1161,8 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			card.emptyTitle.Visible = not used
 			card.emptyHint.Visible = not used
 			card.emptyTitle.Text = Store.t("ui.menu_empty")
-			card.emptyHint.Text = Store.t("ui.menu_empty_hint")
+			-- Stage 10 fix: joining a friend with an empty slot starts a new explorer, not a new base.
+			card.emptyHint.Text = Store.t(if flow == "join" then "ui.menu_empty_join" else "ui.menu_empty_hint")
 			local isLast = meta ~= nil and meta.last == slot and used
 			card.lastPill.Visible = isLast
 			card.lastPill.Text = Store.t("ui.menu_last_time")
@@ -1015,15 +1196,58 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 	end
 
 	local function renderWait()
-		if waitFailed then
-			waitText.Text = Store.t("ui.menu_wait_fail")
+		if waitNotice ~= nil then
+			-- Stage 10 fix: this world is not for this player; the server sends them back to the menu.
+			waitText.Text = Store.t(noticeKey(waitNotice))
+			waitText.TextColor3 = ROLE.warning
+		elseif waitFailed then
+			waitText.Text = Store.t(noticeKey(waitReason))
 			waitText.TextColor3 = ROLE.warning
 		else
-			waitText.Text = Store.t(if waitSolo then "ui.menu_wait_solo" else "ui.menu_wait")
+			waitText.Text = Store.t(if waitKind == "solo"
+				then "ui.menu_wait_solo"
+				elseif waitKind == "join" then "ui.menu_wait_join"
+				else "ui.menu_wait")
 			waitText.TextColor3 = ROLE.text
 		end
-		waitBack.Visible = waitFailed
+		waitBack.Visible = waitFailed and waitNotice == nil
 		Ui.setButton(waitBack, Store.t("ui.menu_back"))
+	end
+
+	-- Stage 10 fix: the "Join a friend" list.
+	local function renderFriends()
+		local view = Store.friendWorlds()
+		local worlds = if view then view.worlds else {}
+		local loading = view == nil or view.status == "loading"
+		for index, card in friendCards do
+			local world = worlds[index]
+			card.button.Visible = world ~= nil
+			if world then
+				card.name.Text = if world.name ~= "" then world.name else Store.t("ui.menu_join_friend")
+				card.base.label.Text = Store.t("ui.base_level", { n = world.baseLevel })
+				card.players.label.Text = Store.t("ui.menu_friend_players", { n = world.players, m = world.max })
+				card.fullPill.Visible = world.full
+				card.fullPill.Text = Store.t("ui.menu_friend_full")
+				card.stroke.Color = if world.full then ROLE.stroke else ROLE.good
+				card.button.BackgroundColor3 = if world.full then ROLE.panel else ROLE.panelRaised
+			end
+		end
+		local empty = #worlds == 0
+		friendsStatus.Visible = empty
+		friendsHint.Visible = empty and not loading
+		if view ~= nil and view.status == "error" then
+			friendsStatus.Text = Store.t("ui.menu_friends_error")
+			friendsStatus.TextColor3 = ROLE.warning
+		elseif loading then
+			friendsStatus.Text = Store.t("ui.menu_friends_loading")
+			friendsStatus.TextColor3 = ROLE.text
+		else
+			friendsStatus.Text = Store.t("ui.menu_friends_none")
+			friendsStatus.TextColor3 = ROLE.text
+		end
+		friendsHint.Text = Store.t("ui.menu_friends_hint")
+		Ui.setButton(friendsRefresh, Store.t("ui.menu_friends_refresh"))
+		Ui.setButtonLook(friendsRefresh, not loading, ROLE.secondaryButton)
 	end
 
 	local function renderCredits()
@@ -1036,8 +1260,14 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		Ui.setButton(backButton, Store.t("ui.menu_back"))
 		backButton.Visible = current ~= "wait"
 		if current == "slots" then
-			panelTitle.Text = Store.t(if flow == "new" then "ui.menu_pick_new" else "ui.menu_pick_load")
-			Ui.setIcon(panelIcon, if flow == "new" then ICONS.rocket else ICONS.data, ROLE.accent)
+			panelTitle.Text = Store.t(if flow == "new"
+				then "ui.menu_pick_new"
+				elseif flow == "join" then "ui.menu_pick_join"
+				else "ui.menu_pick_load")
+			Ui.setIcon(panelIcon, if flow == "new" then ICONS.rocket elseif flow == "join" then ICONS.helmet else ICONS.data, ROLE.accent)
+		elseif current == "friends" then
+			panelTitle.Text = Store.t("ui.menu_friends_title")
+			Ui.setIcon(panelIcon, ICONS.language, ROLE.good)
 		elseif current == "mode" then
 			panelTitle.Text = Store.t("ui.menu_mode_title")
 			Ui.setIcon(panelIcon, ICONS.planet, ROLE.accent)
@@ -1055,6 +1285,7 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		renderSlots()
 		renderMode()
 		renderWait()
+		renderFriends()
 		renderCredits()
 		renderPanel()
 	end
@@ -1084,7 +1315,8 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		modeView.Visible = name == "mode"
 		waitView.Visible = name == "wait"
 		creditsView.Visible = name == "credits"
-		if name == "home" or name == "slots" or name == "credits" then
+		friendsView.Visible = name == "friends"
+		if name == "home" or name == "slots" or name == "credits" or name == "friends" then
 			backTarget = "home"
 		end
 		render()
@@ -1096,6 +1328,8 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			selectFirst(modeCards[1].button)
 		elseif name == "credits" then
 			selectFirst(backButton)
+		elseif name == "friends" then
+			selectFirst(if friendCards[1].button.Visible then friendCards[1].button else friendsRefresh)
 		end
 	end
 
@@ -1111,9 +1345,11 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		backTarget = back
 	end
 
-	local function startWait(solo: boolean)
-		waitSolo = solo
+	local function startWait(kind: WaitKind)
+		waitKind = kind
 		waitFailed = false
+		waitReason = nil
+		lobbyNotice = nil -- a new choice: the old notice no longer applies
 		showScreen("wait")
 		waitToken += 1
 		local token = waitToken
@@ -1130,9 +1366,56 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 	sendChoice = function(mode: SlotMode)
 		deps.closeSettings()
 		Store.chooseSlot(chosenSlot, mode, chosenFresh)
-		-- Solo outside Studio means a trip to the player's own server.
-		startWait(mode == "solo" and not RunService:IsStudio())
+		-- Stage 10 fix: outside Studio both modes fly to the player's own world server.
+		startWait(if mode == "solo" and not RunService:IsStudio() then "solo" else "friends")
 	end
+
+	-- Stage 10 fix: Join a friend, then this slot: the server checks the friendship and the room.
+	sendJoin = function(slot: number)
+		local owner = chosenOwner
+		if owner == nil then
+			return -- (the slot card already applied the tap cooldown)
+		end
+		deps.closeSettings()
+		chosenSlot = slot
+		Store.joinWorld(owner, slot)
+		startWait("join")
+	end
+
+	openFriends = function()
+		showScreen("friends")
+		-- The server answers at most every few seconds; a faster tap keeps the list it has.
+		if os.clock() - lastFriendsRequest >= 10.5 then
+			lastFriendsRequest = os.clock()
+			Store.requestFriendWorlds()
+		end
+	end
+	Store.onFriendWorlds(function()
+		if current == "friends" then
+			renderFriends()
+		end
+	end)
+
+	-- Stage 10 fix: the server could not take the player to that world (or it is full or closed).
+	player:GetAttributeChangedSignal("SBO_TripFailed"):Connect(function()
+		if current ~= "wait" or Store.isSlotChosen() then
+			return
+		end
+		local reason = player:GetAttribute("SBO_TripFailedReason")
+		waitReason = if type(reason) == "string" then reason else nil
+		waitFailed = true
+		renderWait()
+		renderPanel()
+		selectFirst(waitBack)
+	end)
+	-- Stage 10 fix: this world server is sending the player back to the lobby.
+	player:GetAttributeChangedSignal("SBO_WorldNotice"):Connect(function()
+		local notice = player:GetAttribute("SBO_WorldNotice")
+		waitNotice = if type(notice) == "string" then notice else nil
+		if screen.Visible then
+			renderWait()
+		end
+	end)
 
 	-- Animation: the waiting rocket (the background is the cinematic now).
 	local animation: RBXScriptConnection? = nil
@@ -1230,12 +1513,16 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		setAnimating(true)
 		setVeil(true)
 		setCinematic(true)
-		local teleportedSlot, teleportedMode = teleportSlot()
+		local teleportedSlot, teleportedKind, notice = teleportInfo()
 		if teleportedSlot then
-			-- Arrived in the player's own server: the server picks that slot by itself.
+			-- Arrived in a world server: the server picks that slot by itself (or, if this world is not
+			-- for this player, says why before it sends them back; the attribute may already be set).
 			chosenSlot = teleportedSlot
-			startWait(teleportedMode == "solo")
+			local worldNotice = player:GetAttribute("SBO_WorldNotice")
+			waitNotice = if type(worldNotice) == "string" then worldNotice else nil
+			startWait(teleportedKind or "friends")
 		else
+			lobbyNotice = notice -- back in the lobby: say why (for example "your friend left")
 			showScreen("home")
 		end
 	end

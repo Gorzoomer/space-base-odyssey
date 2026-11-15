@@ -2,10 +2,16 @@
 -- Space Base Odyssey - build and grow the base (Stages 6 and 7), server side.
 -- Every player arrives in the lander and builds the whole base with credits: first the habitat
 -- (free), then solar arrays, greenhouse, Lab, antenna, shelter, automatic ice drills, the cargo
--- robot, the garage, the landing pad and the ship. Builds are SHARED in a server (a structure stands
--- at the highest level any present player has built, see BaseBuild.effective); credits, XP, skills,
--- tool upgrades, pets, scanned sites and what each player wears belong to that player and are saved
--- by ProgressService (Record.base).
+-- robot, the garage, the landing pad and the ship. Credits, XP, skills, tool upgrades, gear, pets,
+-- scanned sites and what each player wears belong to that player and are saved by ProgressService
+-- (Record.base).
+-- Stage 10 fix (private worlds, live playtest): the builds standing are the WORLD OWNER's save
+-- (ProgressService.worldOwner; Worlds.worldBuildLists), no longer the highest level of every player
+-- present, so a friend's bigger base never shows up in your world. A guest pays with their own
+-- credits, and every level they finish goes into the owner's save (completeJob); the guest's own
+-- slot keeps its own builds untouched. When the owner changes (onOwnerChanged) the base is recomputed.
+-- The silo, the cargo robot (it takes turns between everyone playing) and builds in progress belong
+-- to the world.
 --
 -- Stage 7: building happens in STEPS. Triggering a build pad pays the credits and starts the level
 -- (BaseBuild.stagesFor steps). Each step needs a parts crate carried from the lander's cargo bay
@@ -65,6 +71,8 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local BaseBuild = require(Shared:WaitForChild("BaseBuild"))
 local MissionData = require(Shared:WaitForChild("MissionData"))
 local Types = require(Shared:WaitForChild("Types"))
+
+local Worlds = require(Shared:WaitForChild("Worlds"))
 
 local ProgressServiceModule = require(script.Parent:WaitForChild("ProgressService"))
 
@@ -804,20 +812,25 @@ local function showJob(id: string, job: Job)
 	worldCall("setBuildProgress", id, job.level, job.stage, job.stages)
 end
 
--- Recomputes the builds standing in the server from every present player whose data is loaded and
--- updates the world. animate = a player just finished a level (structures rise in).
+-- Recomputes the builds standing in the world (the owner's save, Stage 10 fix) and updates the
+-- world. animate = a player just finished a level (structures rise in).
 -- Stage 10: the world shows BaseBuild.shownLevels (the showcase while nobody is loaded); `changed`
 -- and everything that follows it (silo, tools, listeners, BaseState) use the effective builds.
 local function recompute(animate: boolean): boolean
-	local list: { Levels } = {}
+	-- Stage 10 fix (private worlds): the world stands on its OWNER's builds only, never the highest of
+	-- everyone present (Worlds.worldBuildLists). Without the owner (they left a world whose guests are
+	-- on their way out) the base stays as it is; with nobody loaded the showcase shows.
+	local api = progress
+	local anyoneLoaded = false
 	for player in present do
 		if isLoaded(player) then
-			local base = baseOf(player)
-			if base then
-				table.insert(list, base.builds)
-			end
+			anyoneLoaded = true
+			break
 		end
 	end
+	local owner = if api then api.worldOwner() else nil
+	local ownerBase = if owner and isLoaded(owner) then baseOf(owner) else nil
+	local list = Worlds.worldBuildLists(if ownerBase then ownerBase.builds else nil, effective, anyoneLoaded)
 	local newEffective = BaseBuild.effective(list)
 
 	-- A job is pointless once a save present already has that level (someone joined with it).
@@ -1006,11 +1019,14 @@ local function siloTick(dt: number)
 		return
 	end
 	cargoTimer = 0
+	-- Stage 10 fix: the robot belongs to the world (the owner's base), so it takes turns between
+	-- everyone playing in it.
 	local owners: { Player } = {}
-	for player in present do
-		local base = if isLoaded(player) then baseOf(player) else nil
-		if base and BaseBuild.levelOf(base.builds, "cargo_bot") >= 1 then
-			table.insert(owners, player)
+	if BaseBuild.levelOf(effective, "cargo_bot") >= 1 then
+		for player in present do
+			if isLoaded(player) then
+				table.insert(owners, player)
+			end
 		end
 	end
 	if #owners == 0 or silo < 1 then
@@ -1084,15 +1100,23 @@ local function completeJob(finisher: Player, id: string, job: Job)
 		return
 	end
 	local payer = job.payer
+	-- The player who paid (or the finisher, when the payer left) gets the XP and the "built" line.
 	local owner = if payer and present[payer] then payer else finisher
-	if owner ~= payer then
-		local pending = pendingOwner[job.payerId] or {}
+	-- Stage 10 fix (private worlds): the level goes into the WORLD OWNER's save, also when a guest
+	-- paid for it (a guest's own base never changes in a friend's world). The owner away: kept for
+	-- them in this server session (onLoaded adds it).
+	local worldOwner = api.worldOwner()
+	local saveTo = if worldOwner and present[worldOwner] then worldOwner else nil
+	if saveTo then
+		api.updateBase(saveTo, function(saved: BaseRecord)
+			saved.builds[id] = math.max(BaseBuild.levelOf(saved.builds, id), job.level)
+		end)
+	else
+		local targetId = Worlds.buildSaveTarget(api.worldOwnerId(), job.payerId)
+		local pending = pendingOwner[targetId] or {}
 		pending[id] = math.max(BaseBuild.levelOf(pending, id), job.level)
-		pendingOwner[job.payerId] = pending
+		pendingOwner[targetId] = pending
 	end
-	api.updateBase(owner, function(saved: BaseRecord)
-		saved.builds[id] = math.max(BaseBuild.levelOf(saved.builds, id), job.level)
-	end)
 	local before = applied[id]
 	recompute(true)
 	if applied[id] == before then
@@ -1711,7 +1735,8 @@ local function previewShowcaseEclipse()
 	if not showcaseOn or showcaseEclipseDone then
 		return
 	end
-	-- A solo trip's reserved server picks the slot at once (no menu shots): no preview there.
+	-- A world server (Stage 10 fix: every world is a reserved server) picks the slot at once (no menu
+	-- shots): no preview there. The lobby, a public server, previews it.
 	if game.PrivateServerId ~= "" and game.PrivateServerOwnerId == 0 then
 		return
 	end
@@ -1965,6 +1990,32 @@ function BaseService.start(worldRefs: any, remoteEvents: Remotes, progressServic
 	recompute(false)
 
 	progressService.onLoaded(onLoaded)
+	-- Stage 10 fix: a new world owner (their slot loaded, they left, or the next in line took over in
+	-- a local server) means a different base.
+	-- Builds in progress were for the old owner's base: they stop and their payers get the credits back.
+	local lastOwnerId: number? = nil
+	progressService.onOwnerChanged(function()
+		local owner = progressService.worldOwner()
+		local ownerId = if owner then owner.UserId else nil
+		if lastOwnerId ~= nil and ownerId ~= lastOwnerId then
+			for id, job in jobs do
+				jobs[id] = nil
+				local payer = job.payer
+				if payer and present[payer] then
+					progressService.updateBase(payer, function(saved: BaseRecord)
+						saved.credits += job.cost
+					end)
+					sayTo(payer, "carl.base.build_cancelled")
+				end
+				worldCall("setBuildLevel", id, applied[id] or 0, false) -- drop the step view
+			end
+		end
+		lastOwnerId = ownerId
+		recompute(false)
+		refreshPrompts()
+		refreshToolsAll()
+		scheduleSendAll()
+	end)
 	progressService.onCollectible(onCollectible)
 	progressService.onCosmetic(onCosmetic)
 	Players.PlayerAdded:Connect(addPlayer)

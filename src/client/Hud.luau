@@ -1139,8 +1139,11 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		stormNow.frame.Visible = storming
 		if storming then
 			local stats = Store.getStats()
-			local image = if stats and stats.sheltered then Ui.ICONS.shelter else Ui.ICONS.storm
-			stormNow.set(image, Store.t("ui.storm_now"), ROLE.text)
+			local sheltered = stats ~= nil and stats.sheltered
+			local image = if sheltered then Ui.ICONS.shelter else Ui.ICONS.storm
+			-- Stage 10 fix: outside the shelter the banner says the radiation is rising right now (the
+			-- radiation meter climbs second by second while anyone stands outside).
+			stormNow.set(image, Store.t(if sheltered then "ui.storm_now" else "ui.storm_outside"), ROLE.text)
 		end
 	end
 

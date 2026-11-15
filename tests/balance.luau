@@ -468,6 +468,152 @@ do
 	check(fastest < slowestCar, `M: a boosted runner ({fastest}) is still slower than any vehicle ({slowestCar})`)
 end
 
+-- N. Stage 10 fix: storms and radiation. Exposure is counted second by second while particles are
+-- here; the live dose rises while someone stands outside, never moves for a sheltered crew, never goes
+-- down, and the end of the day gives exactly what the meter showed. Training drills wait and stop.
+do
+	local storm = MissionData.STORM
+	local meters = MissionData.METERS
+	local step = Simulation.stormExposureStep
+	check(step(MissionData, 0, 3, storm.DURATION_SECONDS) == 0, "N: a sheltered crew gets no storm exposure")
+	check(step(MissionData, 2, 2, 0) == 0, "N: no time, no exposure")
+	check(math.abs(step(MissionData, 1, 1, storm.DURATION_SECONDS) - 1) < 1e-9, "N: a whole storm outside is exposure 1")
+	check(math.abs(step(MissionData, 1, 3, storm.DURATION_SECONDS) - 1 / 3) < 1e-9, "N: one of three outside is a third")
+	check(step(MissionData, 5, 2, storm.DURATION_SECONDS) <= 1 + 1e-9, "N: never more than the whole crew")
+	check(Simulation.stormDose(MissionData, 1) == meters.DOSE_PER_EXPOSED_ASTRONAUT, "N: a whole storm outside adds the full storm dose")
+	check(Simulation.stormDose(MissionData, -1) == 0, "N: negative exposure adds nothing (dose never goes down)")
+	check(
+		meters.DOSE_PER_EXPOSED_ASTRONAUT >= 18 and meters.DOSE_PER_EXPOSED_ASTRONAUT <= 25,
+		`N: a whole storm outside is easy to notice ({meters.DOSE_PER_EXPOSED_ASTRONAUT} points)`
+	)
+	check(meters.DOSE_LIMIT == 100, "N: the dose limit stays 100")
+
+	-- Plays one storm shift tick by tick (0.25 s) with `outside` of `players` astronauts outside for
+	-- the first `outsideSeconds` of the storm. Returns the live dose track, the final live meters and
+	-- the state after endDay.
+	local function playStorm(players: number, outside: number, outsideSeconds: number, falseAlarm: boolean?)
+		local state = Simulation.newMission(MissionData, 1, { totalDays = 1, schedule = { "SolarStorm" } })
+		Simulation.beginDay(state, MissionData)
+		local shiftSeconds = MissionData.MISSION.SHIFT_SECONDS
+		local arrives = storm.FLARE_AT_SECONDS + storm.WARNING_SECONDS_NO_LINK
+		local ends = arrives + storm.DURATION_SECONDS
+		local exposure = 0
+		local track: { number } = {}
+		local dt = 0.25
+		local t = 0
+		local function result(): ShiftResult
+			return {
+				playerCount = players,
+				iceCores = 0,
+				arraysCleaned = 0,
+				exposedAstronauts = if exposure > 0 then outside else 0,
+				stormExposure = exposure,
+				leakRepaired = false,
+				suitRefills = 0,
+				falseAlarm = falseAlarm,
+				antennaLinked = false,
+			}
+		end
+		while t < shiftSeconds do
+			local nextT = math.min(shiftSeconds, t + dt)
+			if not falseAlarm then
+				local from, to = math.max(t, arrives), math.min(nextT, ends)
+				if to > from then
+					local exposedNow = if from - arrives < outsideSeconds then outside else 0
+					exposure += step(MissionData, exposedNow, players, to - from)
+				end
+			end
+			t = nextT
+			table.insert(track, Simulation.liveMeters(state, MissionData, result(), t / shiftSeconds).dose)
+		end
+		local final = Simulation.liveMeters(state, MissionData, result(), 1)
+		local startDose = state.dose
+		Simulation.endDay(state, MissionData, result())
+		return track, final, state, startDose, arrives, ends, dt
+	end
+
+	-- One of two astronauts stays outside the whole storm.
+	local track, final, ended, startDose, arrives, ends, dt = playStorm(2, 1, math.huge)
+	local never = true
+	for i = 2, #track do
+		never = never and track[i] >= track[i - 1] - 1e-9
+	end
+	check(never, "N: the live dose never goes down during a storm shift")
+	local beforeStorm = track[math.floor(arrives / dt)]
+	local afterStorm = track[math.floor(ends / dt) + 1]
+	local stormRise = afterStorm - beforeStorm
+	local expectedRise = meters.DOSE_PER_EXPOSED_ASTRONAUT / 2
+	check(stormRise >= expectedRise, `N: the live dose rises during the storm ({stormRise}, needs >= {expectedRise})`)
+	local midStorm = track[math.floor((arrives + storm.DURATION_SECONDS / 2) / dt)]
+	check(
+		midStorm > beforeStorm + expectedRise / 4 and midStorm < afterStorm - expectedRise / 4,
+		`N: halfway through the storm the dose is partway up ({beforeStorm} < {midStorm} < {afterStorm})`
+	)
+	check(math.abs(final.dose - ended.dose) < 1e-6, `N: end-of-day dose ({ended.dose}) equals the live dose ({final.dose})`)
+	check(
+		math.abs(ended.dose - (startDose + meters.DOSE_BACKGROUND_PER_DAY + expectedRise)) < 1e-6,
+		`N: one of two outside adds half a storm dose ({ended.dose})`
+	)
+	check(ended.history[1].causeKey == "cause.storm_exposed", "N: the report says someone was outside")
+
+	-- Everyone sheltered: the storm adds nothing; only the slow background moves the meter.
+	local shelteredTrack, _, sheltered = playStorm(3, 0, 0)
+	local shelteredStorm = shelteredTrack[math.floor(ends / dt) + 1] - shelteredTrack[math.floor(arrives / dt)]
+	local background = meters.DOSE_BACKGROUND_PER_DAY * storm.DURATION_SECONDS / MissionData.MISSION.SHIFT_SECONDS
+	check(shelteredStorm <= background + 0.01, `N: a sheltered crew's dose does not jump in a storm ({shelteredStorm})`)
+	check(sheltered.dose == meters.START_DOSE + meters.DOSE_BACKGROUND_PER_DAY, `N: sheltered crew ends with background only ({sheltered.dose})`)
+	check(sheltered.history[1].causeKey == "cause.storm_sheltered", "N: the report praises the shelter")
+
+	-- Half the storm outside, then inside: half the dose. A false alarm brings no particles: no dose.
+	local _, _, half = playStorm(1, 1, storm.DURATION_SECONDS / 2)
+	local halfDose = half.dose - meters.DOSE_BACKGROUND_PER_DAY
+	check(
+		math.abs(halfDose - meters.DOSE_PER_EXPOSED_ASTRONAUT / 2) < 0.3,
+		`N: half the storm outside is about half the storm dose ({halfDose})`
+	)
+	local _, _, alarm = playStorm(1, 1, math.huge, true)
+	check(alarm.dose == meters.DOSE_BACKGROUND_PER_DAY, `N: a false alarm adds no storm dose ({alarm.dose})`)
+	check(alarm.history[1].causeKey == "cause.false_alarm", "N: the report explains the false alarm")
+	local calm = Simulation.newMission(MissionData, 1, { totalDays = 1, schedule = { "None" } })
+	Simulation.beginDay(calm, MissionData)
+	local calmResult = idleShift(false)(calm)
+	calmResult.stormExposure = 1
+	Simulation.endDay(calm, MissionData, calmResult)
+	check(calm.dose == meters.DOSE_BACKGROUND_PER_DAY, "N: exposure counts only on storm days")
+
+	-- Training drills: a quiet break before the next flare, and at most MAX_DRILLS in one shift.
+	check(storm.RETRY_GAP_SECONDS >= 30, `N: drills wait at least 30 s between storms ({storm.RETRY_GAP_SECONDS})`)
+	check(storm.MAX_DRILLS >= 1 and storm.MAX_DRILLS <= 3, `N: at most 3 drills per shift ({storm.MAX_DRILLS})`)
+	check(Simulation.drillRetryAt(MissionData, 1, 100) == 100 + storm.RETRY_GAP_SECONDS, "N: the next drill waits the gap")
+	check(Simulation.drillRetryAt(MissionData, storm.MAX_DRILLS, 100) == nil, "N: no drill after the cap")
+	local drills, at = 1, 0
+	local guard = 0
+	while guard < 20 do
+		guard += 1
+		local nextAt = Simulation.drillRetryAt(MissionData, drills, at + storm.WARNING_SECONDS_NO_LINK + storm.DURATION_SECONDS)
+		if nextAt == nil then
+			break
+		end
+		check(nextAt - at >= storm.RETRY_GAP_SECONDS + storm.DURATION_SECONDS, "N: drills never come back to back")
+		drills, at = drills + 1, nextAt
+	end
+	check(drills == storm.MAX_DRILLS, `N: drills stop at the cap ({drills})`)
+
+	-- Storms matter: a crew always caught outside ends with more radiation than a careful one, and a
+	-- careful crew still earns 3 stars (C above) with every storm sheltered.
+	for _, seed in SEEDS do
+		local careless = run(
+			reactiveWith(function(state, result)
+				result.stormExposure = if state.todayEvent == "SolarStorm" then 1 else 0
+			end),
+			seed
+		)
+		local careful = run(reactive, seed)
+		check(careless.dose > careful.dose + meters.DOSE_PER_EXPOSED_ASTRONAUT, `N seed {seed}: storms outside cost radiation ({careless.dose} vs {careful.dose})`)
+		check(careless.outcome == "Completed", `N seed {seed}: two storms outside still let the week finish ({careless.outcome})`)
+	end
+end
+
 print(`balance: {passes} passed, {failures} failed; best static allocation earned {bestStatic} stars`)
 if failures > 0 then
 	error("balance tests failed")

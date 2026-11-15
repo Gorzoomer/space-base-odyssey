@@ -71,7 +71,9 @@ MissionData.METERS = table.freeze({
 	AIR_PER_ICE_CORE = 10, -- fresh ice water split into oxygen right away (needs the air maker powered)
 	FOOD_PER_GREENHOUSE_CELL = 12, -- harvested the NEXT day: plants take time to grow
 	DOSE_BACKGROUND_PER_DAY = 3, -- galactic cosmic rays never stop
-	DOSE_PER_EXPOSED_ASTRONAUT = 18, -- caught outside the shelter during a particle storm
+	-- A whole particle storm spent outside the shelter. Stage 10 fix: counted second by second while
+	-- the particles are here (half the storm outside = half of this), crew average like the meter.
+	DOSE_PER_EXPOSED_ASTRONAUT = 22,
 	DOSE_LIMIT = 100, -- reaching it sends the crew home early
 	AIR_LEAK_PER_DAY = 10, -- equipment failure left unrepaired
 	SUIT_REFILL_AIR_COST = 2, -- refilling suits inside the habitat uses base air
@@ -130,6 +132,14 @@ MissionData.STORM = table.freeze({
 	WARNING_SECONDS_NO_LINK = 15,
 	DURATION_SECONDS = 25,
 	FLARE_AT_SECONDS = 40, -- seconds into the shift when the flare is spotted
+	-- Stage 10 fix (live playtest: storms came "very, very often"). The storm drill (training) runs
+	-- again when nobody stayed safe, but only after this many quiet seconds since the last one ended,
+	-- and at most MAX_DRILLS times in one shift. After that the day can end. Story days have one
+	-- storm for the whole crew (never one per player).
+	RETRY_GAP_SECONDS = 45,
+	MAX_DRILLS = 3,
+	-- C.A.R.L. reminds a player standing outside during a particle storm at most this often.
+	OUTSIDE_REMINDER_SECONDS = 8,
 })
 
 -- Build and grow the base (GAME, Stages 6-9). A new player lands in the arrival lander (the spawn)

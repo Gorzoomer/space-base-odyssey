@@ -83,6 +83,10 @@ local KEYS: { string } = {
 	"carl.storm_warning",
 	"carl.storm_now",
 	"carl.storm_over",
+	-- Stage 10 fix: storms and radiation (MissionService, Hud).
+	"carl.storm_outside",
+	"carl.drill_again",
+	"ui.storm_outside",
 	"carl.false_alarm",
 	"carl.suit_low",
 	"carl.rescued",
@@ -788,6 +792,10 @@ local EN: { [string]: string } = {
 	["carl.storm_warning"] = "Like the real {class} flare of {date}! To the shelter!",
 	["carl.storm_now"] = "Sun particles are here! Stay in the shelter!",
 	["carl.storm_over"] = "Storm over. You can go outside.",
+	-- Stage 10 fix: storms and radiation (MissionService, Hud).
+	["carl.storm_outside"] = "Radiation rising! Get to the shelter!",
+	["carl.drill_again"] = "Another storm drill is coming soon.",
+	["ui.storm_outside"] = "You are outside! Radiation is rising!",
 	["carl.false_alarm"] = "The real {class} flare of {date} brought no particles!",
 	["carl.suit_low"] = "Suit air is low! Go inside!",
 	["carl.rescued"] = "Suit air ran out! I brought you back.",
@@ -1391,7 +1399,7 @@ local EN: { [string]: string } = {
 	["ui.menu_mode_friends"] = "With friends",
 	["ui.menu_mode_title"] = "How do you want to play?",
 	["ui.menu_solo_desc"] = "Your own Moon, just for you",
-	["ui.menu_friends_desc"] = "Friends can join your Moon base",
+	["ui.menu_friends_desc"] = "You and up to 3 friends", -- Stage 10 fix: MissionData.MISSION.PLAYERS_MAX = 4
 	["ui.menu_wipe_title"] = "Start this world again?",
 	["ui.menu_wipe_text"] = "Your base in this world will be gone.",
 	["ui.menu_wipe_yes"] = "Yes, start again",
@@ -1495,6 +1503,10 @@ local ES: { [string]: string } = {
 	["carl.storm_warning"] = "¡Como la llamarada real {class} del {date}! ¡Al refugio!",
 	["carl.storm_now"] = "¡Llegaron las partículas solares! ¡Quédate en el refugio!",
 	["carl.storm_over"] = "Ya pasó la tormenta. Puedes salir.",
+	-- Stage 10 fix: storms and radiation (MissionService, Hud).
+	["carl.storm_outside"] = "¡La radiación sube! ¡Ve al refugio!",
+	["carl.drill_again"] = "Pronto viene otro simulacro de tormenta.",
+	["ui.storm_outside"] = "¡Estás afuera! ¡La radiación sube!",
 	["carl.false_alarm"] = "¡La llamarada real {class} del {date} no trajo partículas!",
 	["carl.suit_low"] = "¡Queda poco aire en el traje! ¡Entra!",
 	["carl.rescued"] = "¡Sin aire! Te regresé a la base.",
@@ -2098,7 +2110,7 @@ local ES: { [string]: string } = {
 	["ui.menu_mode_friends"] = "Con amigos",
 	["ui.menu_mode_title"] = "¿Cómo quieres jugar?",
 	["ui.menu_solo_desc"] = "Tu propia Luna, solo para ti",
-	["ui.menu_friends_desc"] = "Tus amigos pueden unirse a tu base",
+	["ui.menu_friends_desc"] = "Tú y hasta 3 amigos",
 	["ui.menu_wipe_title"] = "¿Empezar este mundo otra vez?",
 	["ui.menu_wipe_text"] = "Tu base de este mundo se borrará.",
 	["ui.menu_wipe_yes"] = "Sí, empezar otra vez",
@@ -2338,6 +2350,42 @@ for index = 1, FUNFACT_COUNT do
 	table.insert(KEYS, key)
 	EN[key] = FUNFACTS_EN[index]
 	ES[key] = FUNFACTS_ES[index]
+end
+
+-- Stage 10 fix: private worlds (start menu "Join a friend", the notices of a world that sends a
+-- player back to the menu, and C.A.R.L.'s lines in a friends world). { key, English, Spanish }.
+local WORLD_STRINGS: { { string } } = {
+	{ "ui.menu_join_friend", "Join a friend", "Unirse a un amigo" },
+	{ "ui.menu_friends_title", "Friends playing now", "Amigos jugando ahora" },
+	{ "ui.menu_friends_loading", "Looking for your friends...", "Buscando a tus amigos..." },
+	{ "ui.menu_friends_none", "No friends online with open worlds", "Ningún amigo en línea con mundo abierto" },
+	{ "ui.menu_friends_hint", "Ask a friend to pick With friends", "Pide a un amigo elegir Con amigos" },
+	{ "ui.menu_friends_error", "Could not find your friends. Try again.", "No encontramos a tus amigos. Intenta otra vez." },
+	{ "ui.menu_friends_refresh", "Look again", "Buscar otra vez" },
+	{ "ui.menu_friend_players", "{n} of {m} players", "{n} de {m} jugadores" },
+	{ "ui.menu_friend_full", "Full", "Llena" },
+	{ "ui.menu_pick_join", "Pick your explorer save", "Elige tu partida de explorador" },
+	{ "ui.menu_empty_join", "Start a new explorer", "Empieza un explorador nuevo" },
+	{ "ui.menu_wait_join", "Flying to your friend's base...", "Volando a la base de tu amigo..." },
+	{ "ui.menu_notice_host_left", "Your friend left, so their base closed.", "Tu amigo se fue y su base cerró." },
+	{ "ui.menu_notice_private", "That base is private.", "Esa base es privada." },
+	{ "ui.menu_notice_full", "That base is full. Try later.", "Esa base está llena. Intenta luego." },
+	{ "ui.menu_notice_closed", "That base is closed now.", "Esa base ya cerró." },
+	{ "ui.menu_notice_not_friend", "Only their Roblox friends can join.", "Solo sus amigos de Roblox pueden entrar." },
+	{ "ui.world_kick", "Please join the game again.", "Entra al juego otra vez." },
+	{ "carl.world.host_left", "Your friend left. Back to the menu!", "Tu amigo se fue. ¡Volvemos al menú!" },
+	{ "carl.world.private", "This base is private. Back to the menu!", "Esta base es privada. ¡Volvemos al menú!" },
+	{ "carl.world.full", "This base is full. Back to the menu!", "Esta base está llena. ¡Volvemos al menú!" },
+	{ "carl.world.closed", "This base closed. Back to the menu!", "Esta base cerró. ¡Volvemos al menú!" },
+	{ "carl.world.not_friend", "Only the owner's friends can come in.", "Solo los amigos del dueño pueden entrar." },
+	{ "carl.world.guest_welcome", "Welcome to {name}'s base!", "¡Llegaste a la base de {name}!" },
+	{ "carl.world.friend_joined", "{name} joined your base!", "¡{name} llegó a tu base!" },
+	{ "carl.world.friend_left", "{name} left your base.", "{name} salió de tu base." },
+}
+for _, row in WORLD_STRINGS do
+	table.insert(KEYS, row[1])
+	EN[row[1]] = row[2]
+	ES[row[1]] = row[3]
 end
 
 local STRINGS: { [Language]: { [string]: string } } = {

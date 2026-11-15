@@ -22,6 +22,10 @@
 -- Stage 9: hooks for QuestService (onMissionCompleted, onIceDelivered, onIceDrilled, onPanelCleaned,
 -- onBaseAction) and isMissionUnlocked. A higher antenna level adds BaseBuild.antennaBonus credits to
 -- each alignment (BaseService.grantCredits).
+-- Stage 10 fix (live playtest): storm exposure is counted second by second while particles are here
+-- (accumulateExposure), so the radiation meter climbs live for the crew outside and the day ends on
+-- the same value. A storm day has one storm for the whole crew; only the training drill repeats, after
+-- STORM.RETRY_GAP_SECONDS and at most STORM.MAX_DRILLS times a shift. survive_storm counts per player.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -116,13 +120,18 @@ type ShiftData = {
 	flareAt: number, -- server time when today's flare is spotted (storm days)
 	arraysCleaned: number,
 	leakRepaired: boolean,
-	exposed: { [Player]: boolean }, -- exposed at any time today (dose)
+	exposed: { [Player]: boolean }, -- outside while particles were here, at any time today (report cause)
 	stormExposed: { [Player]: boolean }, -- exposed during the current storm (survive_storm)
 	sheltered: { [Player]: boolean }, -- reached the shelter during the current warning or storm
 	flare: ArchivedFlare?,
 	stage: StormStage,
 	falseAlarm: boolean,
 	progress: number, -- 0..1, how much of the shift has passed (never goes back when a tutorial extends)
+	-- Stage 10 fix: storms and radiation.
+	drills: number, -- flares spotted this shift (training drills are capped at STORM.MAX_DRILLS)
+	stormExposure: number, -- crew-average storm exposure so far today (Simulation.stormExposureStep)
+	exposureClock: number?, -- server time up to which the current storm's exposure was counted
+	outsideWarnedAt: { [Player]: number }, -- last "radiation rising" line sent to each player
 }
 
 type LiveMeters = Simulation.LiveMeters
@@ -627,6 +636,8 @@ local function shiftResultNow(currentShift: ShiftState, data: ShiftData, refills
 		iceCores = currentShift.iceCoresDelivered,
 		arraysCleaned = data.arraysCleaned,
 		exposedAstronauts = countExposed(data),
+		-- Stage 10 fix: exposure counted second by second, so the live meter and the day's end agree.
+		stormExposure = data.stormExposure,
 		leakRepaired = data.leakRepaired,
 		suitRefills = if isTutorial() then math.min(refills, TUTORIAL_MAX_REFILLS) else refills,
 		falseAlarm = if data.falseAlarm then true else nil,
@@ -1038,6 +1049,9 @@ local function pickFlare(): (ArchivedFlare, "live" | "archive")
 	return flare, source
 end
 
+-- Counts storm exposure up to a time (defined with the storm loop below).
+local accumulateExposure: (currentShift: ShiftState, data: ShiftData, t: number) -> ()
+
 -- Stops the running shift without scoring it (debug only).
 local function abortShift()
 	shiftToken += 1
@@ -1057,7 +1071,9 @@ local function finishShift(forceComplete: boolean?)
 	local data = shiftData :: ShiftData
 	shiftToken += 1
 
-	-- The real end of the day replaces the live preview (same rules, so the values match).
+	-- The real end of the day replaces the live preview (same rules, so the values match). Storm
+	-- exposure is counted up to this moment first (a shift ended early mid-storm).
+	accumulateExposure(currentShift, data, now())
 	local result = shiftResultNow(currentShift, data, crew.takeRefillCount())
 	crew.setShiftActive(false)
 	Simulation.endDay(state, MissionData, result)
@@ -1098,8 +1114,11 @@ local function spotFlare(currentShift: ShiftState, data: ShiftData, t: number)
 	local flare, source = pickFlare()
 	data.flare = flare
 	data.stage = "warning"
+	data.drills += 1
+	data.exposureClock = nil
 	table.clear(data.stormExposed)
 	table.clear(data.sheltered)
+	table.clear(data.outsideWarnedAt)
 	local lead = if currentShift.antennaLinked
 		then MissionData.STORM.WARNING_SECONDS_WITH_LINK
 		else MissionData.STORM.WARNING_SECONDS_NO_LINK
@@ -1126,20 +1145,99 @@ end
 
 -- Training only: a storm the crew did not survive (or that never came) comes back so they can
 -- practise sheltering again. The dose already taken stays: radiation dose never goes down.
+-- Stage 10 fix (live playtest: with three players the drill looped every ~50 s while anyone stayed
+-- outside): the next flare waits STORM.RETRY_GAP_SECONDS of quiet, and after STORM.MAX_DRILLS drills
+-- in one shift there are no more (Simulation.drillRetryAt). Returns true when a drill was re-armed.
 local function rearmTutorialStorm(currentShift: ShiftState, data: ShiftData, t: number): boolean
 	local def = missionDef
 	if def == nil or def.kind ~= "Tutorial" or not hasObjective("survive_storm") then
 		return false
 	end
+	local nextFlareAt = Simulation.drillRetryAt(MissionData, data.drills, t)
+	if nextFlareAt == nil then
+		return false -- the stage stays "over": the day can end (see shiftTick)
+	end
 	data.stage = "quiet"
 	data.flare = nil
 	data.falseAlarm = false
-	data.flareAt = t + (def.flareAtSeconds or MissionData.STORM.FLARE_AT_SECONDS)
+	data.flareAt = nextFlareAt
 	currentShift.stormWarningAt = nil
 	currentShift.stormArrivesAt = nil
 	currentShift.stormEndsAt = nil
 	spaceWeather = nil
+	sayLater("carl.drill_again")
 	return true
+end
+
+-- True while a training storm drill is still to come or running. A storm tutorial whose drills are
+-- used up lets the shift end on the clock, so one teammate staying outside never keeps the others in
+-- the drill forever.
+local function stormDrillPending(data: ShiftData): boolean
+	if not hasObjective("survive_storm") or state.todayEvent ~= "SolarStorm" then
+		return true -- other tutorials: their tasks can still be done at any time
+	end
+	return data.stage ~= "over"
+end
+
+-- C.A.R.L. tells a player standing outside during the particle storm that their radiation is rising,
+-- at most every STORM.OUTSIDE_REMINDER_SECONDS.
+local function warnOutside(player: Player, data: ShiftData, t: number)
+	local last = data.outsideWarnedAt[player]
+	if last ~= nil and t - last < MissionData.STORM.OUTSIDE_REMINDER_SECONDS then
+		return
+	end
+	data.outsideWarnedAt[player] = t
+	sayTo(player, "carl.storm_outside")
+end
+
+-- Stage 10 fix: counts the particle storm's exposure up to time `t` (never past the storm's end),
+-- second by second: each interval adds the share of the crew standing outside the shelter right now.
+-- Only the real storm stage counts (a false alarm brings no particles, so no dose). The total feeds
+-- the live dose meter and, unchanged, the end of the day (no double counting).
+accumulateExposure = function(currentShift: ShiftState, data: ShiftData, t: number)
+	if data.stage ~= "storm" then
+		return
+	end
+	local arrivesAt = currentShift.stormArrivesAt
+	local endsAt = currentShift.stormEndsAt
+	if arrivesAt == nil or endsAt == nil then
+		return
+	end
+	local from = math.max(data.exposureClock or arrivesAt, arrivesAt)
+	local to = math.min(t, endsAt)
+	if to <= from then
+		return
+	end
+	data.exposureClock = to
+	local players = activePlayers()
+	local exposedNow = 0
+	for _, player in players do
+		if crew.isPresent(player) and not crew.isSheltered(player) then
+			exposedNow += 1
+			data.exposed[player] = true
+			data.stormExposed[player] = true
+			warnOutside(player, data, t)
+		end
+	end
+	data.stormExposure += Simulation.stormExposureStep(MissionData, exposedNow, math.max(1, #players), to - from)
+end
+
+-- The particle storm has ended: survive_storm counts when at least one astronaut stayed safe in the
+-- shelter the whole storm (Stage 10 fix, per player). In a cooperative crew a teammate who stays
+-- outside does not take the objective away from the ones who sheltered: they pay for it in radiation
+-- (the crew meter and the report). On the last training drill, reaching the shelter before the
+-- storm ended is enough, so the training can still be completed.
+local function stormSurvived(data: ShiftData): boolean
+	local reachedShelter = false
+	for _, player in activePlayers() do
+		if crew.isPresent(player) and data.sheltered[player] then
+			if not data.stormExposed[player] then
+				return true
+			end
+			reachedShelter = reachedShelter or crew.isSheltered(player)
+		end
+	end
+	return isTutorial() and data.drills >= MissionData.STORM.MAX_DRILLS and reachedShelter
 end
 
 local function shiftTick()
@@ -1150,13 +1248,14 @@ local function shiftTick()
 	local data = shiftData :: ShiftData
 	local t = now()
 
+	-- One storm per storm day for the whole crew (never one per player); only training drills repeat.
 	if state.todayEvent == "SolarStorm" then
 		if data.stage == "quiet" and t >= data.flareAt then
 			spotFlare(currentShift, data, t)
 		end
 		-- reach_shelter: in the shelter while a warning or a storm is on.
 		if data.stage == "warning" or data.stage == "storm" then
-			for _, player in Players:GetPlayers() do
+			for _, player in activePlayers() do
 				if not data.sheltered[player] and crew.isPresent(player) and crew.isSheltered(player) then
 					data.sheltered[player] = true
 					addProgress("reach_shelter")
@@ -1170,7 +1269,14 @@ local function shiftTick()
 			if data.stage == "warning" and t >= arrivesAt then
 				if flare.particles then
 					data.stage = "storm"
-					say("carl.storm_now")
+					data.exposureClock = arrivesAt
+					-- Sheltered astronauts hear "stay in the shelter"; the ones outside hear that their
+					-- radiation is rising (accumulateExposure, below).
+					for _, player in Players:GetPlayers() do
+						if not (crew.isPresent(player) and not crew.isSheltered(player)) then
+							sayTo(player, "carl.storm_now")
+						end
+					end
 				else
 					-- Nothing arrives: a real big flare without a particle storm.
 					data.stage = "over"
@@ -1183,28 +1289,16 @@ local function shiftTick()
 				broadcast()
 			end
 			if data.stage == "storm" then
-				for _, player in Players:GetPlayers() do
-					if crew.isPresent(player) and not crew.isSheltered(player) then
-						data.exposed[player] = true
-						data.stormExposed[player] = true
-					end
-				end
+				accumulateExposure(currentShift, data, t)
 				if t >= endsAt then
 					data.stage = "over"
 					say("carl.storm_over")
-					local survived = true
-					for player in data.stormExposed do
-						if player.Parent ~= nil then
-							survived = false
-						end
-					end
-					if survived then
+					if stormSurvived(data) then
 						addProgress("survive_storm")
 					end
-					-- Training: if anything is still open (not sheltered, or reach_shelter missed because
-					-- nobody was there when it started), the drill runs again instead of leaving the
-					-- crew in a shift with nothing left to do.
-					if not survived or (isTutorial() and not allObjectivesDone("finish_day")) then
+					-- Training: while anything is still open the drill runs again (after a quiet break,
+					-- at most STORM.MAX_DRILLS per shift) instead of leaving the crew with nothing to do.
+					if isTutorial() and not allObjectivesDone("finish_day") then
 						rearmTutorialStorm(currentShift, data, t)
 					end
 					refreshWorld()
@@ -1215,7 +1309,7 @@ local function shiftTick()
 	end
 
 	if t >= currentShift.endsAt then
-		if isTutorial() and not allObjectivesDone("finish_day") then
+		if isTutorial() and not allObjectivesDone("finish_day") and stormDrillPending(data) then
 			currentShift.endsAt = t + TUTORIAL_EXTRA_SECONDS
 			broadcast()
 		else
@@ -1256,6 +1350,10 @@ local function startShift()
 		stage = "quiet",
 		falseAlarm = false,
 		progress = 0,
+		drills = 0,
+		stormExposure = 0,
+		exposureClock = nil,
+		outsideWarnedAt = {},
 	}
 	spaceWeather = nil
 	setPhase("Shift")
@@ -1966,7 +2064,8 @@ function MissionService.start(worldRefs: any, crewService: Crew, progressService
 		-- not use up this player's action budget. Stage 10: so does SaveNow (ProgressService rate-limits it).
 		if
 			type(action) == "table"
-			and (action.type == "ChooseSlot" or action.type == "RequestSlots" or action.type == "SaveNow")
+			and (action.type == "ChooseSlot" or action.type == "RequestSlots" or action.type == "SaveNow"
+				or action.type == "ListFriendWorlds" or action.type == "JoinWorld")
 		then
 			return
 		end
@@ -1990,6 +2089,8 @@ function MissionService.start(worldRefs: any, crewService: Crew, progressService
 			shiftData.exposed[player] = nil
 			shiftData.stormExposed[player] = nil
 			shiftData.sheltered[player] = nil
+			-- Their share of shiftData.stormExposure stays: radiation dose never goes down.
+			shiftData.outsideWarnedAt[player] = nil
 		end
 	end)
 

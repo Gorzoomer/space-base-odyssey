@@ -5,7 +5,8 @@
 --   "column" a compact stacked panel (shift HUD, left column under the objectives), plus a small
 --            "data waiting" row while science waits for the antenna.
 -- Values glide toward each new Snapshot value and the row flashes on a big change: lime when the
--- change is good for the crew, red when it is bad (radiation going up is bad).
+-- change is good for the crew, red when it is bad (radiation going up is bad). Stage 10 fix: the dose
+-- row also flashes red every few points of a steady rise (a particle storm, counted second by second).
 -- Stage 10: Meters.fillRow builds one column row (icon, name, bar with value and zone icon), shared
 -- with the HUD's always-on vitals panel (Hud.luau) so both panels look the same.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
@@ -64,6 +65,7 @@ type Widget = {
 	target: number, -- latest value (0..100 scale)
 	units: number, -- water: units for the text
 	unitsMax: number,
+	flashBase: number?, -- dose: value at the last flash (a steady rise flashes every few points)
 }
 
 -- Current value of a meter on a 0..100 scale, plus the text to show.
@@ -217,6 +219,7 @@ function Meters.new(parent: Instance, props: Ui.Props, layout: Layout?): MetersV
 			target = 0,
 			units = 0,
 			unitsMax = 0,
+			flashBase = nil,
 		}
 	end
 
@@ -322,9 +325,20 @@ function Meters.new(parent: Instance, props: Ui.Props, layout: Layout?): MetersV
 			widget.target = value
 			if widget.shown == nil then
 				widget.shown = value -- first value: no glide, no flash
+			elseif meter == "dose" then
+				-- Stage 10 fix: in a particle storm the dose climbs a little every snapshot. Flash red
+				-- each time it has risen FLASH_THRESHOLD points since the last flash, so a steady rise
+				-- is seen. Radiation going up is always bad.
+				local base = widget.flashBase or previous
+				if value < base then
+					base = value -- a new mission starts low again
+				elseif value - base >= FLASH_THRESHOLD then
+					flashRow(widget, false)
+					base = value
+				end
+				widget.flashBase = base
 			elseif math.abs(value - previous) >= FLASH_THRESHOLD then
-				local better = if meter == "dose" then value < previous else value > previous
-				flashRow(widget, better)
+				flashRow(widget, value > previous)
 			end
 			draw(meter)
 			if widget.shown ~= widget.target and glideConnection == nil then

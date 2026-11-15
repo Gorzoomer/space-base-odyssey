@@ -9,12 +9,9 @@
 --                           last = slot, cosmetics } (the start menu reads it; cosmetics are account-wide)
 --   "u_<userId>"          the save from before slots: it is never deleted and becomes slot 1 (the
 --                         first meta lists it as slot 1; loading slot 1 with no slot key reads it).
--- ChooseSlot { slot 1-3, mode "solo" | "friends", fresh } (fresh = New Game: the slot is wiped):
---   solo, in a public server outside Studio: the player is teleported to a new reserved server with
---     TeleportData { slot, mode = "solo", fresh }; there the slot is chosen at once (no menu). If the
---     teleport fails, the slot loads in this server instead.
---   friends (or solo in Studio, a reserved or a private server): the slot loads in this server; friends
---     join with Roblox's Join button and builds stay shared (the highest of present players).
+-- ChooseSlot { slot 1-3, mode "solo" | "friends", fresh } (fresh = New Game: the slot is wiped). Since
+-- the Stage 10 fix "private worlds" (see the end of this header) every world runs in its owner's own
+-- reserved server, for both modes; the public server is only a lobby.
 -- Player attributes: SBO_SlotLoading = true while a slot is on its way (teleport or load),
 -- SBO_SlotChosen = true and SBO_Slot = n once it is loaded. Remotes.SLOTS sends Types.SlotsMeta.
 -- When DataStores are not available (Studio, an unpublished place, or no API access) every slot lives
@@ -67,9 +64,38 @@
 --     every MANUAL_SAVE_SPACING seconds) and its notice says manual = true.
 --   * Leaving (PlayerRemoving) counts as a save in flight from the first moment, so BindToClose
 --     (a reserved solo server closes when its only player leaves) always waits for it.
+-- Stage 10 fix "private worlds" (live playtest: a friend pressed New game in the public server and
+-- landed in another player's base, because builds were the highest of everyone present). Rules in
+-- src/shared/Worlds.luau (tests/worlds.luau). This server has a ROLE (workspace attribute SBO_WorldRole):
+--   lobby (a public server): only the start menu; no slot ever loads here, so nobody spawns. ChooseSlot
+--     reserves a new server (TeleportService:ReserveServer) and teleports the player there with
+--     TeleportData { owner = their UserId, slot, mode, fresh, code = the access code }. JoinWorld
+--     { owner, slot } (Join a friend) checks that the requester is a Roblox friend of the owner and
+--     that the owner's world is open (MemoryStore hash map "SBO_Worlds", key = owner UserId), is a
+--     friends world and has room, then teleports them into it with TeleportData { owner, guest = true,
+--     slot, fresh }. ListFriendWorlds answers on Remotes.WORLDS (Types.FriendWorlds): the player's
+--     Roblox friends who host an open friends world now. A failed trip puts the player back on the
+--     menu (attributes SBO_TripFailedReason, then SBO_TripFailed = a counter); it never loads here.
+--   world (a reserved server): the first valid owner trip fixes the world's owner, slot and mode. The
+--     owner's slot is the base. "solo": nobody else may stay. "friends": Roblox friends of the owner,
+--     at most MissionData.MISSION.PLAYERS_MAX players in all. Every arrival is checked again here;
+--     anyone refused hears C.A.R.L. (carl.world.<reason>, attribute SBO_WorldNotice) and goes back to
+--     the lobby (TeleportData { notice }); if that teleport fails they are kicked. A friends world
+--     writes its registry entry { owner, code, mode, slot, players, max, baseLevel, name, updatedAt }
+--     every WORLD_REFRESH_SECONDS (it expires after WORLD_ENTRY_EXPIRY_SECONDS) and removes it when
+--     the owner leaves or the server closes. When the owner leaves, every guest's slot is saved and
+--     they go back to the lobby (notice host_left).
+--   local (Studio, an unpublished place, a VIP server): slots load in this server as before. The
+--     first player whose slot loads owns the world; later players are guests; when the owner leaves
+--     the next in line owns it. Join a friend lists nothing here.
+-- Guests keep their own slot (credits, XP, skills, gear, tools, pets, wardrobe, quests, collectibles,
+-- missions); what they build goes into the OWNER's save (BaseService), so a guest's own builds never
+-- change in a friend's world. worldOwner / worldOwnerId / isGuest / onOwnerChanged tell BaseService
+-- who owns the world. Player attribute SBO_Guest; workspace attribute SBO_WorldOwner (UserId).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local DataStoreService = game:GetService("DataStoreService")
+local MemoryStoreService = game:GetService("MemoryStoreService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -77,9 +103,11 @@ local TeleportService = game:GetService("TeleportService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local BaseBuild = require(Shared:WaitForChild("BaseBuild"))
+local Localization = require(Shared:WaitForChild("Localization"))
 local MissionData = require(Shared:WaitForChild("MissionData"))
 local Missions = require(Shared:WaitForChild("Missions"))
 local Types = require(Shared:WaitForChild("Types"))
+local Worlds = require(Shared:WaitForChild("Worlds"))
 
 local Codes = require(script.Parent:WaitForChild("Codes"))
 
@@ -117,6 +145,7 @@ export type Remotes = {
 	action: RemoteEvent?, -- Stage 9: ChooseSlot / RequestSlots (Stage 10: SaveNow) arrive here (MissionService ignores them)
 	slots: RemoteEvent?, -- Stage 9: Types.SlotsMeta to one client
 	saved: RemoteEvent?, -- Stage 10: Types.SaveNotice to one client (created here when missing)
+	worlds: RemoteEvent?, -- Stage 10 fix: Types.FriendWorlds to one client (created here when missing)
 }
 
 -- Stage 6 build-and-grow data of one player. equipped nil = never chosen (an old save, or a new
@@ -150,6 +179,15 @@ type Choice = {
 	slot: number,
 	mode: SlotMode,
 	fresh: boolean,
+	guest: boolean?, -- Stage 10 fix: a friend joining someone else's world with this slot
+}
+
+-- Stage 10 fix: a trip from the lobby to a world server (the reserved server and what it is told).
+type Trip = {
+	code: string, -- ReservedServerAccessCode
+	data: { [string]: any }, -- TeleportData (Worlds.Arrival)
+	attempts: number,
+	join: boolean, -- true = into a friend's world (failures then mean the world is closed)
 }
 
 type Record = {
@@ -181,6 +219,13 @@ type Record = {
 	lastRedeemAt: number, -- os.clock() of the last redeem attempt (rate limit)
 	manualPending: boolean, -- Stage 10: a SaveNow is waiting; the next save's notice says manual
 	lastSaveNowAt: number, -- os.clock() of the last SaveNow request (rate limit)
+	-- Stage 10 fix: private worlds.
+	trip: Trip?, -- the lobby's trip to a world server, while state == "teleporting"
+	guest: boolean, -- plays in someone else's world (their builds go into the owner's save)
+	accepted: boolean, -- world servers: this player may stay (owner, or a friend with room)
+	rejected: boolean, -- world servers: refused, on the way back to the lobby
+	lastWorldsRequestAt: number, -- ListFriendWorlds rate limit
+	lastJoinAt: number, -- JoinWorld rate limit
 	connections: { RBXScriptConnection },
 }
 
@@ -215,7 +260,19 @@ local BUDGET_WAIT_SECONDS = 5 -- wait at most this for DataStore write budget be
 local LOAD_ATTEMPTS = 3
 local LOAD_RETRY_SECONDS = 2
 local CLOSE_BUDGET_SECONDS = 25 -- BindToClose has about 30 seconds
-local TELEPORT_TIMEOUT_SECONDS = 30 -- still here after this: the solo trip failed, load here
+local TELEPORT_TIMEOUT_SECONDS = 30 -- still here after this: the trip failed, back to the menu
+-- Stage 10 fix: private worlds (technical settings; the player limit is MissionData.MISSION.PLAYERS_MAX).
+local WORLDS_MAP_NAME = "SBO_Worlds" -- MemoryStore hash map: owner UserId -> open world entry
+local WORLD_ENTRY_EXPIRY_SECONDS = 120 -- an entry the world server stops refreshing disappears
+local WORLD_REFRESH_SECONDS = 30 -- a friends world refreshes its entry this often
+local WORLD_WRITE_DEBOUNCE_SECONDS = 2 -- player count changes are written at most this often
+local RETRY_ATTEMPTS = 3 -- MemoryStore, friends list and teleport calls
+local RETRY_SECONDS = 1 -- wait before retry n: RETRY_SECONDS * n
+local WORLDS_REQUEST_INTERVAL = 10 -- ListFriendWorlds rate limit per player (MemoryStore quota)
+local JOIN_REQUEST_INTERVAL = 2 -- JoinWorld rate limit per player
+local MAX_FRIEND_PAGES = 5 -- friends list pages read (about 50 friends each)
+local MAX_FRIEND_LOOKUPS = 40 -- registry reads per list (online friends first)
+local BACK_TO_LOBBY_SECONDS = 4 -- a refused player reads C.A.R.L.'s line, then goes back to the menu
 local SLOTS_REQUEST_INTERVAL = 1 -- RequestSlots rate limit per player
 local PICKUP_DEBOUNCE_SECONDS = 1
 local PICKUP_EXTRA_RANGE = 8 -- studs beyond the prompt's own range (lag), checked on the server
@@ -239,6 +296,23 @@ local cosmeticListeners: { (Player, string) -> () } = {}
 local appliedPaint: string? = nil
 local appliedFlag: boolean? = nil
 local savesInFlight = 0
+
+-- Stage 10 fix: private worlds (see the header).
+local MAX_WORLD_PLAYERS: number = MissionData.MISSION.PLAYERS_MAX
+local role: Worlds.Role = "local"
+local worldOwnerId: number? = nil -- world: fixed by the owner's trip; local: follows currentOwner
+local worldMode: SlotMode = "friends"
+local worldSlot: number? = nil
+local worldCode: string? = nil -- world: the reserved server access code (owner's TeleportData)
+local hostLeft = false -- world: the owner left; guests go back to the lobby
+local closing = false
+local currentOwner: Player? = nil -- the owner, while present with a loaded slot
+local loadOrder: { Player } = {} -- local: players in the order their slots loaded
+local ownerListeners: { () -> () } = {}
+local worldStore: any = nil -- MemoryStoreHashMap (or a sorted map)
+local worldStoreTried = false
+local registryRunning = false
+local registryWriteScheduled = false
 
 ----------------------------------------------------------------------------------------------------
 -- Storage backends
@@ -805,9 +879,10 @@ local function sendProgress(player: Player, record: Record)
 	end
 end
 
-local function sayTo(player: Player, key: string)
+-- params (Stage 10 fix): values for the text's {placeholders} (the world lines name a friend).
+local function sayTo(player: Player, key: string, params: { [string]: string | number }?)
 	if remotes and player.Parent then
-		local text: Types.TextRef = { key = key }
+		local text: Types.TextRef = { key = key, params = params }
 		remotes.message:FireClient(player, text)
 	end
 end
@@ -1101,7 +1176,7 @@ local function refreshWorldRewards()
 end
 
 ----------------------------------------------------------------------------------------------------
--- Choosing and loading a slot
+-- Player attributes and retries
 
 local function setAttribute(player: Player, name: string, value: any)
 	if player.Parent then
@@ -1109,20 +1184,309 @@ local function setAttribute(player: Player, name: string, value: any)
 	end
 end
 
-local function isReservedServer(): boolean
-	return game.PrivateServerId ~= "" and game.PrivateServerOwnerId == 0
+-- Runs `fn` up to RETRY_ATTEMPTS times (waiting a little longer each time). Every failure is logged.
+local function retry(label: string, fn: () -> ...any): (boolean, any)
+	for attempt = 1, RETRY_ATTEMPTS do
+		local ok, result = pcall(fn)
+		if ok then
+			return true, result
+		end
+		warn(`[SpaceBaseOdyssey] {label}: attempt {attempt} of {RETRY_ATTEMPTS} failed: {result}`)
+		if attempt < RETRY_ATTEMPTS then
+			task.wait(RETRY_SECONDS * attempt)
+		end
+	end
+	return false, nil
 end
 
--- Solo worlds get their own reserved server, but only from a public server outside Studio.
-local function canTeleportSolo(): boolean
-	return not RunService:IsStudio() and game.PrivateServerId == "" and game.PlaceId ~= 0
-end
+----------------------------------------------------------------------------------------------------
+-- Stage 10 fix: world owner, registry and trips
 
--- The slot a solo trip brought this player here for (reserved servers only).
-local function joinChoice(player: Player): Choice?
-	if not isReservedServer() then
+local function playerById(userId: number?): Player?
+	if userId == nil then
 		return nil
 	end
+	local player = Players:GetPlayerByUserId(userId)
+	return if player and records[player] then player else nil
+end
+
+-- Players who may stay in this world (owner and accepted friends). Lobby and local servers count
+-- every player with a loaded or loading slot.
+local function playersInWorld(except: Player?): number
+	local count = 0
+	for player, record in records do
+		if player ~= except and player.Parent ~= nil and not record.rejected then
+			if role == "world" then
+				if record.accepted then
+					count += 1
+				end
+			elseif record.state == "loading" or record.state == "loaded" then
+				count += 1
+			end
+		end
+	end
+	return count
+end
+
+-- The owner now: world servers, the player of the owner's trip once their slot is loaded; local
+-- servers, the first player in load order who is still here (Worlds.pickOwner).
+local function ownerCandidate(): Player?
+	if role == "world" then
+		local owner = playerById(worldOwnerId)
+		local record = if owner then records[owner] else nil
+		return if owner and record and record.loaded then owner else nil
+	end
+	local ids: { number } = {}
+	for _, player in loadOrder do
+		local record = records[player]
+		if record and record.loaded and player.Parent ~= nil then
+			table.insert(ids, player.UserId)
+		end
+	end
+	return playerById(Worlds.pickOwner(if currentOwner then currentOwner.UserId else nil, ids))
+end
+
+local function refreshOwner()
+	local owner = ownerCandidate()
+	if role ~= "world" then
+		worldOwnerId = if owner then owner.UserId else nil
+	end
+	for player, record in records do
+		record.guest = record.loaded and owner ~= nil and player ~= owner
+		setAttribute(player, "SBO_Guest", record.guest)
+	end
+	workspace:SetAttribute("SBO_WorldOwner", worldOwnerId)
+	if owner == currentOwner then
+		return
+	end
+	currentOwner = owner
+	if owner then
+		print(`[SpaceBaseOdyssey] world owner: {owner.Name} ({role} server)`)
+	end
+	for _, listener in ownerListeners do
+		task.spawn(function()
+			local ok, err = pcall(listener)
+			if not ok then
+				warn(`[SpaceBaseOdyssey] world owner listener failed: {err}`)
+			end
+		end)
+	end
+end
+
+-- The registry (MemoryStore hash map; a sorted map has the same calls we use). nil when MemoryStores
+-- are not available: then nobody can find friends worlds, everything else works.
+local function getWorldStore(): any
+	if worldStore == nil and not worldStoreTried then
+		worldStoreTried = true
+		local ok, map = pcall(function(): any
+			return (MemoryStoreService :: any):GetHashMap(WORLDS_MAP_NAME)
+		end)
+		if not ok or map == nil then
+			warn(`[SpaceBaseOdyssey] MemoryStore hash map unavailable ({map}); trying a sorted map`)
+			ok, map = pcall(function(): any
+				return MemoryStoreService:GetSortedMap(WORLDS_MAP_NAME)
+			end)
+		end
+		if ok and map ~= nil then
+			worldStore = map
+		else
+			warn(`[SpaceBaseOdyssey] MemoryStores unavailable, friends cannot find open worlds: {map}`)
+		end
+	end
+	return worldStore
+end
+
+-- The open world of `ownerId` (nil when closed, stale or unreadable). quick = one attempt only (the
+-- friends list reads many keys; a join retries).
+local function readWorld(ownerId: number, quick: boolean?): Worlds.Entry?
+	local store = getWorldStore()
+	if store == nil then
+		return nil
+	end
+	local function read(): any
+		return (store.GetAsync(store, tostring(ownerId)))
+	end
+	local ok, value
+	if quick then
+		ok, value = pcall(read)
+		if not ok then
+			warn(`[SpaceBaseOdyssey] read world of {ownerId} failed: {value}`)
+		end
+	else
+		ok, value = retry(`read world of {ownerId}`, read)
+	end
+	if not ok then
+		return nil
+	end
+	return Worlds.sanitizeEntry(value, os.time(), MAX_WORLD_PLAYERS)
+end
+
+local function writeRegistry()
+	if role ~= "world" or worldMode ~= "friends" or hostLeft or closing or worldCode == nil or worldOwnerId == nil then
+		return
+	end
+	local owner = currentOwner
+	local record = if owner then records[owner] else nil
+	if owner == nil or record == nil or owner.UserId ~= worldOwnerId then
+		return
+	end
+	local store = getWorldStore()
+	if store == nil then
+		return
+	end
+	local entry: Worlds.Entry = {
+		owner = worldOwnerId :: number,
+		code = worldCode :: string,
+		mode = worldMode,
+		slot = worldSlot or 1,
+		players = playersInWorld(nil),
+		max = MAX_WORLD_PLAYERS,
+		baseLevel = BaseBuild.levelOf(record.base.builds, "habitat"),
+		name = string.sub(owner.DisplayName, 1, Worlds.MAX_NAME_LENGTH),
+		updatedAt = os.time(),
+	}
+	local key = tostring(worldOwnerId)
+	retry("register the friends world", function()
+		store.SetAsync(store, key, entry, WORLD_ENTRY_EXPIRY_SECONDS)
+	end)
+end
+
+local function unregisterWorld()
+	if role ~= "world" or worldMode ~= "friends" or worldOwnerId == nil or worldStore == nil then
+		return
+	end
+	local store = worldStore
+	local key = tostring(worldOwnerId)
+	retry("remove the friends world", function()
+		store.RemoveAsync(store, key)
+	end)
+end
+
+-- A player count change: write the entry soon (at most every WORLD_WRITE_DEBOUNCE_SECONDS).
+local function requestRegistryWrite()
+	if not registryRunning or registryWriteScheduled then
+		return
+	end
+	registryWriteScheduled = true
+	task.delay(WORLD_WRITE_DEBOUNCE_SECONDS, function()
+		registryWriteScheduled = false
+		writeRegistry()
+	end)
+end
+
+-- The owner's friends world is loaded: keep its entry fresh until the owner leaves or it closes.
+local function startRegistry()
+	if registryRunning or role ~= "world" or worldMode ~= "friends" then
+		return
+	end
+	if worldCode == nil then
+		warn("[SpaceBaseOdyssey] friends world without its access code: friends cannot join it")
+		return
+	end
+	registryRunning = true
+	task.spawn(function()
+		while not hostLeft and not closing do
+			writeRegistry()
+			task.wait(WORLD_REFRESH_SECONDS)
+		end
+	end)
+end
+
+-- Sends a player back to the lobby (a public server) with a notice the start menu shows. C.A.R.L.
+-- says why first; `before` (optional) runs just before the teleport (saving a guest's slot). If the
+-- teleport keeps failing the player is kicked: a refused player must never stay in a private world.
+local function sendToLobby(player: Player, notice: string, before: (() -> ())?)
+	local record = records[player]
+	if record then
+		record.rejected = true
+	end
+	sayTo(player, `carl.world.{notice}`)
+	setAttribute(player, "SBO_WorldNotice", notice)
+	task.delay(BACK_TO_LOBBY_SECONDS, function()
+		if before then
+			local ok, err = pcall(before)
+			if not ok then
+				warn(`[SpaceBaseOdyssey] before going back to the lobby: {err}`)
+			end
+		end
+		if player.Parent == nil then
+			return
+		end
+		local ok = retry(`send {player.Name} back to the lobby`, function()
+			local options = Instance.new("TeleportOptions")
+			options:SetTeleportData({ notice = notice })
+			TeleportService:TeleportAsync(game.PlaceId, { player }, options)
+		end)
+		local kickText = `{Localization.t("ui.world_kick", nil, "en")} / {Localization.t("ui.world_kick", nil, "es")}`
+		if not ok then
+			if player.Parent ~= nil then
+				player:Kick(kickText)
+			end
+			return
+		end
+		-- The teleport can still fail after it started (TeleportInitFailed): still here later = kicked.
+		task.delay(TELEPORT_TIMEOUT_SECONDS, function()
+			if player.Parent ~= nil then
+				warn(`[SpaceBaseOdyssey] {player.Name} is still in this world after being sent back; kicking`)
+				player:Kick(kickText)
+			end
+		end)
+	end)
+end
+
+-- World servers: may this arrival stay? Fixes the world's owner from the first owner trip. Yields
+-- (the friends check). Returns false and a Worlds reason (or "private") when refused.
+local function admit(player: Player, record: Record, arrival: Worlds.Arrival?): (boolean, string?)
+	if arrival == nil then
+		return false, "private" -- no valid trip: nobody walks into a private world
+	end
+	if not arrival.guest then
+		if worldOwnerId == nil then
+			worldOwnerId = arrival.owner
+			worldMode = arrival.mode
+			worldSlot = arrival.slot
+			worldCode = arrival.code
+			workspace:SetAttribute("SBO_WorldOwner", worldOwnerId)
+			workspace:SetAttribute("SBO_WorldMode", worldMode)
+			print(`[SpaceBaseOdyssey] world of {player.Name}: slot {arrival.slot}, {arrival.mode}`)
+		elseif worldOwnerId ~= player.UserId then
+			return false, "private"
+		end
+		if hostLeft then
+			return false, "closed"
+		end
+		record.accepted = true
+		return true, nil
+	end
+	if worldOwnerId == nil or arrival.owner ~= worldOwnerId then
+		return false, "closed"
+	end
+	local ownerId = worldOwnerId :: number
+	local ok, friend = retry(`friends check for {player.Name}`, function(): any
+		return player:IsFriendsWith(ownerId)
+	end)
+	if records[player] ~= record then
+		return false, nil -- left meanwhile
+	end
+	if hostLeft then
+		return false, "host_left"
+	end
+	-- Counted after the yield, then marked at once: two friends arriving together never both take the
+	-- last place.
+	local allowed, reason = Worlds.canJoin(
+		{ owner = ownerId, mode = worldMode, players = playersInWorld(player) },
+		player.UserId,
+		ok and friend == true,
+		MAX_WORLD_PLAYERS
+	)
+	if allowed then
+		record.accepted = true
+	end
+	return allowed, reason
+end
+
+-- The TeleportData this player arrived with (world servers only), checked.
+local function arrivalOf(player: Player): Worlds.Arrival?
 	local ok, joinData = pcall(function(): any
 		return player:GetJoinData()
 	end)
@@ -1133,12 +1497,11 @@ local function joinChoice(player: Player): Choice?
 	if source ~= nil and source ~= game.PlaceId then
 		return nil
 	end
-	local data = joinData.TeleportData
-	if type(data) ~= "table" or data.mode ~= "solo" or not isSlot(data.slot) then
-		return nil
-	end
-	return { slot = data.slot, mode = "solo", fresh = data.fresh == true }
+	return Worlds.sanitizeArrival(joinData.TeleportData, player.UserId, SLOT_COUNT)
 end
+
+----------------------------------------------------------------------------------------------------
+-- Loading a slot, and trips from the lobby
 
 local function loadSlot(player: Player, record: Record, choice: Choice)
 	if record.state ~= "menu" and record.state ~= "teleporting" then
@@ -1149,6 +1512,7 @@ local function loadSlot(player: Player, record: Record, choice: Choice)
 	record.slot = slot
 	record.mode = choice.mode
 	record.teleportChoice = nil
+	record.trip = nil
 	setAttribute(player, "SBO_SlotLoading", true)
 
 	local stored: any = nil
@@ -1219,6 +1583,16 @@ local function loadSlot(player: Player, record: Record, choice: Choice)
 		requestSave(player, record) -- wipe the slot now, copy the old save into it, or keep what was earned
 	end
 
+	-- Stage 10 fix: who owns this world (before anyone hears about the load).
+	if role ~= "world" then
+		table.insert(loadOrder, player)
+	end
+	refreshOwner()
+	if role == "world" and player.UserId == worldOwnerId then
+		startRegistry()
+	end
+	requestRegistryWrite()
+
 	setAttribute(player, "SBO_Slot", slot)
 	setAttribute(player, "SBO_SlotLoading", false)
 	setAttribute(player, "SBO_SlotChosen", true)
@@ -1234,38 +1608,88 @@ local function loadSlot(player: Player, record: Record, choice: Choice)
 			end
 		end)
 	end
+	local owner = currentOwner
+	if record.guest and owner then
+		sayTo(player, "carl.world.guest_welcome", { name = owner.DisplayName })
+		sayTo(owner, "carl.world.friend_joined", { name = player.DisplayName })
+	end
 end
 
--- The solo trip did not happen: play the slot in this server.
-local function teleportFailed(player: Player, record: Record, token: number)
-	local choice = record.teleportChoice
-	if records[player] ~= record or record.state ~= "teleporting" or record.teleportToken ~= token or choice == nil then
+-- A trip from the lobby did not happen: back to the start menu (it never loads in the lobby, where
+-- anybody could walk in). The client shows `reason` (attributes SBO_TripFailedReason, SBO_TripFailed).
+local function tripFailed(player: Player, record: Record, token: number, reason: string)
+	if records[player] ~= record or record.state ~= "teleporting" or record.teleportToken ~= token then
 		return
 	end
-	sayTo(player, "carl.solo_here")
-	loadSlot(player, record, choice)
+	record.state = "menu"
+	record.teleportChoice = nil
+	record.trip = nil
+	setAttribute(player, "SBO_SlotLoading", false)
+	setAttribute(player, "SBO_TripFailedReason", reason)
+	setAttribute(player, "SBO_TripFailed", (tonumber(player:GetAttribute("SBO_TripFailed")) or 0) + 1)
+	sendSlots(player, record)
 end
 
-local function startSoloTrip(player: Player, record: Record, choice: Choice)
+-- One teleport attempt of the current trip (retried on errors, up to RETRY_ATTEMPTS).
+local function teleportTrip(player: Player, record: Record, token: number)
+	local trip = record.trip
+	if records[player] ~= record or record.state ~= "teleporting" or record.teleportToken ~= token or trip == nil then
+		return
+	end
+	trip.attempts += 1
+	local attempt = trip.attempts
+	local ok, err = pcall(function()
+		local options = Instance.new("TeleportOptions")
+		options.ReservedServerAccessCode = trip.code
+		options:SetTeleportData(trip.data)
+		TeleportService:TeleportAsync(game.PlaceId, { player }, options)
+	end)
+	if not ok then
+		warn(`[SpaceBaseOdyssey] world trip for {player.Name}: attempt {attempt} of {RETRY_ATTEMPTS} failed: {err}`)
+		if attempt < RETRY_ATTEMPTS then
+			task.delay(RETRY_SECONDS * attempt, teleportTrip, player, record, token)
+		else
+			tripFailed(player, record, token, if trip.join then "closed" else "failed")
+		end
+		return
+	end
+	task.delay(TELEPORT_TIMEOUT_SECONDS, function()
+		if record.trip == trip and trip.attempts == attempt then
+			warn(`[SpaceBaseOdyssey] world trip for {player.Name} timed out`)
+			tripFailed(player, record, token, "failed")
+		end
+	end)
+end
+
+-- Lobby: takes the player to a world server. join = into a friend's open world; otherwise a new
+-- reserved server for the player's own world.
+local function startTrip(player: Player, record: Record, choice: Choice, join: { owner: number, code: string }?)
 	record.state = "teleporting"
 	record.teleportChoice = choice
 	record.teleportToken += 1
 	local token = record.teleportToken
 	setAttribute(player, "SBO_SlotLoading", true)
-	local ok, err = pcall(function()
-		local options = Instance.new("TeleportOptions")
-		options.ShouldReserveServer = true
-		options:SetTeleportData({ slot = choice.slot, mode = "solo", fresh = choice.fresh })
-		TeleportService:TeleportAsync(game.PlaceId, { player }, options)
-	end)
-	if not ok then
-		warn(`[SpaceBaseOdyssey] solo teleport failed for {player.Name}, loading here: {err}`)
-		teleportFailed(player, record, token)
-		return
+	local code: string
+	local data: { [string]: any }
+	if join then
+		code = join.code
+		data = { owner = join.owner, guest = true, slot = choice.slot, mode = "friends", fresh = choice.fresh }
+	else
+		local ok, reserved = retry(`reserve a world server for {player.Name}`, function(): any
+			return (TeleportService:ReserveServer(game.PlaceId))
+		end)
+		if records[player] ~= record or record.teleportToken ~= token then
+			return
+		end
+		if not ok or type(reserved) ~= "string" then
+			tripFailed(player, record, token, "failed")
+			return
+		end
+		code = reserved
+		data = { owner = player.UserId, slot = choice.slot, mode = choice.mode, fresh = choice.fresh, code = reserved }
 	end
-	task.delay(TELEPORT_TIMEOUT_SECONDS, function()
-		teleportFailed(player, record, token)
-	end)
+	record.trip = { code = code, data = data, attempts = 0, join = join ~= nil }
+	teleportTrip(player, record, token)
 end
 
 local function applyChoice(player: Player, record: Record, choice: Choice)
@@ -1280,12 +1704,19 @@ local function applyChoice(player: Player, record: Record, choice: Choice)
 	if record.metaCanSave and not record.meta.slots[choice.slot].used then
 		fresh = true -- "Continue" on an empty slot starts a new game there
 	end
-	local final: Choice = { slot = choice.slot, mode = choice.mode, fresh = fresh }
-	if final.mode == "solo" and canTeleportSolo() then
-		startSoloTrip(player, record, final)
-	else
-		loadSlot(player, record, final)
+	local final: Choice = { slot = choice.slot, mode = choice.mode, fresh = fresh, guest = choice.guest }
+	if role == "lobby" then
+		startTrip(player, record, final, nil) -- Stage 10 fix: never load a world in the public lobby
+		return
 	end
+	if role == "local" and playersInWorld(player) >= MAX_WORLD_PLAYERS then
+		sayTo(player, "carl.world.full")
+		record.state = "teleporting" -- tripFailed's own checks: back to the menu with the reason
+		record.teleportToken += 1
+		tripFailed(player, record, record.teleportToken, "full")
+		return
+	end
+	loadSlot(player, record, final)
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -1304,7 +1735,7 @@ local function addPlayer(player: Player)
 		state = "menu",
 		slot = nil,
 		mode = nil,
-		pendingChoice = joinChoice(player),
+		pendingChoice = nil,
 		teleportChoice = nil,
 		teleportToken = 0,
 		replaceAll = false,
@@ -1324,14 +1755,36 @@ local function addPlayer(player: Player)
 		lastRedeemAt = -math.huge,
 		manualPending = false,
 		lastSaveNowAt = -math.huge,
+		trip = nil,
+		guest = false,
+		accepted = role ~= "world",
+		rejected = false,
+		lastWorldsRequestAt = -math.huge,
+		lastJoinAt = -math.huge,
 		connections = {},
 	}
 	records[player] = record
-	if record.pendingChoice then
-		setAttribute(player, "SBO_SlotLoading", true) -- a solo trip: no start menu here
+	-- Stage 10 fix: a world server only takes players its owner's trip allows (see the header).
+	local arrival = if role == "world" then arrivalOf(player) else nil
+	if role == "world" then
+		setAttribute(player, "SBO_SlotLoading", true) -- arrived for a world: no start menu here
+		setAttribute(player, "SBO_Guest", arrival ~= nil and arrival.guest)
 	end
 
 	task.spawn(function()
+		if role == "world" then
+			local allowed, reason = admit(player, record, arrival)
+			if records[player] ~= record then
+				return
+			end
+			if not allowed or arrival == nil then
+				warn(`[SpaceBaseOdyssey] {player.Name} may not stay in this world ({reason or "left"}); back to the lobby`)
+				sendToLobby(player, reason or "private")
+				return
+			end
+			record.pendingChoice = { slot = arrival.slot, mode = arrival.mode, fresh = arrival.fresh, guest = arrival.guest }
+			requestRegistryWrite()
+		end
 		local ok, data = readKey(metaKey(player), player.Name)
 		local meta = emptyMeta()
 		local canSave = ok
@@ -1385,6 +1838,37 @@ local function removePlayer(player: Player)
 	for _, connection in record.connections do
 		connection:Disconnect()
 	end
+	local index = table.find(loadOrder, player)
+	if index then
+		table.remove(loadOrder, index)
+	end
+	-- Stage 10 fix: the owner left their world server. Nobody may stay without them: every guest's
+	-- slot is saved and they go back to the lobby (the server then closes).
+	local ownerLeft = role == "world" and record.accepted and player.UserId == worldOwnerId and not hostLeft
+	if ownerLeft then
+		hostLeft = true
+		task.spawn(unregisterWorld)
+		for other, otherRecord in records do
+			if not otherRecord.rejected then
+				sendToLobby(other, "host_left", function()
+					if records[other] == otherRecord and otherRecord.dirty then
+						save(other, otherRecord)
+					end
+					if records[other] == otherRecord and otherRecord.metaDirty then
+						saveMeta(other, otherRecord)
+					end
+				end)
+			end
+		end
+	end
+	refreshOwner()
+	if not ownerLeft and record.guest then
+		local owner = currentOwner
+		if owner and record.loaded then
+			sayTo(owner, "carl.world.friend_left", { name = player.DisplayName })
+		end
+	end
+	requestRegistryWrite()
 	refreshWorldRewards()
 	notifyChanged()
 	-- Stage 10: counted as a save in flight from the start (save() may first wait for write budget),
@@ -1517,24 +2001,34 @@ function ProgressService.start(worldRefs: any, remoteEvents: Remotes)
 		end
 	end
 
-	-- Stage 10: Remotes.SAVED (Types.SaveNotice). Main.server may pass it; otherwise it is made here,
-	-- in the same folder as the other remotes.
-	if remoteEvents.saved == nil then
+	-- Stage 10: Remotes.SAVED (Types.SaveNotice) and, Stage 10 fix, Remotes.WORLDS (Types.FriendWorlds).
+	-- Main.server may pass them; otherwise they are made here, in the same folder as the other remotes.
+	local function ensureRemote(name: string, purpose: string): RemoteEvent?
 		local folder = ReplicatedStorage:FindFirstChild(Types.Remotes.FOLDER)
-		if folder then
-			local existing = folder:FindFirstChild(Types.Remotes.SAVED)
-			if existing and existing:IsA("RemoteEvent") then
-				remoteEvents.saved = existing :: RemoteEvent
-			else
-				local event = Instance.new("RemoteEvent")
-				event.Name = Types.Remotes.SAVED
-				event.Parent = folder
-				remoteEvents.saved = event
-			end
-		else
-			warn("[SpaceBaseOdyssey] no Remotes folder: players are not told when their game is saved")
+		if folder == nil then
+			warn(`[SpaceBaseOdyssey] no Remotes folder: {purpose}`)
+			return nil
 		end
+		local existing = folder:FindFirstChild(name)
+		if existing and existing:IsA("RemoteEvent") then
+			return existing :: RemoteEvent
+		end
+		local event = Instance.new("RemoteEvent")
+		event.Name = name
+		event.Parent = folder
+		return event
 	end
+	if remoteEvents.saved == nil then
+		remoteEvents.saved = ensureRemote(Types.Remotes.SAVED, "players are not told when their game is saved")
+	end
+	if remoteEvents.worlds == nil then
+		remoteEvents.worlds = ensureRemote(Types.Remotes.WORLDS, "the Join a friend list is off")
+	end
+
+	-- Stage 10 fix: this server's role (lobby, world or local; see the header).
+	role = Worlds.serverRole(studio, game.PlaceId, game.PrivateServerId, game.PrivateServerOwnerId)
+	workspace:SetAttribute("SBO_WorldRole", role)
+	print(`[SpaceBaseOdyssey] server role: {role} (worlds hold at most {MAX_WORLD_PLAYERS} players)`)
 
 	connectCollectibles()
 	refreshWorldRewards()
@@ -1564,15 +2058,40 @@ function ProgressService.start(worldRefs: any, remoteEvents: Remotes)
 				if record then
 					requestSaveNow(player, record)
 				end
+			elseif action.type == "ListFriendWorlds" then
+				task.spawn(function()
+					local ok, err = pcall(ProgressService.listFriendWorlds, player)
+					if not ok then
+						warn(`[SpaceBaseOdyssey] ListFriendWorlds failed: {err}`)
+					end
+				end)
+			elseif action.type == "JoinWorld" then
+				task.spawn(function()
+					local ok, err = pcall(ProgressService.joinWorld, player, action.owner, action.slot)
+					if not ok then
+						warn(`[SpaceBaseOdyssey] JoinWorld failed: {err}`)
+					end
+				end)
 			end
 		end)
 	end
 
-	TeleportService.TeleportInitFailed:Connect(function(player: Player, _result: Enum.TeleportResult, message: string)
+	-- Stage 10 fix: a world trip Roblox could not start. A full world is said so; other failures are
+	-- retried (RETRY_ATTEMPTS in all), then the player is back on the start menu.
+	TeleportService.TeleportInitFailed:Connect(function(player: Player, result: Enum.TeleportResult, message: string)
 		local record = records[player]
-		if record and record.state == "teleporting" then
-			warn(`[SpaceBaseOdyssey] solo teleport failed for {player.Name}, loading here: {message}`)
-			teleportFailed(player, record, record.teleportToken)
+		local trip = if record then record.trip else nil
+		if record == nil or record.state ~= "teleporting" or trip == nil then
+			return
+		end
+		warn(`[SpaceBaseOdyssey] world trip for {player.Name} failed ({result.Name}): {message}`)
+		local token = record.teleportToken
+		if result == Enum.TeleportResult.GameFull then
+			tripFailed(player, record, token, "full")
+		elseif trip.attempts < RETRY_ATTEMPTS then
+			task.delay(RETRY_SECONDS * trip.attempts, teleportTrip, player, record, token)
+		else
+			tripFailed(player, record, token, if trip.join then "closed" else "failed")
 		end
 	end)
 
@@ -1599,6 +2118,14 @@ function ProgressService.start(worldRefs: any, remoteEvents: Remotes)
 
 	-- Save what is still unsaved, and wait for saves already running (PlayerRemoving starts them too).
 	game:BindToClose(function()
+		closing = true
+		if role == "world" and not hostLeft then
+			savesInFlight += 1 -- the registry entry goes too (friends stop seeing a closed world)
+			task.spawn(function()
+				pcall(unregisterWorld)
+				savesInFlight -= 1
+			end)
+		end
 		for player, record in records do
 			task.spawn(function()
 				if record.dirty then
@@ -1632,8 +2159,171 @@ function ProgressService.chooseSlot(player: Player, slot: any, mode: any, fresh:
 	if fresh ~= nil and type(fresh) ~= "boolean" then
 		return false
 	end
+	if role == "world" then
+		return false -- Stage 10 fix: a world server plays only the slot its trip brought
+	end
 	applyChoice(player, record, { slot = slot :: number, mode = mode :: SlotMode, fresh = fresh == true })
 	return true
+end
+
+-- Stage 10 fix: the player's Roblox friends (online ones first), at most MAX_FRIEND_LOOKUPS. nil when
+-- the friends list could not be read.
+local function friendIds(userId: number): { number }?
+	local ok, pages = retry("read the friends list", function(): any
+		return Players:GetFriendsAsync(userId)
+	end)
+	if not ok or pages == nil then
+		return nil
+	end
+	local online: { number } = {}
+	local others: { number } = {}
+	for page = 1, MAX_FRIEND_PAGES do
+		local readOk, items = pcall(function(): any
+			return pages:GetCurrentPage()
+		end)
+		if not readOk or type(items) ~= "table" then
+			break
+		end
+		for _, item in items do
+			if type(item) == "table" and Worlds.isUserId(item.Id) then
+				table.insert(if item.IsOnline == false then others else online, item.Id)
+			end
+		end
+		if pages.IsFinished or page == MAX_FRIEND_PAGES then
+			break
+		end
+		local nextOk, err = pcall(function()
+			pages:AdvanceToNextPageAsync()
+		end)
+		if not nextOk then
+			warn(`[SpaceBaseOdyssey] friends list page {page + 1} failed: {err}`)
+			break
+		end
+	end
+	local result: { number } = {}
+	for _, list in { online, others } do
+		for _, id in list do
+			if #result >= MAX_FRIEND_LOOKUPS then
+				return result
+			end
+			table.insert(result, id)
+		end
+	end
+	return result
+end
+
+-- Stage 10 fix: ListFriendWorlds action (start menu "Join a friend"). At most one request every
+-- WORLDS_REQUEST_INTERVAL seconds per player; the answer is a Types.FriendWorlds on Remotes.WORLDS.
+-- Only the lobby looks for worlds (a world or a local server answers with an empty list, here = true).
+function ProgressService.listFriendWorlds(player: Player)
+	local record = records[player]
+	local events = remotes
+	local event = events and events.worlds
+	if record == nil or event == nil then
+		return
+	end
+	local t = os.clock()
+	if t - record.lastWorldsRequestAt < WORLDS_REQUEST_INTERVAL then
+		return
+	end
+	record.lastWorldsRequestAt = t
+	local answer: Types.FriendWorlds = { ok = true, worlds = {}, here = role ~= "lobby" }
+	if role == "lobby" then
+		local friends = friendIds(player.UserId)
+		if friends == nil then
+			answer.ok = false
+		else
+			local entries: { [number]: Worlds.Entry } = {}
+			for _, id in friends do
+				local entry = readWorld(id, true)
+				if entry then
+					entries[id] = entry
+				end
+			end
+			answer.worlds = Worlds.friendWorlds(friends, entries, Worlds.LIST_LIMIT)
+		end
+	end
+	if records[player] == record and player.Parent ~= nil then
+		event:FireClient(player, answer)
+	end
+end
+
+-- Stage 10 fix: JoinWorld action { owner, slot } (start menu: a friend's world, then which of the
+-- player's own slots to bring). Lobby only, from the start menu, at most once every
+-- JOIN_REQUEST_INTERVAL seconds. Checked here (the world server checks again on arrival): owner is a
+-- Roblox friend of the player, their world is open, a friends world, and has room. Returns false
+-- when the request itself is invalid (a refused join tells the client through SBO_TripFailed).
+function ProgressService.joinWorld(player: Player, owner: any, slot: any): boolean
+	local record = records[player]
+	if record == nil or record.state ~= "menu" or not record.metaReady or role ~= "lobby" then
+		return false
+	end
+	if not Worlds.isUserId(owner) or owner == player.UserId or not isSlot(slot) then
+		return false
+	end
+	local t = os.clock()
+	if t - record.lastJoinAt < JOIN_REQUEST_INTERVAL then
+		return false
+	end
+	record.lastJoinAt = t
+	local ownerId = owner :: number
+	-- Busy from now on (no ChooseSlot meanwhile); tripFailed puts the menu back.
+	record.state = "teleporting"
+	record.teleportToken += 1
+	local token = record.teleportToken
+	setAttribute(player, "SBO_SlotLoading", true)
+	local friendOk, friend = retry(`friends check for {player.Name}`, function(): any
+		return player:IsFriendsWith(ownerId)
+	end)
+	local entry = readWorld(ownerId)
+	if records[player] ~= record or record.teleportToken ~= token then
+		return false
+	end
+	local allowed, reason = Worlds.canJoin(entry, player.UserId, friendOk and friend == true, MAX_WORLD_PLAYERS)
+	if not allowed or entry == nil then
+		tripFailed(player, record, token, reason or "closed")
+		return true
+	end
+	-- A used slot is played as it is; an empty one starts a new explorer (never a wipe from here).
+	local fresh = record.metaCanSave and not record.meta.slots[slot :: number].used
+	record.state = "menu" -- startTrip starts the trip itself
+	startTrip(player, record, { slot = slot :: number, mode = "friends", fresh = fresh, guest = true }, {
+		owner = ownerId,
+		code = entry.code,
+	})
+	return true
+end
+
+-- Stage 10 fix: this server's role ("lobby" | "world" | "local").
+function ProgressService.role(): Worlds.Role
+	return role
+end
+
+-- Stage 10 fix: the world owner while they are here with a loaded slot (nil otherwise). The base
+-- (builds standing, builds in progress) is this player's save.
+function ProgressService.worldOwner(): Player?
+	local owner = currentOwner
+	if owner and owner.Parent ~= nil and records[owner] ~= nil then
+		return owner
+	end
+	return nil
+end
+
+-- Stage 10 fix: the world owner's UserId (world servers know it even after the owner left).
+function ProgressService.worldOwnerId(): number?
+	return worldOwnerId
+end
+
+-- Stage 10 fix: true while `player` plays in someone else's world.
+function ProgressService.isGuest(player: Player): boolean
+	local record = records[player]
+	return record ~= nil and record.guest
+end
+
+-- Stage 10 fix: called whenever the world owner changes (their slot loaded, they left, or in a local
+-- server the next player in line took over).
+function ProgressService.onOwnerChanged(listener: () -> ())
+	table.insert(ownerListeners, listener)
 end
 
 -- The slot this player plays (nil on the start menu or while teleporting) and its mode.

@@ -385,6 +385,8 @@ for _, mission in Missions.LIST do
 			iceCores = 0,
 			arraysCleaned = 0,
 			exposedAstronauts = 1,
+			-- Stage 10 fix: every storm drill of the shift (at most STORM.MAX_DRILLS), all of it outside.
+			stormExposure = MissionData.STORM.MAX_DRILLS,
 			leakRepaired = false,
 			suitRefills = 4,
 			antennaLinked = false,
@@ -397,6 +399,52 @@ for _, mission in Missions.LIST do
 		check(worst.air > red and worst.food > red, `tutorial {mission.id}: worst day stays out of the red zone`)
 		check(100 - worst.dose > red, `tutorial {mission.id}: worst dose stays out of the red zone`)
 	end
+end
+
+-- Stage 10 fix: storms and radiation. Live playtest: storms felt "very, very frequent" with three
+-- players. Storms come from the schedule, one event per day for the whole crew (never per player);
+-- only the storm drill repeats, with a quiet break and a cap, so the longest drill still ends.
+do
+	local storm = MissionData.STORM
+	for _, mission in Missions.LIST do
+		local schedule = mission.schedule
+		if schedule and mission.kind == "Story" then
+			-- Never two storm days in a row in the story: a break between storms.
+			for day = 2, #schedule do
+				check(
+					not (schedule[day] == "SolarStorm" and schedule[day - 1] == "SolarStorm"),
+					`mission {mission.id}: no storms on two days in a row`
+				)
+			end
+		end
+	end
+	local free = 0
+	for _, event in MissionData.EVENTS.SHUFFLED do
+		if event == "SolarStorm" then
+			free += 1
+		end
+	end
+	check(free <= 2, `free play: at most 2 storm days a week ({free})`)
+
+	-- The storm drill: worst case, every drill runs (long warning with the antenna linked).
+	local drill = Missions.get("t4_storm") :: Mission
+	check(drill.flareAtSeconds ~= nil, "t4_storm: the first flare comes quickly")
+	local cycle = storm.WARNING_SECONDS_WITH_LINK + storm.DURATION_SECONDS
+	local longest = (drill.flareAtSeconds or storm.FLARE_AT_SECONDS) + storm.MAX_DRILLS * cycle
+		+ (storm.MAX_DRILLS - 1) * storm.RETRY_GAP_SECONDS
+	check(longest <= 6 * 60, `t4_storm: even with every drill the shift ends within 6 minutes ({longest} s)`)
+	check(storm.RETRY_GAP_SECONDS > (drill.flareAtSeconds or 0), "t4_storm: a retry waits longer than the first flare")
+	check(storm.OUTSIDE_REMINDER_SECONDS > 0 and storm.OUTSIDE_REMINDER_SECONDS < storm.DURATION_SECONDS, "storm: C.A.R.L. reminds players outside during a storm")
+	-- The drill objectives survive a teammate who stays outside: survive_storm counts per player
+	-- (MissionService), and the drill teaches reach_shelter first.
+	local order: { string } = {}
+	for _, objective in drill.objectives do
+		table.insert(order, objective.id)
+	end
+	check(
+		(table.find(order, "reach_shelter") or 99) < (table.find(order, "survive_storm") or 0),
+		"t4_storm: reach the shelter comes before staying safe"
+	)
 end
 
 -- Localization: every key the game builds at run time from these ids exists in every language

@@ -27,7 +27,12 @@ export type ShiftResult = {
 	playerCount: number,
 	iceCores: number, -- ice cores delivered to the water processor
 	arraysCleaned: number, -- dusty solar arrays cleaned during the shift
-	exposedAstronauts: number, -- players outside the shelter when particles arrived
+	exposedAstronauts: number, -- players outside the shelter while particles were here
+	-- Stage 10 fix: storm exposure counted second by second (Simulation.stormExposureStep): the
+	-- crew-average share of a whole particle storm spent outside the shelter (0 = everyone sheltered,
+	-- 1 = everyone outside for a whole storm). When set, it replaces exposedAstronauts / playerCount
+	-- for the dose. Only time with particles counts, so a false alarm adds nothing.
+	stormExposure: number?,
 	leakRepaired: boolean,
 	suitRefills: number, -- full suit refills taken inside the habitat
 	falseAlarm: boolean?, -- the day's flare brought no particle storm (real DONKI example)
@@ -207,6 +212,34 @@ function Simulation.setAllocation(state: MissionState, data: any, system: System
 	return true, nil
 end
 
+-- Stage 10 fix: storms and radiation (live playtest: the dose barely moved, storms came too often).
+
+-- Storm exposure added by `seconds` of a particle storm while `exposedCount` of `playerCount`
+-- astronauts stand outside the shelter: the crew-average share of a whole storm (STORM.DURATION_SECONDS).
+-- Sheltered astronauts add nothing: the shelter's thick walls (mass) stop the particles.
+function Simulation.stormExposureStep(data: any, exposedCount: number, playerCount: number, seconds: number): number
+	if seconds <= 0 or playerCount <= 0 or exposedCount <= 0 then
+		return 0
+	end
+	local share = clamp(exposedCount / playerCount, 0, 1)
+	return share * seconds / data.STORM.DURATION_SECONDS
+end
+
+-- Dose points (crew average) for a storm exposure: a whole storm outside = DOSE_PER_EXPOSED_ASTRONAUT.
+function Simulation.stormDose(data: any, exposure: number): number
+	return math.max(0, exposure) * data.METERS.DOSE_PER_EXPOSED_ASTRONAUT
+end
+
+-- Training storm drills: when the drill number `drillsSoFar` (flares spotted this shift) ended at
+-- `endedAt` without the crew staying safe, the next flare comes at the returned time, after a quiet
+-- break of STORM.RETRY_GAP_SECONDS. nil = STORM.MAX_DRILLS reached: no more drills this shift.
+function Simulation.drillRetryAt(data: any, drillsSoFar: number, endedAt: number): number?
+	if drillsSoFar >= data.STORM.MAX_DRILLS then
+		return nil
+	end
+	return endedAt + data.STORM.RETRY_GAP_SECONDS
+end
+
 type DayFacts = { air: number, food: number, waterShort: boolean }
 
 local function pickCause(state: MissionState, data: any, result: ShiftResult, before: DayFacts): string
@@ -221,7 +254,8 @@ local function pickCause(state: MissionState, data: any, result: ShiftResult, be
 		return "cause.false_alarm"
 	end
 	if state.todayEvent == "SolarStorm" then
-		return if result.exposedAstronauts > 0 then "cause.storm_exposed" else "cause.storm_sheltered"
+		local exposed = result.exposedAstronauts > 0 or (result.stormExposure or 0) > 0
+		return if exposed then "cause.storm_exposed" else "cause.storm_sheltered"
 	end
 	if state.leakActive then
 		return "cause.leak_unrepaired"
@@ -286,11 +320,20 @@ function Simulation.endDay(state: MissionState, data: any, result: ShiftResult)
 	state.food = clamp(state.food - meters.FOOD_USE_PER_DAY, 0, 100)
 	state.pendingHarvest = state.allocation.Greenhouse * meters.FOOD_PER_GREENHOUSE_CELL
 
-	-- Radiation dose only ever goes up. The meter is the crew average.
-	local exposedShare = if result.playerCount > 0 then clamp(result.exposedAstronauts / result.playerCount, 0, 1) else 0
+	-- Radiation dose only ever goes up. The meter is the crew average. The shelter protects by mass:
+	-- only time outside it while particles are here adds storm dose.
 	local doseGain = meters.DOSE_BACKGROUND_PER_DAY
-	if state.todayEvent == "SolarStorm" and not result.falseAlarm then
-		doseGain += exposedShare * meters.DOSE_PER_EXPOSED_ASTRONAUT
+	if state.todayEvent == "SolarStorm" then
+		local exposure = result.stormExposure
+		if exposure ~= nil then
+			-- Counted second by second, only while particles were here (a false alarm counts none).
+			doseGain += Simulation.stormDose(data, exposure)
+		elseif not result.falseAlarm then
+			local exposedShare = if result.playerCount > 0
+				then clamp(result.exposedAstronauts / result.playerCount, 0, 1)
+				else 0
+			doseGain += Simulation.stormDose(data, exposedShare)
+		end
 	end
 	state.dose = math.min(meters.DOSE_LIMIT, state.dose + doseGain)
 
@@ -393,6 +436,7 @@ function Simulation.liveMeters(state: MissionState, data: any, result: ShiftResu
 		iceCores = 0,
 		arraysCleaned = result.arraysCleaned,
 		exposedAstronauts = 0,
+		stormExposure = if result.stormExposure ~= nil then 0 else nil,
 		leakRepaired = result.leakRepaired,
 		suitRefills = 0,
 		falseAlarm = result.falseAlarm,

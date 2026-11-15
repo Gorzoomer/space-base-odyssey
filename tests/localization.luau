@@ -101,6 +101,10 @@ local EXPECTED: { [string]: { string } } = {
 	["carl.storm_warning"] = { "class", "date" },
 	["carl.storm_now"] = {},
 	["carl.storm_over"] = {},
+	-- Stage 10 fix: storms and radiation.
+	["carl.storm_outside"] = {},
+	["carl.drill_again"] = {},
+	["ui.storm_outside"] = {},
 	["carl.false_alarm"] = { "class", "date" },
 	["carl.suit_low"] = {},
 	["carl.rescued"] = {},
@@ -744,6 +748,47 @@ local EXPECTED: { [string]: { string } } = {
 	["ui.save_now"] = {},
 	["ui.save_auto"] = {},
 }
+
+-- Stage 10 fix: private worlds (start menu Join a friend, world notices, C.A.R.L. in friends worlds).
+for key, params in {
+	["ui.menu_join_friend"] = {},
+	["ui.menu_friends_title"] = {},
+	["ui.menu_friends_loading"] = {},
+	["ui.menu_friends_none"] = {},
+	["ui.menu_friends_hint"] = {},
+	["ui.menu_friends_error"] = {},
+	["ui.menu_friends_refresh"] = {},
+	["ui.menu_friend_players"] = { "m", "n" },
+	["ui.menu_friend_full"] = {},
+	["ui.menu_pick_join"] = {},
+	["ui.menu_empty_join"] = {},
+	["ui.menu_wait_join"] = {},
+	["ui.menu_notice_host_left"] = {},
+	["ui.menu_notice_private"] = {},
+	["ui.menu_notice_full"] = {},
+	["ui.menu_notice_closed"] = {},
+	["ui.menu_notice_not_friend"] = {},
+	["ui.world_kick"] = {},
+	["carl.world.host_left"] = {},
+	["carl.world.private"] = {},
+	["carl.world.full"] = {},
+	["carl.world.closed"] = {},
+	["carl.world.not_friend"] = {},
+	["carl.world.guest_welcome"] = { "name" },
+	["carl.world.friend_joined"] = { "name" },
+	["carl.world.friend_left"] = { "name" },
+} :: { [string]: { string } } do
+	EXPECTED[key] = params
+end
+
+-- Every notice a world can send back has its menu line and its C.A.R.L. line.
+do
+	local Worlds = require("../src/shared/Worlds")
+	for notice in Worlds.NOTICES do
+		assert(EXPECTED["ui.menu_notice_" .. notice] ~= nil, "no menu line for world notice " .. notice)
+		assert(EXPECTED["carl.world." .. notice] ~= nil, "no C.A.R.L. line for world notice " .. notice)
+	end
+end
 
 -- Fun facts: "funfact.01" .. "funfact.NN" with N = Localization.FUNFACT_COUNT, no placeholders.
 local MIN_FUNFACTS = 45

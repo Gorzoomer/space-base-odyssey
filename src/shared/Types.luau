@@ -171,8 +171,10 @@ export type BaseState = {
 	levelXp: number, -- total XP where this level started
 	nextLevelXp: number?, -- total XP for the next level (nil at the top level)
 	skillPoints: number,
-	builds: { [string]: number }, -- EFFECTIVE builds standing in this server (highest of all players)
-	ownBuilds: { [string]: number }, -- this player's saved builds
+	-- Builds standing in this world: the world OWNER's save (Stage 10 fix; before, the highest of all
+	-- players present). The same for every player in the server.
+	builds: { [string]: number },
+	ownBuilds: { [string]: number }, -- this player's saved builds (a guest's own base, unchanged here)
 	skills: { [string]: number },
 	pets: { [string]: boolean }, -- owned pets (bought + from collectibles)
 	equipped: Equipped,
@@ -256,6 +258,24 @@ export type SlotsMeta = {
 	offline: boolean?, -- true = saves could not be read: progress is kept only for this visit
 }
 
+-- Stage 10 fix: one open friends world on the "Join a friend" screen (src/shared/Worlds.luau View).
+export type FriendWorld = {
+	owner: number, -- the friend's UserId (JoinWorld.owner)
+	name: string, -- the friend's display name
+	baseLevel: number, -- their habitat level
+	players: number, -- players in that world now
+	max: number,
+	full: boolean,
+}
+
+-- Stage 10 fix: the answer to ListFriendWorlds (Remotes.WORLDS). ok = false: the friends list could
+-- not be read. here = true: this server is not a lobby (Studio), so there is no list to show.
+export type FriendWorlds = {
+	ok: boolean,
+	worlds: { FriendWorld },
+	here: boolean?,
+}
+
 -- Stage 10: sent to one player after each save of their slot (Remotes.SAVED).
 export type SaveNotice = {
 	ok: boolean, -- false only for a "Save now" that could not be written
@@ -290,11 +310,17 @@ export type Action =
 	-- Settings panel: at most 24 characters, trimmed, any case. The server replies through C.A.R.L.
 	-- (carl.code_ok, carl.code_used, carl.code_bad); one attempt every 2 seconds per player.
 	| { type: "RedeemCode", code: string }
-	-- Stage 9 start menu: load save slot 1..3 ("solo" = a private world, "friends" = this server).
+	-- Stage 9 start menu: load save slot 1..3. Stage 10 fix: in the lobby both modes go to the owner's
+	-- own reserved server ("solo" = nobody else, "friends" = up to 3 Roblox friends may join).
 	-- fresh = New Game in that slot (wipes it). Accepted once per join, before a character exists.
 	-- ProgressService validates slot, mode and fresh.
 	| { type: "ChooseSlot", slot: number, mode: SlotMode, fresh: boolean }
 	| { type: "RequestSlots" } -- send Remotes.SLOTS again (at most once a second)
+	-- Stage 10 fix (private worlds; ProgressService validates both, lobby only): the open friends worlds
+	-- of this player's Roblox friends (answer: FriendWorlds on Remotes.WORLDS, at most every 3 s), and
+	-- joining one with one of this player's own slots (they keep their own explorer progress there).
+	| { type: "ListFriendWorlds" }
+	| { type: "JoinWorld", owner: number, slot: number }
 	-- Stage 10, Settings panel "Save now": ProgressService saves the loaded slot as soon as the
 	-- DataStore allows and answers on Remotes.SAVED (manual = true). Ignored before a slot is loaded.
 	| { type: "SaveNow" }
@@ -334,6 +360,7 @@ local Remotes = table.freeze({
 	EXPLORE = "Explore", -- server -> one client: ExploreEvent (Stage 7)
 	SLOTS = "Slots", -- server -> one client: SlotsMeta (Stage 9 start menu)
 	SAVED = "Saved", -- server -> one client: SaveNotice (Stage 10, after each save of their slot)
+	WORLDS = "Worlds", -- server -> one client: FriendWorlds (Stage 10 fix, the "Join a friend" list)
 })
 
 return table.freeze({

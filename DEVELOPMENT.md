@@ -376,6 +376,36 @@ Tested in Studio (assistant-driven):
 
 **Stage 10 fix: suit air while driving.** The team found that riding the moon buggy emptied the suit fast. The drain read the character's speed, so a fast vehicle counted as running (2 per second). A player in a vehicle seat now uses the resting rate (`SUIT.DRAIN_SEATED_PER_SECOND`, 0.5 per second, GAME). Tested in Studio: driving the buggy for 8 s took the suit from 93 to 89.
 
+**Stage 10 fix: storms and radiation.** Friends played the published game in a crew of three and reported two problems: solar storms came "very, very often", and the radiation bar barely moved whether they stood inside or outside the shelter (20 to 21 at most).
+- **Why storms felt so frequent.** Storms were never rolled per player. A storm day has one storm for the whole crew, set by the mission's schedule. The loop was the Storm drill (training): when any player was caught outside, the drill ran again 12 seconds after the storm ended, every time. With three kids, someone was almost always outside, so the drill never stopped (about one storm every 50 seconds).
+- **Drill pacing.** A drill now repeats only after a quiet break (`STORM.RETRY_GAP_SECONDS`, 45 s, GAME), and at most `STORM.MAX_DRILLS` times in one shift (3, GAME). After that, the day ends on the clock. C.A.R.L. says when another drill is coming.
+- **Staying safe counts per player.** "Stay safe during the storm" is met when at least one astronaut stayed in the shelter for the whole storm. A teammate who stays outside no longer blocks the others; the cost shows as radiation on the crew meter and in the report. On the last drill, reaching the shelter before the storm ends is enough, so the training can still be finished. If nobody reaches the shelter in three drills, the report lists the missing objective and the crew can try again.
+- **Radiation you can see.** The storm dose used to be added only at the end of the day, as one step for anyone who was outside at any moment. Now the server counts exposure second by second while the particles are here (`Simulation.stormExposureStep`): each second adds the share of the crew standing outside. The live meter climbs while someone is outside and does not move for a crew in the shelter. The end of the day uses the same total, so there is no double counting. A whole storm outside adds `METERS.DOSE_PER_EXPOSED_ASTRONAUT` (raised from 18 to 22, GAME) to the crew average. Half a storm outside adds half of that.
+- **Feedback.** A player outside during the storm hears "Radiation rising! Get to the shelter!" every 8 seconds (`STORM.OUTSIDE_REMINDER_SECONDS`, GAME). The storm banner says "You are outside! Radiation is rising!". The radiation row flashes red every 3 points it rises.
+- **Science rules kept.** The shelter protects by mass: only time outside it adds storm dose. Dose never goes down: a player who leaves keeps their share. A false alarm (a big flare without particles) adds no dose, because exposure is only counted while particles are here.
+- **Balance.** A careful crew still earns 3 stars. A crew caught outside in both storms of a free play week ends with much more radiation but still finishes (21 vs 65 points). The worst Storm drill (all three drills outside) stays out of the red zone (69 points).
+- **Tests.** `tests/balance` (716 checks): exposure per second, sheltered crew gets no storm dose, the live dose rises during the storm and never goes down, the end of the day equals the live value, false alarms add nothing, drill gap and cap. `tests/missions` (706 checks): the worst drill shift ends within 6 minutes, no story storms on two days in a row, the worst training day stays out of the red zone.
+
+**Stage 10 fix: private worlds.** In the live game, autosave worked (Santi left, pressed Continue and carried on), but Pau pressed New game and landed in Santi's world.
+- **Why.** "With friends" loaded the slot in the public server, and the base there was the highest build level of every player present. So anyone matched into that public server saw the most advanced player's base. Players could not keep their own world.
+- **Design (rules in `src/shared/Worlds.luau`).** Every world is its owner's save slot and runs in its own reserved server, for both modes.
+  - The public server is only a lobby: the start menu and its cinematic. No slot ever loads there, so nobody spawns.
+  - Continue, New game or Load, then "Just me" or "With friends", reserves a new server and teleports the player there. If the trip fails, the player goes back to the menu with a message. It never falls back to the lobby.
+- **Just me.** Only the owner may stay. Anyone else who arrives is sent back to the lobby with a C.A.R.L. message.
+- **With friends.** At most 4 players: the owner and 3 Roblox friends (`MISSION.PLAYERS_MAX`, GAME).
+  - The world server keeps an entry in a MemoryStore hash map ("SBO_Worlds", key = owner UserId). It holds the access code, player count and base level, refreshes every 30 s, expires after 120 s, and is removed when the world closes.
+  - The new start menu button "Join a friend" lists the player's Roblox friends who host an open friends world (name, base level, players n of 4).
+  - Picking one opens "Pick your explorer save": the player chooses which of their own slots comes along. An empty slot starts a new explorer; nothing is ever wiped from this screen.
+  - The lobby checks the friendship, that the world is open, and that it has room. The world server checks all of it again on arrival.
+  - When the owner leaves, every guest's slot is saved and they go back to the menu ("Your friend left, so their base closed.").
+- **Whose base.** The base (builds, builds in progress, silo) is the owner's save. It is no longer the highest of everyone present.
+  - Guests keep their own credits, XP, level, skills, gear, tools, pets, wardrobe, quests, collectibles and missions, saved in their own slot.
+  - A guest pays for a build with their own credits. The finished level goes into the owner's save, so a guest's own base never changes in a friend's world.
+  - The cargo robot takes turns between everyone playing.
+  - When the owner changes, builds in progress stop and their payers get the credits back.
+- **Studio.** Reserved servers do not exist in Studio, so slots still load in the same server. The first player whose slot loads owns the world and later players are guests. The Join a friend list shows "No friends online with open worlds".
+- **Tests.** `tests/worlds` (68 checks): server roles, TeleportData checks, only friends join and never past 4, solo stays private, the base is the owner's builds, stale entries count as closed, list order and cap.
+
 **Stage 10 follow-up: 30-second trailer and one documentation file per language.**
 - The trailer was cut in HyperFrames from gameplay captured in Studio (graphics at the top quality level, the cinematic grade on), with an original score synthesized in code. Captions are in English for the global submission; the storm line says "What if a storm like this reached your base?". The raw shots and the render live in `promo/`, which is git-ignored.
 - `DOCUMENTATION.md` (English) and `DOCUMENTACION.md` (Spanish) gather the overview, how to play, science and NASA data, technical design, this log, and the sources, credits and licenses.
@@ -414,10 +444,11 @@ Tested in Studio (assistant-driven):
 
 | What | How | Result |
 | :--- | :--- | :--- |
-| Mission balance | `lune run tests/balance` | 671 checks pass. |
+| Mission balance | `lune run tests/balance` | 716 checks pass. |
 | Economy pacing | `lune run tests/economy` | 221 checks pass (simulated kid timeline). |
 | Missions and the build-and-grow rules | `lune run tests/missions`, `lune run tests/base` | 609 and 307 checks pass. |
 | Text length and translations | `lune run tests/localization` | All keys in en and es, at most 8 words. |
+| Private worlds (who may join, whose base) | `lune run tests/worlds` | 68 checks pass. |
 | Full mission in Roblox | Studio playtest driven by the assistant | 7 days, report reached, no script errors. |
 | Live NASA data | Studio playtest | 13 flares fetched; fetch time shown. |
 | Storm warning with antenna | Studio playtest, real key press | 45 s warning, flare labelled as a replay with its date. |

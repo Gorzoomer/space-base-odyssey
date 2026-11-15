@@ -13,6 +13,7 @@ Roblox (Luau) game for NASA Space Apps 2026, challenge "Build a Junior Astronaut
   - `lune run tests/balance`: mission rules. Must pass.
   - `lune run tests/missions`, `lune run tests/base`, `lune run tests/economy` and `lune run tests/cinematic`: missions, build-and-grow rules, economy pacing and the cinematic camera shots. Must pass.
   - `lune run tests/localization`: every key in en and es, at most 8 words.
+  - `lune run tests/worlds`: private worlds (who may join a world, whose base it shows). Must pass.
 - Check that the project still builds with `rojo build default.project.json -o <temp>.rbxl`.
 
 ## Rules

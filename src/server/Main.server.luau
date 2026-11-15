@@ -9,6 +9,11 @@
 -- never stops the server. Players arrive (spawn) in the lander (world.spawn).
 -- Stage 9 save slots: a player has no character until they pick a save slot on the start menu and it
 -- is loaded (ProgressService.onLoaded); then they spawn. Remotes.SLOTS carries the slot list.
+-- Stage 10 fix (private worlds): the public server is only a lobby. No slot ever loads there, so
+-- nobody spawns in it: the start menu teleports each player to their own world server (or a
+-- friend's). The cinematic menu keeps working there (streaming focus below, showcase base).
+-- Roblox's place setting caps every server; ProgressService enforces MissionData.MISSION.PLAYERS_MAX
+-- (4) per world in code, because Players.MaxPlayers cannot be set from a script.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -79,6 +84,7 @@ end
 local baseStateEvent = extraRemote(Types.Remotes.BASE_STATE)
 local exploreEvent = extraRemote(Types.Remotes.EXPLORE)
 local slotsEvent = extraRemote(Types.Remotes.SLOTS) -- Stage 9: the start menu's save slots
+local worldsEvent = extraRemote(Types.Remotes.WORLDS) -- Stage 10 fix: the "Join a friend" list
 
 -- An optional server module (Stage 7 services may be missing while the game is being built).
 local function optionalModule(name: string): any?
@@ -97,8 +103,9 @@ ProgressService.start(world, {
 	progress = remotes.progress,
 	collected = remotes.collected,
 	message = remotes.message,
-	action = remotes.action, -- ChooseSlot, RequestSlots
+	action = remotes.action, -- ChooseSlot, RequestSlots, SaveNow, ListFriendWorlds, JoinWorld
 	slots = slotsEvent,
+	worlds = worldsEvent,
 })
 -- Build and grow the base: credits, XP, builds, skills, pets, wardrobe (saved by ProgressService).
 startStep("BaseService", function()

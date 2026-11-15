@@ -6,13 +6,17 @@
 -- last exploration scan (Stage 7) and the Action sender.
 -- Stage 9: the three save slots ("worlds") from the "Slots" remote (start menu), the ChooseSlot
 -- action, and the player's active quest (BaseState.quest, read with Store.quest()).
+-- Stage 10 fix (private worlds): the "Join a friend" list (Remotes.WORLDS, Store.friendWorlds) and the
+-- ListFriendWorlds / JoinWorld actions.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Localization = require(Shared:WaitForChild("Localization"))
+local MissionData = require(Shared:WaitForChild("MissionData"))
 local Types = require(Shared:WaitForChild("Types"))
+local Worlds = require(Shared:WaitForChild("Worlds"))
 
 export type Snapshot = Types.Snapshot
 export type PlayerStats = Types.PlayerStats
@@ -604,9 +608,99 @@ function Store.isSlotChosen(): boolean
 end
 
 -- Ask the server to load a slot. fresh = New Game in that slot (the server wipes it).
--- "solo" may teleport the player to their own reserved server.
+-- Stage 10 fix: from the lobby both modes teleport the player to their own world server.
 function Store.chooseSlot(slot: number, mode: SlotMode, fresh: boolean)
 	local action: any = { type = "ChooseSlot", slot = slot, mode = mode, fresh = fresh }
+	Store.send(action)
+end
+
+-- Stage 10 fix: private worlds, "Join a friend" -------------------------------------------------
+
+-- The list as the start menu shows it. status "loading" until the server answers (or
+-- FRIEND_WORLDS_TIMEOUT passes: "error"); here = this server is not a lobby (Studio), so no list.
+export type FriendWorld = Types.FriendWorld
+export type FriendWorldsStatus = "loading" | "ready" | "error"
+export type FriendWorldsView = {
+	status: FriendWorldsStatus,
+	worlds: { FriendWorld },
+	here: boolean,
+}
+
+local FRIEND_WORLDS_TIMEOUT = 12 -- seconds without an answer before the list says "try again"
+local friendWorlds: FriendWorldsView? = nil
+local friendWorldsToken = 0
+local friendWorldsConnected = false
+local friendWorldsListeners: { () -> () } = {}
+
+local function emitFriendWorlds()
+	for _, listener in friendWorldsListeners do
+		task.spawn(listener)
+	end
+end
+
+local function setFriendWorlds(value: any)
+	if type(value) ~= "table" then
+		return
+	end
+	friendWorldsToken += 1
+	friendWorlds = {
+		status = if value.ok == false then "error" else "ready",
+		worlds = Worlds.sanitizeViews(value.worlds, MissionData.MISSION.PLAYERS_MAX, Worlds.LIST_LIMIT),
+		here = value.here == true,
+	}
+	emitFriendWorlds()
+end
+
+-- Remotes.WORLDS is connected the first time the list is asked for (the start menu owns this screen).
+local function connectFriendWorlds()
+	if friendWorldsConnected then
+		return
+	end
+	friendWorldsConnected = true
+	task.spawn(function()
+		local folder = ReplicatedStorage:WaitForChild(Types.Remotes.FOLDER, 10)
+		local remote = if folder then folder:WaitForChild(Types.Remotes.WORLDS, 10) else nil
+		if remote and remote:IsA("RemoteEvent") then
+			remote.OnClientEvent:Connect(setFriendWorlds)
+		else
+			warn("[SpaceBaseOdyssey] no Worlds remote: the Join a friend list stays empty")
+		end
+	end)
+end
+
+-- The latest "Join a friend" list (nil before the first request).
+function Store.friendWorlds(): FriendWorldsView?
+	return friendWorlds
+end
+
+-- Called whenever the "Join a friend" list changes (loading, an answer, a timeout).
+function Store.onFriendWorlds(listener: () -> ())
+	table.insert(friendWorldsListeners, listener)
+end
+
+-- Ask the server for the open worlds of this player's Roblox friends (the server rate-limits it).
+function Store.requestFriendWorlds()
+	connectFriendWorlds()
+	friendWorldsToken += 1
+	local token = friendWorldsToken
+	local previous = friendWorlds
+	friendWorlds = { status = "loading", worlds = if previous then previous.worlds else {}, here = false }
+	emitFriendWorlds()
+	local action: any = { type = "ListFriendWorlds" }
+	Store.send(action)
+	task.delay(FRIEND_WORLDS_TIMEOUT, function()
+		local current = friendWorlds
+		if token == friendWorldsToken and current and current.status == "loading" then
+			current.status = "error"
+			emitFriendWorlds()
+		end
+	end)
+end
+
+-- Join a friend's open world with one of this player's own slots (their explorer progress comes
+-- along; the server checks the friendship and the room).
+function Store.joinWorld(owner: number, slot: number)
+	local action: any = { type = "JoinWorld", owner = owner, slot = slot }
 	Store.send(action)
 end
 
