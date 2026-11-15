@@ -410,6 +410,15 @@ Tested in Studio (assistant-driven):
 - The trailer was cut in HyperFrames from gameplay captured in Studio (graphics at the top quality level, the cinematic grade on), with an original score synthesized in code. Captions are in English for the global submission; the storm line says "What if a storm like this reached your base?". The raw shots and the render live in `promo/`, which is git-ignored.
 - `DOCUMENTATION.md` (English) and `DOCUMENTACION.md` (Spanish) gather the overview, how to play, science and NASA data, technical design, this log, and the sources, credits and licenses.
 
+**Stage 10: learning achievements.** Team request: reward what kids understand, not only what they collect.
+- **Design.** 13 achievements in `src/shared/Achievements.luau` (pure, tested in Lune). Each one is tied to an event the server already sees, so it can only be earned by doing the real thing. Each has an icon from `Icons.luau`, a title and a hint (at most 8 words) and a one-sentence "what you learned" fact (at most 16 words, REAL numbers from `MissionData.REAL` as placeholders).
+- **Hooks.** `MissionService.onLearn` (new) sends science moments: ice delivered while the air maker has power, a harvest from yesterday's greenhouse power, a whole particle storm in the shelter, a real flare with no particle storm, the antenna linked. Counters use the existing `onIceDelivered` and `onPanelCleaned`. Missions, base level, the ship and scanned sites are read from the save and the world. The Sources screen sends the new `OpenSources` action, which the server accepts only for a loaded slot and at most every 5 seconds. `ExploreService.siteIds` (new) gives the number of sites.
+- **Saving.** `src/server/AchievementService.luau` keeps `achievements = { unlocked, counts }` in the player's save slot (`ProgressService`, next to `quest`). An older save without the field loads as nothing unlocked. Merges never lose an unlock or lower a counter. A debug base reset keeps achievements; New game in a slot wipes them with the slot.
+- **Reward.** 10 XP each (`MissionData.ACHIEVEMENTS.XP_REWARD`, GAME), no credits, so the build economy and its pacing tests do not change.
+- **Screen.** An "Achievements" button joins Missions and Wardrobe in the top bar (base mode). The panel shows every achievement: unlocked ones in gold with the fact, locked ones greyed with the hint and, for counted ones, progress such as 3/10. The quest toast card shows "Achievement unlocked!" with the icon, title and +XP.
+- **Roblox badges.** `MissionData.ACHIEVEMENTS.BADGES` maps each id to a badge id (0 = none yet). For ids above 0 the server checks `UserHasBadgeAsync`, then calls `AwardBadge` in pcall with one retry. Players who unlocked an achievement before its badge existed get the badge the next time their slot loads. The team creates the badges in Creator Hub and pastes the ids.
+- **Tests.** `tests/achievements`: unique ids, icons exist, every text in en and es, facts quote REAL values found in `DATA_SOURCES.md`, the rules, old saves and merges. `tests/localization` now checks the achievement keys too.
+
 ## Decisions
 
 | Decision | Who decided | Why |
@@ -449,6 +458,7 @@ Tested in Studio (assistant-driven):
 | Missions and the build-and-grow rules | `lune run tests/missions`, `lune run tests/base` | 609 and 307 checks pass. |
 | Text length and translations | `lune run tests/localization` | All keys in en and es, at most 8 words. |
 | Private worlds (who may join, whose base) | `lune run tests/worlds` | 68 checks pass. |
+| Learning achievements | `lune run tests/achievements` | 227 checks pass. |
 | Full mission in Roblox | Studio playtest driven by the assistant | 7 days, report reached, no script errors. |
 | Live NASA data | Studio playtest | 13 flares fetched; fetch time shown. |
 | Storm warning with antenna | Studio playtest, real key press | 45 s warning, flare labelled as a replay with its date. |

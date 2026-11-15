@@ -43,6 +43,8 @@
 -- base.gearOn (which owned gear is switched on; saved as it is). Migration of Stage 7 saves: the
 -- removed "jump" skill becomes air boots at that level (at most the boots' maxLevel), switched on, for
 -- free; the jump levels drop out of the skills, so their skill points come back.
+-- Stage 10 adds base.achievements (Achievements.Record: unlocked ids and two lifetime counters; an
+-- older save without it loads as nothing unlocked; a debug base reset keeps it).
 -- Stage 9 adds base.quest (QuestService's own table, saved as it is; plain numbers, booleans, short
 -- strings and tables only). Migration of saves from before Stage 9: the habitat (the base level) rises
 -- to what the structures already built need under the habitat tree (BaseBuild.habitatForBuilds), so
@@ -108,6 +110,7 @@ local MissionData = require(Shared:WaitForChild("MissionData"))
 local Missions = require(Shared:WaitForChild("Missions"))
 local Types = require(Shared:WaitForChild("Types"))
 local Worlds = require(Shared:WaitForChild("Worlds"))
+local Achievements = require(Shared:WaitForChild("Achievements"))
 
 local Codes = require(script.Parent:WaitForChild("Codes"))
 
@@ -164,6 +167,9 @@ export type BaseRecord = {
 	-- Stage 9: QuestService's table (for example { index, progress = { [step] = n }, sideDone = {} }).
 	-- nil = no quest started. Kept as it is (numbers, booleans, short strings, tables; 4 levels deep).
 	quest: { [any]: any }?,
+	-- Stage 10: learning achievements (src/shared/Achievements.luau Record). A save without the field
+	-- loads as nothing unlocked; unlocks and counters never go down (Achievements.mergeRecord).
+	achievements: Achievements.Record,
 }
 
 -- What the start menu shows about this player's slots (meta key), plus account-wide cosmetics.
@@ -512,6 +518,7 @@ local function defaultBase(): BaseRecord
 		gear = {},
 		gearOn = {},
 		quest = nil,
+		achievements = Achievements.emptyRecord(),
 	}
 end
 
@@ -786,6 +793,7 @@ local function sanitizeBase(value: any, habitatTree: boolean?): BaseRecord
 		gear = gear,
 		gearOn = gearOn,
 		quest = sanitizeQuest(value.quest),
+		achievements = Achievements.sanitizeRecord(value.achievements),
 	}
 end
 
@@ -810,6 +818,7 @@ local function cloneBase(base: BaseRecord): BaseRecord
 		gear = table.clone(base.gear),
 		gearOn = table.clone(base.gearOn),
 		quest = sanitizeQuest(base.quest),
+		achievements = Achievements.sanitizeRecord(base.achievements),
 	}
 end
 
@@ -834,6 +843,7 @@ local function mergeBase(stored: any, current: BaseRecord, reset: boolean, habit
 			end
 		end
 		merged.quest = mergeQuest(old.quest, merged.quest)
+		merged.achievements = Achievements.mergeRecord(old.achievements, merged.achievements)
 	end
 	return merged
 end
@@ -1567,6 +1577,7 @@ local function loadSlot(player: Player, record: Record, choice: Choice)
 	if base.quest == nil then
 		base.quest = earned.quest
 	end
+	base.achievements = Achievements.mergeRecord(base.achievements, earned.achievements)
 	record.base = base
 	record.canSave = canSave
 	record.loaded = true
@@ -2527,6 +2538,7 @@ function ProgressService.resetBase(player: Player): boolean
 	local fresh = defaultBase()
 	fresh.pets = record.base.pets
 	fresh.equipped = record.base.equipped
+	fresh.achievements = Achievements.cloneRecord(record.base.achievements) -- what was learned stays
 	record.base = fresh
 	record.baseReset = true
 	requestSave(player, record)

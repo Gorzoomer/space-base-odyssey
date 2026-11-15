@@ -3,7 +3,8 @@
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 -- Fails if a key is missing in English or Spanish, a string has too many words (after removing
 -- {placeholders}: 8 for gameplay text, 10 for "fact." and "src." lines on the Sources screen, 16
--- for "card.", "mission.", "story." cards and "funfact." lines), placeholders differ between
+-- for "card.", "mission.", "story." cards, "funfact." lines and "poi.", "meteor.", "ach." facts),
+-- placeholders differ between
 -- languages, a string contains emoji or symbols outside Latin text, gameplay text uses technical
 -- jargon, a fun fact repeats or quotes a number missing from DATA_SOURCES.md, a source file uses
 -- an unknown key, or the API misbehaves.
@@ -26,7 +27,8 @@ local PREFIX_MAX_WORDS: { [string]: number } = {
 }
 
 -- Stage 7: exploration site and meteorite facts ("poi.<id>.fact", "meteor.fact") are cards too.
-local FACT_CARD_PREFIXES: { [string]: boolean } = { poi = true, meteor = true }
+-- Stage 10: learning achievement facts ("ach.<id>.fact") are one-sentence cards too.
+local FACT_CARD_PREFIXES: { [string]: boolean } = { poi = true, meteor = true, ach = true }
 local FACT_CARD_MAX_WORDS = 16
 
 local function maxWords(key: string): number
@@ -781,6 +783,33 @@ for key, params in {
 	EXPECTED[key] = params
 end
 
+-- Stage 10: learning achievements. Each achievement's title, hint and fact, with the placeholders its
+-- hintParams / factParams fill (tests/achievements checks that those values exist in MissionData).
+for key, params in {
+	["ui.top_achievements"] = {},
+	["ui.ach_title"] = {},
+	["ui.ach_count"] = { "n", "total" },
+	["ui.ach_hint"] = {},
+	["ui.toast.achievement"] = {},
+} :: { [string]: { string } } do
+	EXPECTED[key] = params
+end
+do
+	local Achievements = require("../src/shared/Achievements")
+	local function names(map: { [string]: string }?): { string }
+		local list: { string } = {}
+		for name in map or {} do
+			table.insert(list, name)
+		end
+		return list
+	end
+	for _, def in Achievements.LIST do
+		EXPECTED[Achievements.titleKey(def.id)] = {}
+		EXPECTED[Achievements.hintKey(def.id)] = names(def.hintParams)
+		EXPECTED[Achievements.factKey(def.id)] = names(def.factParams)
+	end
+end
+
 -- Every notice a world can send back has its menu line and its C.A.R.L. line.
 do
 	local Worlds = require("../src/shared/Worlds")
@@ -1003,6 +1032,7 @@ local KEY_PREFIXES = {
 	"gear",
 	"quest",
 	"habitat",
+	"ach",
 }
 
 local function luauFiles(dir: string, out: { string })

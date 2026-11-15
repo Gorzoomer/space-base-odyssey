@@ -18,6 +18,8 @@
 -- a slot (player attribute SBO_SlotChosen). The mission select never opens by itself at the start any
 -- more: missions start from the habitat's mission console (prompt "MissionConsolePrompt") or the
 -- Missions top button, and main quests guide the player. After a report the player is back in the base.
+-- Stage 10: the Achievements panel (AchievementsPanel.luau, learning achievements) opens from the top
+-- bar in base mode.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -107,7 +109,7 @@ end
 -- the tool bar is hidden and auto-run stops.
 local MODAL_PANELS = {
 	"StartMenu", "MissionSelect", "Report", "PowerBoard", "Settings", "Sources", "Collection", "FindCard",
-	"BasePanel", "Wardrobe", "ExploreCard",
+	"BasePanel", "Wardrobe", "ExploreCard", "Achievements",
 }
 local function anyPanelOpen(): boolean
 	for _, name in MODAL_PANELS do
@@ -205,6 +207,7 @@ do
 	end
 end
 local wardrobe = loadPanel("Wardrobe", { showMessage = messages.show })
+local achievementsPanel = loadPanel("AchievementsPanel", {}) -- Stage 10 learning achievements
 
 -- Stage 7 exploration card (pcall: a broken card never breaks the client).
 type ExploreCardView = { show: (event: any) -> (), close: () -> (), isOpen: () -> boolean, render: () -> () }
@@ -231,6 +234,9 @@ local function closePanels()
 	end
 	if wardrobe then
 		wardrobe.close()
+	end
+	if achievementsPanel then
+		achievementsPanel.close()
 	end
 end
 
@@ -267,6 +273,19 @@ local topBar = Hud.newTopBar(root, {
 			setSelectOpen(true)
 		end
 	end,
+	openAchievements = if achievementsPanel
+		then function()
+			local panel = achievementsPanel :: PanelView
+			if panel.isOpen() then
+				panel.close()
+				return
+			end
+			closePanels()
+			settings.close()
+			sources.close()
+			panel.open()
+		end
+		else nil,
 })
 
 -- First person locks the mouse to the screen centre, so a player could not reach a panel's buttons
@@ -445,7 +464,7 @@ local function renderAll()
 	if startMenu then
 		startMenu.render()
 	end
-	for _, panel in { basePanel, wardrobe } do
+	for _, panel in { basePanel, wardrobe, achievementsPanel } do
 		local render = (panel :: any).render
 		if type(render) == "function" then
 			render()
@@ -623,6 +642,9 @@ do
 		labPart = promptPart(prompt)
 		if wardrobe then
 			wardrobe.close()
+		end
+		if achievementsPanel then
+			achievementsPanel.close()
 		end
 		settings.close()
 		sources.close()

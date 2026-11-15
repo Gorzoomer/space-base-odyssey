@@ -34,7 +34,8 @@
 -- Screen layout (fractions of the screen):
 --   top centre   y 0.02-0.09  shift timer 0.25-0.49 | today's event 0.51-0.75
 --   top right    y 0.02-0.10  settings button 0.815-0.985 (Settings.luau); y 0.115-0.18 Earth link
---                base mode:  Missions | Wardrobe buttons 0.555-0.805, y 0.02-0.10;
+--                base mode:  Missions | Wardrobe | Achievements buttons 0.43-0.805, y 0.02-0.10
+--                            (Stage 10; 0.555-0.805 without Achievements);
 --                            hint pill 0.3-0.7, y 0.115-0.175
 --                elsewhere:  an icon-only Wardrobe square at the right edge, under the settings
 --                            button (y 0.115: mission select, roaming) or under the Earth link or
@@ -1191,6 +1192,8 @@ end
 export type TopBarDeps = {
 	openWardrobe: (() -> ())?, -- nil when the Wardrobe failed to load: its buttons stay hidden
 	openMissions: () -> (),
+	-- Stage 10: the learning achievements panel (nil when it failed to load: no button).
+	openAchievements: (() -> ())?,
 }
 
 export type TopBarView = {
@@ -1230,12 +1233,16 @@ function Hud.newTopBar(root: Frame, deps: TopBarDeps): TopBarView
 		end
 	end
 
-	-- Full bar (base mode): Missions | Wardrobe, left of the Settings button.
-	local full = row("TopBar", UDim2.fromScale(0.25, BUTTON_HEIGHT), UDim2.fromScale(0.805, 0.02))
+	-- Full bar (base mode): Missions | Wardrobe | Achievements, left of the Settings button. Stage 10:
+	-- three buttons of the same width as before (the bar grows to the left).
+	local hasAchievements = deps.openAchievements ~= nil
+	local fullWidth = if hasAchievements then 0.375 else 0.25
+	local buttonWidth = if hasAchievements then 0.32 else 0.48
+	local full = row("TopBar", UDim2.fromScale(fullWidth, BUTTON_HEIGHT), UDim2.fromScale(0.805, 0.02))
 	local function fullButton(name: string, order: number, image: string, primary: boolean, onClick: () -> ()): TextButton
 		return Ui.button(full, {
 			name = name,
-			size = UDim2.fromScale(0.48, 1),
+			size = UDim2.fromScale(buttonWidth, 1),
 			order = order,
 			color = if primary then ROLE.primaryButton else Ui.COLORS.secondary,
 			strokeColor = if primary then ROLE.stroke else ROLE.accent,
@@ -1247,6 +1254,8 @@ function Hud.newTopBar(root: Frame, deps: TopBarDeps): TopBarView
 	end
 	local missionsButton = fullButton("MissionsButton", 1, Ui.Icons.target, true, deps.openMissions)
 	local wardrobeButton = fullButton("WardrobeButton", 2, Ui.Icons.wardrobe, false, call(deps.openWardrobe))
+	local achievementsButton = fullButton("AchievementsButton", 3, Ui.Icons.trophy, false, call(deps.openAchievements))
+	achievementsButton.Visible = false
 
 	-- Compact square (other screens): Wardrobe, icon only, at the right edge.
 	local compact = row("TopBarCompact", UDim2.fromScale(0.1, SQUARE_HEIGHT), UDim2.fromScale(0.985, 0.115))
@@ -1293,10 +1302,12 @@ function Hud.newTopBar(root: Frame, deps: TopBarDeps): TopBarView
 	local function render()
 		Ui.setButton(missionsButton, Store.t("ui.top_missions"))
 		Ui.setButton(wardrobeButton, Store.t("ui.top_wardrobe"))
+		Ui.setButton(achievementsButton, Store.t("ui.top_achievements"))
 		hint.label.Text = Store.t("ui.base_hint")
 		local hasState = Store.getBase() ~= nil
 		local hasWardrobe = deps.openWardrobe ~= nil and hasState
 		wardrobeButton.Visible = hasWardrobe
+		achievementsButton.Visible = hasAchievements and hasState
 		wardrobeSquare.Visible = hasWardrobe
 
 		full.Visible = mode == "base"

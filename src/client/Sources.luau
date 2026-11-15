@@ -370,6 +370,9 @@ function Sources.new(root: Frame): SourcesView
 		render()
 		list.CanvasPosition = Vector2.zero
 		screen.Visible = true
+		-- Stage 10: the "Fact finder" achievement (the server validates and rate-limits it).
+		local action: any = { type = "OpenSources" }
+		Store.send(action)
 	end
 
 	local function close()

@@ -476,6 +476,24 @@ Encontrar los cuatro abre un quinto secreto: un **observatorio** escondido con u
 
 **Códigos.** La Configuración tiene un cuadro "¿Tienes un código?". El servidor revisa el código; los códigos nunca se envían a los jugadores. El código del evento da el "Casco dorado Explorador 2026" (visor y detalles dorados), solo una apariencia, nunca una ventaja en el juego.
 
+**Logros de aprendizaje (Etapa 10).** El botón "Logros" de la barra superior (modo base) abre un panel con 13 logros. Cada uno premia entender una parte de la ciencia, y el servidor solo lo desbloquea cuando ve el evento real. Los desbloqueados muestran lo que aprendiste; los bloqueados muestran una pista (y el avance, por ejemplo 3/10). Cada uno da 10 XP una sola vez por partida, con una tarjeta "¡Logro desbloqueado!". Cuando el equipo crea la insignia de Roblox correspondiente en Creator Hub, el jugador también recibe la insignia.
+
+| Logro | Cómo se desbloquea | Qué enseña |
+| :--- | :--- | :--- |
+| Aire del agua | Entregar hielo en un turno con la máquina de aire encendida | El oxígeno sale del agua más electricidad |
+| Granjero paciente | Dar energía al invernadero y empezar el día siguiente | Las plantas tardan en crecer (lechuga en la ISS: 33 días) |
+| A salvo tras muros gruesos | Quedarse en el refugio durante toda una tormenta de partículas | El refugio protege por su masa, no por la energía |
+| No toda llamarada trae tormenta | Vivir una gran llamarada sin tormenta de partículas | Una gran llamarada no siempre trae tormenta de partículas |
+| ¡Hola, Tierra! | Conectar la antena con la Tierra | Las señales tardan unos 1.3 segundos en llegar a la Tierra |
+| Cazador de hielo | Entregar 10 hielos en total | El hielo de los cráteres polares puede dar agua y aire |
+| Limpiador de paneles | Limpiar 5 paneles solares con polvo | El polvo tapa la luz y los paneles dan menos energía |
+| Buscador de datos | Abrir la pantalla "Datos reales de la NASA" | Los científicos revisan de dónde vienen sus números |
+| Listo para tormentas | Terminar el entrenamiento Simulacro de tormenta | Las partículas pueden llegar en 30 minutos o menos |
+| Constructor lunar | Llegar al nivel 3 de la base (en tu propio mundo) | Cada edificio cuesta créditos, piezas y tiempo |
+| Listos para Marte | Construir la nave (en tu propio mundo) | Un mensaje a Marte puede tardar hasta 22 minutos |
+| Explorador lunar | Escanear todos los lugares de exploración | Los exploradores leen la historia de la Luna en rocas y cráteres |
+| Héroe de la historia | Terminar los tres capítulos de la historia | Las tripulaciones reales planean: cada decisión cuesta algo |
+
 ### 2.18 Módulos presurizados y tubos transitables
 
 Estos lugares cuentan como **adentro** una vez construidos: el núcleo redondo del hábitat, el tubo del núcleo, los domos 1 y 2 del invernadero, el Laboratorio y la nave. Adentro se recargan el aire del traje y el tanque de gas, y se puede comer comida fresca. Afuera, el aire del traje se gasta.

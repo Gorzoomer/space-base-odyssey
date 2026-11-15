@@ -26,6 +26,7 @@
 -- (accumulateExposure), so the radiation meter climbs live for the crew outside and the day ends on
 -- the same value. A storm day has one storm for the whole crew; only the training drill repeats, after
 -- STORM.RETRY_GAP_SECONDS and at most STORM.MAX_DRILLS times a shift. survive_storm counts per player.
+-- Stage 10 (learning achievements): onLearn tells AchievementService about science moments.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -224,6 +225,8 @@ local iceDeliveredListeners: { (player: Player, count: number) -> () } = {}
 local iceDrilledListeners: { (player: Player) -> () } = {}
 local panelListeners: { (player: Player) -> () } = {}
 local baseActionListeners: { (player: Player, kind: string, stage: BaseActionStage) -> () } = {}
+-- Stage 10: AchievementService listens for science moments (MissionService.onLearn).
+local learnListeners: { (players: { Player }, lesson: string) -> () } = {}
 
 local function fire(list: { any }, label: string, ...: any)
 	for _, listener in list do
@@ -943,9 +946,15 @@ end
 
 local function beginNextDay()
 	dayStartBackup = deepCopy(state)
+	-- Stage 10 (achievements): food from yesterday's greenhouse power is harvested today (day 2 on;
+	-- day 1's food was planted before the crew arrived).
+	local harvest = state.day >= 1 and state.pendingHarvest > 0
 	Simulation.beginDay(state, MissionData)
 	reconcileDust()
 	syncSystemVisuals(true)
+	if harvest then
+		fire(learnListeners, "learn", activePlayers(), "harvest")
+	end
 end
 
 local function planningHintKey(): string
@@ -1283,6 +1292,7 @@ local function shiftTick()
 					data.falseAlarm = true
 					currentShift.stormEndsAt = t
 					say("carl.false_alarm", flareParams(flare))
+					fire(learnListeners, "learn", activePlayers(), "false_alarm")
 					rearmTutorialStorm(currentShift, data, t)
 				end
 				refreshWorld()
@@ -1293,6 +1303,16 @@ local function shiftTick()
 				if t >= endsAt then
 					data.stage = "over"
 					say("carl.storm_over")
+					-- Stage 10 (achievements): who stayed in the shelter for the whole particle storm.
+					local shielded: { Player } = {}
+					for _, player in activePlayers() do
+						if crew.isPresent(player) and data.sheltered[player] and not data.stormExposed[player] then
+							table.insert(shielded, player)
+						end
+					end
+					if #shielded > 0 then
+						fire(learnListeners, "learn", shielded, "storm_sheltered")
+					end
 					if stormSurvived(data) then
 						addProgress("survive_storm")
 					end
@@ -1638,6 +1658,10 @@ local function onIceDelivered(player: Player)
 		reward(player, "ice_delivered")
 		broadcast()
 		fire(iceDeliveredListeners, "ice delivered", player, 1)
+		if state.allocation.LifeSupport > 0 then
+			-- Water plus electricity: the powered air maker turns this ice into air.
+			fire(learnListeners, "learn", { player }, "air_from_water")
+		end
 	elseif phase == "Briefing" or phase == "Planning" then
 		crew.setCarrying(player, false)
 		sayTo(player, "carl.ice_saved")
@@ -1679,6 +1703,7 @@ local function onAntennaAligned(player: Player)
 	end
 	addProgress("align_antenna")
 	reward(player, "antenna_aligned")
+	fire(learnListeners, "learn", { player }, "antenna_linked")
 	-- Stage 9: a bigger dish (antenna level 2 and 3) sends more, so each alignment pays a bonus.
 	local api = baseApi
 	if api then
@@ -2139,6 +2164,9 @@ function MissionService.deliverIce(player: Player, count: number): number
 		reward(player, "ice_delivered", cores)
 		broadcast()
 		fire(iceDeliveredListeners, "ice delivered", player, cores)
+		if state.allocation.LifeSupport > 0 then
+			fire(learnListeners, "learn", { player }, "air_from_water")
+		end
 		return cores
 	elseif phase == "Briefing" or phase == "Planning" then
 		sayTo(player, "carl.ice_saved")
@@ -2182,6 +2210,16 @@ end
 -- stage "before" just before BaseService handles it and "after" right after (both synchronous).
 function MissionService.onBaseAction(listener: (player: Player, kind: string, stage: BaseActionStage) -> ())
 	table.insert(baseActionListeners, listener)
+end
+
+-- Stage 10 (achievements): called with the players who just lived a science moment. Lessons:
+--   "air_from_water"  ice delivered in a shift while the air maker (LifeSupport) has power
+--   "harvest"         a new day began with food grown from yesterday's greenhouse power
+--   "storm_sheltered" in the shelter for a whole particle storm (from the warning to its end)
+--   "false_alarm"     a real big flare that brought no particle storm (every crew member here)
+--   "antenna_linked"  this player linked the antenna to Earth
+function MissionService.onLearn(listener: (players: { Player }, lesson: string) -> ())
+	table.insert(learnListeners, listener)
 end
 
 -- A C.A.R.L. line for everyone, from other services (for example the eclipse, in Main).

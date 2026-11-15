@@ -329,4 +329,33 @@ MissionData.EVENTS = table.freeze({
 	DUST_ARRAYS_COVERED = 1,
 })
 
+-- Stage 10 learning achievements (src/shared/Achievements.luau, GAME). Each achievement unlocks once
+-- per save slot and pays XP_REWARD XP (no credits: the build economy and its pacing tests stay the
+-- same; 13 achievements add 130 XP, under one player level near the top of LEVEL_XP).
+MissionData.ACHIEVEMENTS = table.freeze({
+	XP_REWARD = 10,
+	ICE_TARGET = 10, -- ice cores delivered in total (by hand or with the ice hauler)
+	PANEL_TARGET = 5, -- dusty solar panels cleaned in total
+	BASE_LEVEL_TARGET = 3, -- habitat (base) level
+	-- Roblox badge id for each achievement (configuration, not a gameplay number). 0 = no badge yet.
+	-- The team creates each badge in Creator Hub (Creations > this experience > Associated Items >
+	-- Badges > Create a Badge: name, description and a 512x512 image; a few badges a day are free,
+	-- more cost Robux) and pastes its id here. The server only awards ids above 0.
+	BADGES = table.freeze({
+		air_from_water = 0,
+		patient_farmer = 0,
+		mass_shield = 0,
+		false_alarm = 0,
+		hello_earth = 0,
+		ice_hunter = 0,
+		solar_cleaner = 0,
+		fact_finder = 0,
+		storm_ready = 0,
+		moon_builder = 0,
+		spaceport = 0,
+		explorer = 0,
+		chapter_hero = 0,
+	}),
+})
+
 return table.freeze(MissionData)

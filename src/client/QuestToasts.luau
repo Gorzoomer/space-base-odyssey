@@ -21,6 +21,9 @@
 -- short settle time one card shows "Your quest right now". The memory resets when the slot changes
 -- (player attributes SBO_Slot, SBO_SlotChosen, SBO_SlotLoading). No sound: the project has no UI
 -- sound helper.
+-- Stage 10 learning achievements: QuestToasts.achievement(id, xp) queues an "Achievement unlocked!"
+-- card (the achievement's icon and title, +XP; no coin row since achievements pay no credits).
+-- AchievementsPanel.luau calls it when the server says one just unlocked.
 -- Placement: right side, x 0.78-0.985, from y 0.28 down (at most y 0.47): under the top-right buttons
 -- and the wardrobe square (y <= 0.27 in every mode), right of the storm countdown (x <= 0.78) and the
 -- C.A.R.L. bubble (x 0.29-0.71), far from the left column (x < 0.21) and the bottom tool bar. Z index
@@ -36,6 +39,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local BaseBuild = require(Shared:WaitForChild("BaseBuild"))
 local MissionData = require(Shared:WaitForChild("MissionData"))
 local Quests = require(Shared:WaitForChild("Quests"))
+local Achievements = require(Shared:WaitForChild("Achievements"))
 local Types = require(Shared:WaitForChild("Types"))
 
 local Store = require(script.Parent.Store)
@@ -71,7 +75,7 @@ local BASE_STATE_WAIT_SECONDS = 60
 -- would hide a toast (e.g. a skill step done inside the Lab panel), so the toast waits instead.
 local HOLD_PANELS = {
 	"StartMenu", "MissionSelect", "Report", "PowerBoard", "Settings", "Sources", "Collection", "FindCard",
-	"BasePanel", "Wardrobe", "ExploreCard",
+	"BasePanel", "Wardrobe", "ExploreCard", "Achievements",
 }
 -- On touch-only screens the Run button starts at y 0.43 under the card: new-quest cards list no ticked
 -- steps there, so the tallest card (header, title, reward) ends at about y 0.40.
@@ -80,6 +84,9 @@ local SLOT_ATTRIBUTE = "SBO_Slot"
 local SLOT_LOADING_ATTRIBUTE = "SBO_SlotLoading"
 
 local QuestToasts = {}
+
+-- Set by QuestToasts.start: queues an achievement card (nil before start).
+local pushAchievement: ((id: string, xp: number) -> ())? = nil
 
 type Reward = { credits: number, xp: number }
 type StepSnap = { key: string, target: number, done: boolean }
@@ -377,6 +384,18 @@ local function layoutCard(card: Card, toast: Toast)
 	if reward then
 		card.coinText.Text = `+{reward.credits}`
 		card.xpText.Text = `+{reward.xp}`
+		-- Achievements pay XP only: no coin row then, the XP moves to the left.
+		local coins = reward.credits > 0
+		local coin = card.reward:FindFirstChild("Coin")
+		local xpIcon = card.reward:FindFirstChild("Xp")
+		if coin and coin:IsA("GuiObject") then
+			coin.Visible = coins
+		end
+		card.coinText.Visible = coins
+		if xpIcon and xpIcon:IsA("GuiObject") then
+			xpIcon.Position = UDim2.fromScale(if coins then TEXT_X + 0.39 else TEXT_X, 0.05)
+		end
+		card.xpText.Position = UDim2.fromScale(if coins then TEXT_X + 0.5 else TEXT_X + 0.11, 0.05)
 		card.reward.Size = UDim2.fromScale(1, REWARD_HEIGHT / height)
 		card.reward.Position = UDim2.fromScale(0, (PAD + iconHeight) / height)
 	end
@@ -740,6 +759,27 @@ function QuestToasts.start(root: Frame)
 		previous = state
 	end
 
+	-- Stage 10: an achievement that just unlocked (AchievementsPanel.luau, from the server).
+	pushAchievement = function(id: string, xp: number)
+		local def = Achievements.get(id)
+		if def == nil then
+			return
+		end
+		push({
+			kind = "quest",
+			header = "ui.toast.achievement",
+			color = ROLE.star,
+			questId = nil,
+			titleKey = Achievements.titleKey(id),
+			stepText = nil,
+			icon = Ui.iconImage(def.icon),
+			iconColor = ROLE.star,
+			reward = { credits = 0, xp = math.max(0, math.floor(xp)) },
+			ticks = {},
+			seconds = SHOW_SECONDS,
+		})
+	end
+
 	-- Save slots: a new slot (or the start menu again) forgets everything.
 	local function onSlotChanged()
 		reset()
@@ -771,6 +811,14 @@ function QuestToasts.start(root: Frame)
 			end
 		end)
 	end)
+end
+
+-- Stage 10: shows "Achievement unlocked!" with the achievement's icon, title and the XP it paid.
+function QuestToasts.achievement(id: string, xp: number?)
+	local fn = pushAchievement
+	if fn then
+		fn(id, xp or 0)
+	end
 end
 
 return QuestToasts

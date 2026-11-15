@@ -2388,6 +2388,61 @@ for _, row in WORLD_STRINGS do
 	ES[row[1]] = row[3]
 end
 
+-- Stage 10: learning achievements (src/shared/Achievements.luau: "ach.<id>.title", ".hint" and
+-- ".fact"; the panel and the toast). { key, English, Spanish }. Facts fill {placeholders} with REAL
+-- values from MissionData.REAL; hints fill {n} with the GAME target.
+local ACHIEVEMENT_STRINGS: { { string } } = {
+	{ "ui.top_achievements", "Achievements", "Logros" },
+	{ "ui.ach_title", "Your achievements", "Tus logros" },
+	{ "ui.ach_count", "{n} of {total} unlocked", "{n} de {total} logrados" },
+	{ "ui.ach_hint", "Learn how the base works to unlock more", "Aprende cómo funciona la base para lograr más" },
+	{ "ui.toast.achievement", "Achievement unlocked!", "¡Logro desbloqueado!" },
+	{ "ach.air_from_water.title", "Air from water", "Aire del agua" },
+	{ "ach.air_from_water.hint", "Bring ice while the air maker has power", "Trae hielo con la máquina de aire encendida" },
+	{ "ach.air_from_water.fact", "Electricity splits water into oxygen to breathe and hydrogen.", "La electricidad separa el agua en oxígeno para respirar e hidrógeno." },
+	{ "ach.patient_farmer.title", "Patient farmer", "Granjero paciente" },
+	{ "ach.patient_farmer.hint", "Power the greenhouse, then wait one day", "Da energía al invernadero y espera un día" },
+	{ "ach.patient_farmer.fact", "Plants take time to grow. Space lettuce took {days} days!", "Las plantas tardan en crecer. ¡La lechuga espacial tardó {days} días!" },
+	{ "ach.mass_shield.title", "Safe behind thick walls", "A salvo tras muros gruesos" },
+	{ "ach.mass_shield.hint", "Stay in the shelter for a whole storm", "Quédate en el refugio toda una tormenta" },
+	{ "ach.mass_shield.fact", "Thick, heavy walls block storm particles. Electricity cannot.", "Las paredes gruesas y pesadas frenan las partículas. La electricidad no." },
+	{ "ach.false_alarm.title", "Not every flare brings a storm", "No toda llamarada trae tormenta" },
+	{ "ach.false_alarm.hint", "See a big flare with no storm", "Mira una gran llamarada sin tormenta" },
+	{ "ach.false_alarm.fact", "A big flash on the Sun does not always send a particle storm.", "Un gran destello del Sol no siempre manda una tormenta de partículas." },
+	{ "ach.hello_earth.title", "Hello, Earth!", "¡Hola, Tierra!" },
+	{ "ach.hello_earth.hint", "Link the antenna to Earth", "Conecta la antena con la Tierra" },
+	{ "ach.hello_earth.fact", "Radio signals from the Moon reach Earth in about {moon} seconds.", "Las señales de radio de la Luna llegan a la Tierra en unos {moon} segundos." },
+	{ "ach.ice_hunter.title", "Ice hunter", "Cazador de hielo" },
+	{ "ach.ice_hunter.hint", "Bring {n} ice to the water machine", "Lleva {n} hielos a la máquina de agua" },
+	{ "ach.ice_hunter.fact", "Ice from dark craters can give a Moon base water and air.", "El hielo de los cráteres oscuros puede dar agua y aire a una base lunar." },
+	{ "ach.solar_cleaner.title", "Panel cleaner", "Limpiador de paneles" },
+	{ "ach.solar_cleaner.hint", "Clean {n} dusty solar panels", "Limpia {n} paneles solares con polvo" },
+	{ "ach.solar_cleaner.fact", "Moon dust blocks sunlight, so dusty panels make less power.", "El polvo lunar tapa la luz, así que los paneles sucios dan menos energía." },
+	{ "ach.fact_finder.title", "Fact finder", "Buscador de datos" },
+	{ "ach.fact_finder.hint", "Open the Real NASA data screen", "Abre la pantalla Datos reales de la NASA" },
+	{ "ach.fact_finder.fact", "Good scientists always check where their numbers come from.", "Los buenos científicos siempre revisan de dónde vienen sus números." },
+	{ "ach.storm_ready.title", "Storm ready", "Listo para tormentas" },
+	{ "ach.storm_ready.hint", "Finish the Storm drill training", "Termina el Simulacro de tormenta" },
+	{ "ach.storm_ready.fact", "Sun particles can arrive in {min} minutes or less. Hurry inside!", "Las partículas del Sol pueden llegar en {min} minutos o menos. ¡Corre adentro!" },
+	{ "ach.moon_builder.title", "Moon builder", "Constructor lunar" },
+	{ "ach.moon_builder.hint", "Reach base level {n}", "Llega al nivel {n} de la base" },
+	{ "ach.moon_builder.fact", "Every new building costs something: credits, parts and time.", "Cada edificio nuevo cuesta algo: créditos, piezas y tiempo." },
+	{ "ach.spaceport.title", "Ready for Mars", "Listos para Marte" },
+	{ "ach.spaceport.hint", "Build the ship", "Construye la nave" },
+	{ "ach.spaceport.fact", "Mars is far away: a message can take up to {max} minutes.", "Marte está lejos: un mensaje puede tardar hasta {max} minutos." },
+	{ "ach.explorer.title", "Moon explorer", "Explorador lunar" },
+	{ "ach.explorer.hint", "Scan every exploration site", "Escanea todos los lugares para explorar" },
+	{ "ach.explorer.fact", "Explorers study rocks and craters to learn the Moon's story.", "Los exploradores estudian rocas y cráteres para conocer la historia de la Luna." },
+	{ "ach.chapter_hero.title", "Story hero", "Héroe de la historia" },
+	{ "ach.chapter_hero.hint", "Finish the three story chapters", "Termina los tres capítulos de la historia" },
+	{ "ach.chapter_hero.fact", "Real crews plan ahead, because every choice costs something.", "Las tripulaciones reales planean, porque cada decisión cuesta algo." },
+}
+for _, row in ACHIEVEMENT_STRINGS do
+	table.insert(KEYS, row[1])
+	EN[row[1]] = row[2]
+	ES[row[1]] = row[3]
+end
+
 local STRINGS: { [Language]: { [string]: string } } = {
 	en = table.freeze(EN),
 	es = table.freeze(ES),

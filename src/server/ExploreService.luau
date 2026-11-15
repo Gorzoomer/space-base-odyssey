@@ -641,6 +641,11 @@ function ExploreService.onScan(listener: ScanListener)
 	table.insert(scanListeners, listener)
 end
 
+-- Stage 10 (achievements): the exploration site ids in this world (empty before start).
+function ExploreService.siteIds(): { string }
+	return table.clone(poiIds)
+end
+
 -- The meteorite crater on the Moon right now, or nil.
 function ExploreService.activeImpact(): Model?
 	local impact = active

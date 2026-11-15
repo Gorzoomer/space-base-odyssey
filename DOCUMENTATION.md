@@ -482,6 +482,24 @@ Finding all four opens a fifth secret: a hidden **observatory** with a telescope
 
 **Codes.** Settings has a "Have a code?" box. The server checks the code; the codes are never sent to players. The event code gives the "Explorer 2026 gold helmet" (gold visor and trim), a look only, never a gameplay advantage.
 
+**Learning achievements (Stage 10).** The "Achievements" button in the top bar (base mode) opens a panel with 13 achievements. Each one rewards understanding a piece of the science, and the server only unlocks it when it sees the real event. Unlocked ones show what you learned; locked ones show a hint (and progress such as 3/10). Each pays 10 XP once per save slot, with an "Achievement unlocked!" card. When the team creates a matching Roblox badge in Creator Hub, the player also gets the badge.
+
+| Achievement | How to unlock it | What it teaches |
+| :--- | :--- | :--- |
+| Air from water | Deliver ice in a shift while the air maker has power | Oxygen comes from water plus electricity |
+| Patient farmer | Power the greenhouse, then start the next day | Plants take time to grow (ISS lettuce: 33 days) |
+| Safe behind thick walls | Stay in the shelter for a whole particle storm | The shelter protects by mass, not power |
+| Not every flare brings a storm | Live through a big flare with no particle storm | A big flare does not always bring a particle storm |
+| Hello, Earth! | Link the antenna to Earth | Signals take about 1.3 seconds to reach Earth |
+| Ice hunter | Deliver 10 ice in total | Polar crater ice can give a base water and air |
+| Panel cleaner | Clean 5 dusty solar panels | Dust blocks sunlight, so panels make less power |
+| Fact finder | Open the "Real NASA data" screen | Scientists check where their numbers come from |
+| Storm ready | Finish the Storm drill training | Particles can arrive in 30 minutes or less |
+| Moon builder | Reach base level 3 (in your own world) | Every building costs credits, parts and time |
+| Ready for Mars | Build the ship (in your own world) | A message to Mars can take up to 22 minutes |
+| Moon explorer | Scan every exploration site | Explorers read the Moon's story in rocks and craters |
+| Story hero | Finish the three story chapters | Real crews plan ahead: every choice costs something |
+
 ### 2.18 Pressurized modules and walkable tubes
 
 These places count as **inside** once built: the round hub of the habitat, the hub tube, greenhouse domes 1 and 2, the Lab and the lander. Inside, suit air and the gas tank refill and fresh food can be eaten. Outside, suit air drains.

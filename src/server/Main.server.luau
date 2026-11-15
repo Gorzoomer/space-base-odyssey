@@ -4,7 +4,7 @@
 -- Start order: world, remotes, CrewService, ProgressService, BaseService (build and grow, building in
 -- steps), MissionService, ToolService (Stage 7 tools in hand), VehicleService (Stage 7 garage
 -- vehicles), ExploreService (Stage 7 exploration sites and meteorites), SuitService, PetService,
--- QuestService (Stage 9 main and side quests).
+-- QuestService (Stage 9 main and side quests), AchievementService (Stage 10 learning achievements).
 -- Each later service is started inside pcall so a missing or broken piece is reported with warn and
 -- never stops the server. Players arrive (spawn) in the lander (world.spawn).
 -- Stage 9 save slots: a player has no character until they pick a save slot on the start menu and it
@@ -85,6 +85,7 @@ local baseStateEvent = extraRemote(Types.Remotes.BASE_STATE)
 local exploreEvent = extraRemote(Types.Remotes.EXPLORE)
 local slotsEvent = extraRemote(Types.Remotes.SLOTS) -- Stage 9: the start menu's save slots
 local worldsEvent = extraRemote(Types.Remotes.WORLDS) -- Stage 10 fix: the "Join a friend" list
+local achievementsEvent = extraRemote(Types.Remotes.ACHIEVEMENTS) -- Stage 10: learning achievements
 
 -- An optional server module (Stage 7 services may be missing while the game is being built).
 local function optionalModule(name: string): any?
@@ -162,6 +163,17 @@ startStep("QuestService", function()
 			explore = exploreEvent,
 			slots = slotsEvent,
 		}, ProgressService)
+	end
+end)
+
+-- Stage 10: learning achievements (optional; started after every service it listens to).
+startStep("AchievementService", function()
+	local module = optionalModule("AchievementService")
+	if module then
+		module.start(BaseService, MissionService, ProgressService, {
+			achievements = achievementsEvent,
+			action = remotes.action,
+		})
 	end
 end)
 

@@ -283,6 +283,16 @@ export type SaveNotice = {
 	manual: boolean, -- true = the answer to a "Save now" (SaveNow action)
 }
 
+-- Stage 10: the player's learning achievements (Remotes.ACHIEVEMENTS), sent when their slot loads
+-- and on every change. unlocked: ids of src/shared/Achievements.luau; counts: its lifetime counters.
+-- new: the achievement that just unlocked (the client shows a toast), with the XP it paid.
+export type AchievementState = {
+	unlocked: { string },
+	counts: { [string]: number },
+	new: string?,
+	xp: number?,
+}
+
 export type BuildProgress = {
 	level: number, -- the level being built (current level + 1)
 	stage: number, -- steps finished (0..stages)
@@ -324,6 +334,9 @@ export type Action =
 	-- Stage 10, Settings panel "Save now": ProgressService saves the loaded slot as soon as the
 	-- DataStore allows and answers on Remotes.SAVED (manual = true). Ignored before a slot is loaded.
 	| { type: "SaveNow" }
+	-- Stage 10 achievements: the Sources screen ("Real NASA data") was opened. AchievementService
+	-- accepts it only for a loaded slot, at most once every few seconds per player.
+	| { type: "OpenSources" }
 	-- Stage 6 (BaseService validates: level, credits, requirements, ownership, distance for prompts).
 	| { type: "Build", id: string } -- build or upgrade to the next level (also from the world prompt)
 	| { type: "LearnSkill", id: string }
@@ -361,6 +374,7 @@ local Remotes = table.freeze({
 	SLOTS = "Slots", -- server -> one client: SlotsMeta (Stage 9 start menu)
 	SAVED = "Saved", -- server -> one client: SaveNotice (Stage 10, after each save of their slot)
 	WORLDS = "Worlds", -- server -> one client: FriendWorlds (Stage 10 fix, the "Join a friend" list)
+	ACHIEVEMENTS = "Achievements", -- server -> one client: AchievementState (Stage 10 learning achievements)
 })
 
 return table.freeze({
