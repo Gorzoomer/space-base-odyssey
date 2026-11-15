@@ -299,6 +299,7 @@ local EXPECTED: { [string]: { string } } = {
 	["carl.base.built_cargo_bot"] = {},
 	["carl.base.upgraded"] = {"n"},
 	["carl.base.level_up"] = {"n"},
+	["carl.base.debug_all_built"] = {},
 	["carl.base.skill_learned"] = {},
 	["carl.base.pet_bought"] = {},
 	["carl.base.silo_claimed"] = {"n"},

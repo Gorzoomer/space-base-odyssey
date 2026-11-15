@@ -103,6 +103,7 @@ local ACTION_TYPES: { [string]: boolean } = {
 	DebugMeteor = true,
 	DebugGrantCredits = true,
 	DebugResetBase = true,
+	DebugBuildNext = true,
 }
 
 local BaseService = {}
@@ -1089,6 +1090,65 @@ local function usePad(player: Player, id: string, force: boolean)
 	end
 end
 
+-- Debug (F1 / F5 in DemoKeys): finish the build in progress, or build the next structure in the order
+-- C.A.R.L. follows: every build's first level in MissionData.BASE.BUILDS order, then the upgrades,
+-- lowest level first. Free, with no player level needed, so testers can reach any stage fast.
+local function nextDebugBuild(): string?
+	local bestId: string? = nil
+	local bestLevel = math.huge
+	for _, def in MissionData.BASE.BUILDS do
+		local level = BaseBuild.levelOf(effective, def.id)
+		local ready = level < def.maxLevel
+		if ready then
+			for needId, needLevel in def.requires do
+				if BaseBuild.levelOf(effective, needId) < needLevel then
+					ready = false
+					break
+				end
+			end
+		end
+		if ready and level < bestLevel then
+			bestId = def.id
+			bestLevel = level
+		end
+	end
+	return bestId
+end
+
+local function debugBuildNext(player: Player)
+	local id: string? = nil
+	for jobId in jobs do
+		id = jobId -- a build already in progress is finished first
+		break
+	end
+	if id == nil then
+		id = nextDebugBuild()
+		if id == nil then
+			sayTo(player, "carl.base.debug_all_built")
+			return
+		end
+		local nextLevel = BaseBuild.levelOf(effective, id) + 1
+		local job: Job = {
+			level = nextLevel,
+			stage = 0,
+			stages = math.max(1, BaseBuild.stagesFor(MissionData, id, nextLevel)),
+			crate = false,
+			cost = 0,
+			payer = player,
+			payerId = player.UserId,
+		}
+		jobs[id] = job
+	end
+	local buildId = id :: string
+	local guard = 0
+	while jobs[buildId] and guard < 20 do
+		guard += 1
+		local job = jobs[buildId] :: Job
+		job.crate = true
+		assembleStep(player, buildId, job)
+	end
+end
+
 ----------------------------------------------------------------------------------------------------
 -- Actions
 
@@ -1408,6 +1468,11 @@ local function dispatch(player: Player, action: any, trusted: boolean)
 			return
 		end
 		doResetBase(player)
+	elseif kind == "DebugBuildNext" then
+		if not isDebugAllowed(player, trusted) or not isLoaded(player) then
+			return
+		end
+		debugBuildNext(player)
 	end
 end
 

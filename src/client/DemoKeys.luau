@@ -8,6 +8,8 @@
 --   F4: grant 100 credits (and the same XP) for testing the base (DebugGrantCredits).
 --   F3: reset this player's base: builds, skills, credits and XP back to the start (DebugResetBase).
 --   F2: a meteorite lands near this player now, to scan with the tablet (DebugMeteor, Stage 7).
+--   F1 (or F5): finish the build in progress, or build the next structure in C.A.R.L.'s order, free
+--     (DebugBuildNext). F5 is also Studio's Play key, so F1 is the main one.
 -- No UI. The server validates every debug action again (Studio or place owner only).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
@@ -52,6 +54,9 @@ function DemoKeys.start()
 			Store.send({ type = "DebugResetBase" })
 		elseif input.KeyCode == Enum.KeyCode.F2 then
 			Store.send({ type = "DebugMeteor" })
+		elseif input.KeyCode == Enum.KeyCode.F1 or input.KeyCode == Enum.KeyCode.F5 then
+			local action: any = { type = "DebugBuildNext" }
+			Store.send(action)
 		elseif input.KeyCode == Enum.KeyCode.F7 then
 			for _, id in Store.COLLECTIBLES do
 				if not Store.hasCollectible(id) then
