@@ -60,6 +60,21 @@
 -- The first player who arrives during a showcase also gets an eclipse preview (WorldSky via
 -- world.previewEclipse) a moment later, so the menu's first shot shows the Earth about to hide the
 -- Sun; it is not repeated until the showcase ends and starts again.
+-- Stage 11 tycoon (team report: "the ice line is not visible and does not even make money"): the
+-- line is drills -> belt -> silo -> water plant -> cargo robot -> hub (BaseBuild "Stage 11 tycoon").
+--   * The silo belongs to the WORLD OWNER: it is kept in their save (base.silo = { ice, at }) and,
+--     when their slot loads, the drills' work while they were away is added (BaseBuild.offlineIce:
+--     at most OFFLINE_MAX_SECONDS and one full silo), told once (C.A.R.L. and a LineEvent "away").
+--   * Only the owner may send the silo's ice by hand (water); the cargo robot pays only the owner,
+--     and rests while the owner has not moved or acted for CARGO_IDLE_AFTER_SECONDS (no income for
+--     AFK guests or an AFK owner; the silo still fills up to its size).
+--   * The robot is a real trip (phases dock / rest / load / go / drop / back, published on the line
+--     folder for the clients to animate): it loads at the water plant when the silo holds
+--     CARGO_MIN_LOAD, drives to the hub's supply port and pays on ARRIVAL (water, or oxygen with a
+--     powered air maker, BaseBuild.productCredits). Each delivery is a LineEvent for "+N" pops.
+--   * Machine income gets no skill bonus (MACHINE_SKILL_BONUS; the rounding-up bug gave +100%).
+--   * Line state for the clients and the status lamps: WorldBuilder.setLineState / setSilo / setCargo.
+--   * A build cancelled while its payer is away is refunded when they load in this server again.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local HttpService = game:GetService("HttpService")
@@ -87,6 +102,7 @@ type Params = { [string]: string | number }
 export type Remotes = {
 	baseState: RemoteEvent,
 	message: RemoteEvent,
+	line: RemoteEvent?, -- Stage 11: Types.LineEvent (created here when missing)
 }
 
 -- What BaseService needs from CrewService (optional: without it crates ignore carried ice).
@@ -118,6 +134,11 @@ local LAB_RANGE_STUDS = 30 -- Lab purchases need the player this close to the La
 local DEBUG_MAX_GRANT = 100000
 local HABITAT_TIER_LINE_DELAY = 4 -- seconds between "Base level N!" and what that level opens
 local SHOWCASE_ECLIPSE_DELAY = 1 -- Stage 10: seconds after a menu player arrives before the eclipse preview
+-- Stage 11 tycoon (technical, not gameplay numbers).
+local SILO_SAVE_SECONDS = 30 -- the silo goes into the owner's save at most this often (and on payouts)
+local SILO_SAVE_FORCE_SECONDS = 120 -- ... and at least this often while it changes
+local CARL_DELIVERY_LINES = 3 -- C.A.R.L. names the first few robot deliveries of a visit
+local MOVE_EPSILON_STUDS = 1.5 -- the owner moved this far since the last silo tick = active
 
 -- Action types this module handles (MissionService routes them here).
 local ACTION_TYPES: { [string]: boolean } = {
@@ -152,8 +173,30 @@ local cargoShown: boolean? = nil
 local siloEnabled: boolean? = nil
 local silo = 0 -- ice waiting in the silo (shared by the server)
 local siloSent = -1 -- floor(silo) last sent to clients
-local cargoTimer = 0
-local cargoTurn = 0 -- rotates the cargo robot between several owners
+-- Stage 11 tycoon: the cargo robot's trip and the ice line's bookkeeping (one table: few locals).
+local tycoon = {
+	phase = "off", -- "off" | "dock" | "rest" | "load" | "go" | "drop" | "back" | "loop" (showcase)
+	phaseAt = 0, -- server time the phase started
+	phaseSeconds = 0,
+	carried = 0, -- whole ice on the robot (back in the silo if the trip cannot finish)
+	product = "water" :: BaseBuild.Product,
+	nextDepart = 0, -- server time the robot may leave the plant again
+	deliveries = 0, -- robot deliveries this visit (C.A.R.L. names the first few)
+	ownerId = nil :: number?, -- whose save the silo is in (the world owner)
+	savedIce = -1, -- silo amount last written to the owner's save
+	savedAt = 0, -- os.clock() of that write
+	fullSaid = false, -- "silo full" told for this fill
+	noPowerSaid = false, -- "the air maker needs power" told this visit
+	capSeen = 0, -- silo size last shown (a bigger one after a build gets a C.A.R.L. line)
+	lineSig = "", -- last line state sent to the world
+	lastActive = {} :: { [Player]: number }, -- os.clock() of the player's last move or action
+	lastPos = {} :: { [Player]: Vector3 },
+	pendingRefund = {} :: { [number]: number }, -- UserId -> credits of builds cancelled while away
+}
+-- Stage 11: set with the silo code below (the world owner while here and loaded).
+local isSiloOwner: (player: Player) -> boolean = function(_player: Player): boolean
+	return false
+end
 
 local jobs: { [string]: Job } = {} -- build id -> level being built (shared by the server)
 local pendingOwner: { [number]: Levels } = {} -- UserId -> builds finished by others while they were away
@@ -271,6 +314,7 @@ end
 -- sent just before (for example an Equip) never swallows a delivery or an assembly.
 local function promptLimited(player: Player): boolean
 	local t = os.clock()
+	tycoon.lastActive[player] = t -- Stage 11: using a prompt counts as playing
 	local last = lastPromptAt[player]
 	if last and t - last < ACTION_INTERVAL_SECONDS then
 		return true
@@ -576,6 +620,15 @@ local function buildState(player: Player): BaseState?
 		scanned = scannedState(base),
 		gear = gearLevelsOf(base),
 		gearOn = gearOnOf(base),
+		-- Stage 11 tycoon.
+		siloOwner = isSiloOwner(player),
+		lineStatus = BaseBuild.lineStatus(silo, BaseBuild.siloMax(MissionData, effective), BaseBuild.icePerMinute(MissionData, effective)),
+		plantLevel = BaseBuild.plantLevel(effective),
+		airStatus = BaseBuild.airStatus(MissionData, effective),
+		product = BaseBuild.plantProduct(MissionData, effective),
+		machineCreditsPerMinute = BaseBuild.icePerMinute(MissionData, effective)
+			* BASE.CREDITS_PER_SILO_ICE
+			* (if BaseBuild.plantProduct(MissionData, effective) == "oxygen" then (100 + BASE.OXYGEN_BONUS_PERCENT) / 100 else 1),
 	}
 end
 
@@ -802,6 +855,7 @@ local function refreshPrompts()
 		siloPrompt.Enabled = siloOn
 	end
 	-- Stage 10: the showcase drives the robot too (a visual only: ice still follows the real builds).
+	-- Stage 11: the trip itself runs in cargoStep (the clients animate it).
 	local cargoOn = BaseBuild.levelOf(effective, "cargo_bot") >= 1 or showcaseOn
 	if cargoShown ~= cargoOn then
 		cargoShown = cargoOn
@@ -847,6 +901,9 @@ local function recompute(animate: boolean): boolean
 					saved.credits += job.cost
 				end)
 				sayTo(payer, "carl.base.build_cancelled")
+			elseif job.cost > 0 then
+				-- Stage 11 audit fix: the payer is away; they get it back when they load here again.
+				tycoon.pendingRefund[job.payerId] = (tycoon.pendingRefund[job.payerId] or 0) + job.cost
 			end
 		end
 	end
@@ -897,7 +954,13 @@ local function recompute(animate: boolean): boolean
 		-- the silo keeps only what fits).
 		local cap = BaseBuild.siloMax(MissionData, effective)
 		silo = math.min(silo, cap)
-		worldCall("setSilo", silo, cap)
+		worldCall("setSilo", silo, cap, BASE.SILO_MAX)
+		-- Stage 11: a habitat level just built made the silo bigger (the cap ring rises).
+		local owner = if progress then progress.worldOwner() else nil
+		if animate and tycoon.capSeen > 0 and cap > tycoon.capSeen and owner and present[owner] then
+			sayTo(owner, "carl.base.silo_bigger", { n = cap })
+		end
+		tycoon.capSeen = cap
 		-- Stage 9: the base level for anything in the world that only needs that one number.
 		local baseLevel = BaseBuild.habitatLevel(effective)
 		if workspace:GetAttribute("SBO_BaseLevel") ~= baseLevel then
@@ -918,7 +981,9 @@ end
 -- Adds credits and XP (either may be 0) and tells the player about a new level. The "credits" and
 -- "xp" skills add their bonus (BaseBuild.bonusAmount: whole numbers) unless exact = true (debug).
 -- Returns the credits and XP really given.
-local function grant(player: Player, credits: number, xp: number, exact: boolean?): (number, number)
+-- Stage 11: machine = income from the silo or the cargo robot (BaseBuild.passiveBonus: no skill
+-- bonus while MACHINE_SKILL_BONUS is false, and never rounded up).
+local function grant(player: Player, credits: number, xp: number, exact: boolean?, machine: boolean?): (number, number)
 	local api = progress
 	local before = baseOf(player)
 	if api == nil or before == nil then
@@ -928,8 +993,9 @@ local function grant(player: Player, credits: number, xp: number, exact: boolean
 	local addCredits = math.max(0, math.floor(credits))
 	local addXp = math.max(0, math.floor(xp))
 	if not exact then
-		addCredits += BaseBuild.bonusAmount(MissionData, addCredits, BaseBuild.levelOf(before.skills, "credits"))
-		addXp += BaseBuild.bonusAmount(MissionData, addXp, BaseBuild.levelOf(before.skills, "xp"))
+		local bonus = if machine then BaseBuild.passiveBonus else BaseBuild.bonusAmount
+		addCredits += bonus(MissionData, addCredits, BaseBuild.levelOf(before.skills, "credits"))
+		addXp += bonus(MissionData, addXp, BaseBuild.levelOf(before.skills, "xp"))
 	end
 	api.updateBase(player, function(base: BaseRecord)
 		base.credits += addCredits
@@ -962,7 +1028,7 @@ local function siloCap(): number
 end
 
 local function setSiloVisual()
-	worldCall("setSilo", silo, siloCap())
+	worldCall("setSilo", silo, siloCap(), BASE.SILO_MAX)
 	local whole = math.floor(silo)
 	if whole ~= siloSent then
 		siloSent = whole
@@ -970,34 +1036,330 @@ local function setSiloVisual()
 	end
 end
 
--- Gives the whole ice in the silo to `player`. quiet = the cargo robot did it (no C.A.R.L. line).
-local function claimSiloFor(player: Player, quiet: boolean): boolean
-	local ice = math.floor(silo)
-	if ice < 1 then
-		if not quiet then
-			reject(player, "empty")
-		end
-		return false
+-- Stage 11 tycoon: a LineEvent to one client (the "+N" pops and cards are client work).
+local function lineEvent(player: Player, event: Types.LineEvent)
+	local events = remotes
+	local remote = events and events.line
+	if remote and player.Parent and present[player] then
+		remote:FireClient(player, event)
 	end
-	silo -= ice
-	local credits = grant(player, ice * BASE.CREDITS_PER_SILO_ICE, ice * BASE.XP_PER_SILO_ICE)
-	setSiloVisual()
-	if not quiet then
-		sayTo(player, "carl.base.silo_claimed", { n = credits })
-		-- Stage 9: quests count silo ice collected by hand (not the cargo robot's trips).
-		for _, listener in siloListeners do
-			task.spawn(function()
-				local ok, err = pcall(listener, player, ice)
-				if not ok then
-					warn(`[SpaceBaseOdyssey] silo listener failed: {err}`)
+end
+
+-- Stage 11 tycoon: who the silo and the cargo robot work for: the world owner while they are here
+-- and loaded (nobody while they are away). A server without an owner (older or test servers): the
+-- loaded player with the lowest UserId.
+local function payee(): Player?
+	local api = progress
+	if api == nil then
+		return nil
+	end
+	local owner = api.worldOwner()
+	if owner then
+		return if present[owner] and isLoaded(owner) then owner else nil
+	end
+	-- Stage 11 review: a world server whose owner has not loaded yet (or just left) pays nobody: a
+	-- guest never takes over the owner's silo (it would load and save the guest's own silo with the
+	-- owner's drills).
+	if api.worldOwnerId() ~= nil then
+		return nil
+	end
+	local best: Player? = nil
+	for player in present do
+		if isLoaded(player) and (best == nil or player.UserId < (best :: Player).UserId) then
+			best = player
+		end
+	end
+	return best
+end
+
+isSiloOwner = function(player: Player): boolean
+	return isLoaded(player) and payee() == player
+end
+
+-- Stage 11: the owner moved or acted within CARGO_IDLE_AFTER_SECONDS (else the robot rests).
+local function isActive(player: Player): boolean
+	local last = tycoon.lastActive[player]
+	return last ~= nil and os.clock() - last <= BASE.CARGO_IDLE_AFTER_SECONDS
+end
+
+-- Moving counts as playing (sampled once per silo tick).
+local function sampleActivity()
+	for player in present do
+		local root = rootOf(player)
+		if root then
+			local position = root.Position
+			local last = tycoon.lastPos[player]
+			if last == nil or (position - last).Magnitude >= MOVE_EPSILON_STUDS then
+				tycoon.lastPos[player] = position
+				if last ~= nil then
+					tycoon.lastActive[player] = os.clock()
+				end
+			end
+		end
+	end
+end
+
+local function linePoint(name: string, fallback: Vector3): Vector3
+	local folder = world and world.productionLine
+	local value = if typeof(folder) == "Instance" then folder:GetAttribute(name) else nil
+	return if typeof(value) == "Vector3" then value else fallback
+end
+
+-- Stage 11: the silo (with the robot's load) goes into the owner's save, at most every
+-- SILO_SAVE_SECONDS while it changes, at least every SILO_SAVE_FORCE_SECONDS (os.time() of the write
+-- is what "while you were away" counts from), and at once after a payout (force).
+local function persistSilo(force: boolean?)
+	local api = progress
+	local owner = payee()
+	if api == nil or owner == nil or tycoon.ownerId ~= owner.UserId then
+		return
+	end
+	local amount = math.min(BASE.SILO_MAX, silo + tycoon.carried)
+	local now = os.clock()
+	if not force then
+		local since = now - tycoon.savedAt
+		if since < SILO_SAVE_SECONDS or (math.abs(amount - tycoon.savedIce) < 0.5 and since < SILO_SAVE_FORCE_SECONDS) then
+			return
+		end
+	end
+	tycoon.savedIce = amount
+	tycoon.savedAt = now
+	local stored = { ice = math.floor(amount * 100 + 0.5) / 100, at = os.time() }
+	api.updateBase(owner, function(saved: BaseRecord)
+		(saved :: any).silo = stored
+	end)
+end
+
+-- Ice on the robot goes back into the silo (the trip could not finish).
+local function returnLoad()
+	if tycoon.carried > 0 then
+		silo = math.min(siloCap(), silo + tycoon.carried)
+		tycoon.carried = 0
+		setSiloVisual()
+	end
+end
+
+-- Stage 11 tycoon: the silo belongs to the world owner. When the owner changes (their slot loaded,
+-- or another player took over), the silo becomes theirs: what their save holds plus what the drills
+-- dug while they were away (BaseBuild.offlineIce), told once.
+local function loadOwnerSilo()
+	local api = progress
+	local owner = payee()
+	local ownerId = if owner then owner.UserId else nil
+	if ownerId == tycoon.ownerId or api == nil then
+		return
+	end
+	tycoon.ownerId = ownerId
+	tycoon.fullSaid = false
+	tycoon.noPowerSaid = false
+	tycoon.deliveries = 0
+	tycoon.carried = 0
+	silo = 0
+	if owner == nil then
+		setSiloVisual()
+		return
+	end
+	local base = baseOf(owner)
+	local now = os.time()
+	local saved = if base then BaseBuild.sanitizeSiloSave(MissionData, (base :: any).silo, now) else nil
+	if saved then
+		local after, gained = BaseBuild.offlineIce(MissionData, effective, saved.ice, now - saved.at)
+		silo = after
+		local whole = math.floor(gained)
+		if whole >= 1 then
+			local cap = siloCap()
+			local event: Types.LineEvent = {
+				kind = "away",
+				ice = whole,
+				seconds = now - saved.at,
+				capped = after >= cap - 1e-6 or now - saved.at > BASE.OFFLINE_MAX_SECONDS,
+				siloIce = math.floor(after),
+				siloMax = cap,
+			}
+			local who: Player = owner
+			-- A moment later, so the line reaches the game and not the loading screen.
+			task.delay(6, function()
+				if present[who] and payee() == who then
+					sayTo(who, "carl.base.away", { n = whole })
+					lineEvent(who, event)
 				end
 			end)
 		end
 	end
+	tycoon.savedIce = silo
+	tycoon.savedAt = os.clock()
+	tycoon.capSeen = siloCap()
+	setSiloVisual()
+end
+
+-- Sends the whole ice in the silo to the base by hand (Stage 11: only the silo's owner, as water).
+local function claimSiloFor(player: Player): boolean
+	local ice = math.floor(silo)
+	if ice < 1 then
+		reject(player, "empty")
+		return false
+	end
+	silo -= ice
+	tycoon.fullSaid = false
+	local credits, xp = grant(player, BaseBuild.productCredits(MissionData, ice, "water"), BaseBuild.productXp(MissionData, ice), nil, true)
+	setSiloVisual()
+	persistSilo(true)
+	sayTo(player, "carl.base.silo_claimed", { n = credits })
+	lineEvent(player, {
+		kind = "claim",
+		credits = credits,
+		xp = xp,
+		ice = ice,
+		product = "water",
+		position = linePoint("SiloCentre", Vector3.zero) + Vector3.new(0, 4, 0),
+		mine = true,
+	})
+	-- Stage 9: quests count silo ice collected by hand (not the cargo robot's trips).
+	for _, listener in siloListeners do
+		task.spawn(function()
+			local ok, err = pcall(listener, player, ice)
+			if not ok then
+				warn(`[SpaceBaseOdyssey] silo listener failed: {err}`)
+			end
+		end)
+	end
 	return true
 end
 
+-- Stage 11 tycoon: the robot reached the hub's supply port: the owner gets the load's credits.
+local function deliverCargo(owner: Player)
+	local ice = tycoon.carried
+	tycoon.carried = 0
+	if ice < 1 then
+		return
+	end
+	local product = tycoon.product
+	local credits, xp = grant(owner, BaseBuild.productCredits(MissionData, ice, product), BaseBuild.productXp(MissionData, ice), nil, true)
+	tycoon.deliveries += 1
+	persistSilo(true)
+	local position = linePoint("Route2", Vector3.zero) + Vector3.new(0, 3, 0)
+	for player in present do
+		lineEvent(player, {
+			kind = "delivery",
+			credits = credits,
+			xp = xp,
+			ice = ice,
+			product = product,
+			position = position,
+			mine = player == owner,
+		})
+	end
+	if tycoon.deliveries <= CARL_DELIVERY_LINES then
+		sayTo(owner, if product == "oxygen" then "carl.base.delivery_oxygen" else "carl.base.delivery_water", { n = credits })
+	end
+end
+
+local function setCargoPhase(phase: string, seconds: number)
+	tycoon.phase = phase
+	tycoon.phaseAt = serverNow()
+	tycoon.phaseSeconds = seconds
+	worldCall("setCargo", phase, tycoon.phaseAt, seconds, tycoon.carried, tycoon.product)
+end
+
+-- Stage 11 tycoon: one step of the cargo robot's trip (every silo tick). dock -> load (takes the
+-- silo's whole ice once it holds CARGO_MIN_LOAD, at most every CARGO_BOT_SECONDS) -> go -> pays on
+-- arrival -> drop -> back -> dock. It rests while the owner is idle and waits while they are away.
+-- The start menu's showcase only loops it for the cameras (nothing is paid).
+local function cargoStep()
+	local times = (world and world.cargoTimes) or { drive = 6, load = 2, drop = 2 }
+	if showcaseOn then
+		if tycoon.phase ~= "loop" then
+			returnLoad()
+			tycoon.product = "oxygen"
+			setCargoPhase("loop", times.drive)
+		end
+		return
+	end
+	if BaseBuild.levelOf(effective, "cargo_bot") < 1 then
+		if tycoon.phase ~= "off" then
+			returnLoad()
+			setCargoPhase("off", 0)
+		end
+		return
+	end
+	local phase = tycoon.phase
+	if phase == "off" or phase == "loop" then
+		returnLoad()
+		setCargoPhase("dock", 0)
+		return
+	end
+	local now = serverNow()
+	local owner = payee()
+	if phase == "dock" or phase == "rest" then
+		if owner == nil then
+			return
+		end
+		if not isActive(owner) then
+			if phase ~= "rest" then
+				setCargoPhase("rest", 0)
+			end
+			return
+		end
+		if now < tycoon.nextDepart or not BaseBuild.cargoReady(MissionData, silo) then
+			if phase == "rest" then
+				setCargoPhase("dock", 0)
+			end
+			return
+		end
+		local load = math.floor(silo)
+		silo -= load
+		tycoon.carried = load
+		local product = BaseBuild.plantProduct(MissionData, effective)
+		tycoon.product = if product == "oxygen" then "oxygen" else "water"
+		tycoon.nextDepart = now + BASE.CARGO_BOT_SECONDS
+		tycoon.fullSaid = false
+		setSiloVisual()
+		setCargoPhase("load", times.load)
+		return
+	end
+	if now < tycoon.phaseAt + tycoon.phaseSeconds then
+		return
+	end
+	if phase == "load" then
+		setCargoPhase("go", times.drive)
+	elseif phase == "go" then
+		if owner then
+			deliverCargo(owner)
+		else
+			returnLoad()
+		end
+		setCargoPhase("drop", times.drop)
+	elseif phase == "drop" then
+		setCargoPhase("back", times.drive)
+	else
+		setCargoPhase("dock", 0)
+	end
+end
+
+-- Stage 11 tycoon: the line's state for the clients and the status lamps (sent when it changes).
+-- The showcase base shows a running line.
+local function publishLine()
+	local levels: Levels = if showcaseOn then applied else effective
+	local perMinute = BaseBuild.icePerMinute(MissionData, levels)
+	local status = if showcaseOn then (if perMinute > 0 then "run" else "off") else BaseBuild.lineStatus(silo, siloCap(), perMinute)
+	local drills = { BaseBuild.levelOf(applied, "drill_1"), BaseBuild.levelOf(applied, "drill_2"), BaseBuild.levelOf(applied, "drill_3") }
+	local state = {
+		icePerMinute = perMinute,
+		status = status,
+		plantLevel = BaseBuild.plantLevel(levels),
+		airStatus = BaseBuild.airStatus(MissionData, levels),
+		product = BaseBuild.plantProduct(MissionData, levels),
+		drills = drills,
+	}
+	local sig = `{perMinute}|{status}|{state.plantLevel}|{state.airStatus}|{state.product}|{drills[1]}{drills[2]}{drills[3]}`
+	if sig ~= tycoon.lineSig then
+		tycoon.lineSig = sig
+		worldCall("setLineState", state)
+	end
+end
+
 local function siloTick(dt: number)
+	sampleActivity()
 	local anyone = false
 	for player in present do
 		if isLoaded(player) then
@@ -1006,6 +1368,8 @@ local function siloTick(dt: number)
 		end
 	end
 	if not anyone then
+		publishLine()
+		cargoStep()
 		return
 	end
 	local perMinute = BaseBuild.icePerMinute(MissionData, effective)
@@ -1013,31 +1377,24 @@ local function siloTick(dt: number)
 	if perMinute > 0 and silo < cap then
 		silo = math.min(cap, silo + perMinute / 60 * dt)
 		setSiloVisual()
-	end
-
-	cargoTimer += dt
-	if cargoTimer < BASE.CARGO_BOT_SECONDS then
-		return
-	end
-	cargoTimer = 0
-	-- Stage 10 fix: the robot belongs to the world (the owner's base), so it takes turns between
-	-- everyone playing in it.
-	local owners: { Player } = {}
-	if BaseBuild.levelOf(effective, "cargo_bot") >= 1 then
-		for player in present do
-			if isLoaded(player) then
-				table.insert(owners, player)
-			end
+		local owner = payee()
+		if silo >= cap and owner and not tycoon.fullSaid then
+			-- The belt stops: tell the owner once per fill (the lamps turn red).
+			tycoon.fullSaid = true
+			sayTo(owner, "carl.base.silo_full")
+			lineEvent(owner, { kind = "full", siloIce = math.floor(silo), siloMax = cap })
 		end
 	end
-	if #owners == 0 or silo < 1 then
-		return
+	if not tycoon.noPowerSaid and BaseBuild.airStatus(MissionData, effective) == "nopower" then
+		local owner = payee()
+		if owner then
+			tycoon.noPowerSaid = true
+			sayTo(owner, "carl.base.air_no_power")
+		end
 	end
-	table.sort(owners, function(a: Player, b: Player): boolean
-		return a.UserId < b.UserId
-	end)
-	cargoTurn = cargoTurn % #owners + 1
-	claimSiloFor(owners[cargoTurn], true)
+	publishLine()
+	cargoStep()
+	persistSilo(false)
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -1583,7 +1940,12 @@ local function doClaimSilo(player: Player, trusted: boolean)
 		reject(player, "far")
 		return
 	end
-	claimSiloFor(player, false)
+	-- Stage 11 audit fix: the silo is the world owner's (a guest cannot empty a friend's silo).
+	if not isSiloOwner(player) then
+		reject(player, "not_your_silo")
+		return
+	end
+	claimSiloFor(player)
 end
 
 local function doResetBase(player: Player)
@@ -1600,6 +1962,14 @@ local function doResetBase(player: Player)
 		end
 	end
 	pendingOwner[player.UserId] = nil
+	tycoon.pendingRefund[player.UserId] = nil
+	if payee() == player then
+		-- Stage 11: the owner's silo goes with their base.
+		silo = 0
+		tycoon.carried = 0
+		setSiloVisual()
+		persistSilo(true)
+	end
 	foodReady[player] = nil
 	if carrying[player] then
 		setCarrying(player, false)
@@ -1722,8 +2092,19 @@ local function onLoaded(player: Player)
 			job.payer = player
 		end
 	end
+	-- Stage 11 audit fix: builds this player paid for that were cancelled while they were away.
+	local refund = tycoon.pendingRefund[player.UserId]
+	if refund and refund > 0 then
+		tycoon.pendingRefund[player.UserId] = nil
+		api.updateBase(player, function(saved: BaseRecord)
+			saved.credits += refund
+		end)
+		sayTo(player, "carl.base.build_cancelled")
+	end
+	tycoon.lastActive[player] = os.clock()
 	applySkillEffects(player)
 	recompute(false)
+	loadOwnerSilo() -- Stage 11: the world owner's saved silo (and the drills' work while away)
 	refreshTools(player)
 	fireEquipped(player)
 	fireGear(player)
@@ -1808,6 +2189,8 @@ local function removePlayer(player: Player)
 	carrying[player] = nil
 	foodReady[player] = nil
 	toolsSent[player] = nil
+	tycoon.lastActive[player] = nil
+	tycoon.lastPos[player] = nil
 	for _, job in jobs do
 		if job.payer == player then
 			job.payer = nil -- the job stays for this server session
@@ -1979,6 +2362,26 @@ function BaseService.start(worldRefs: any, remoteEvents: Remotes, progressServic
 	progress = progressService
 	crew = crewService
 
+	-- Stage 11 tycoon: the ice line's event (Types.LineEvent), made here so Main.server needs no change.
+	if remoteEvents.line == nil then
+		local folderName = Types.Remotes.FOLDER
+		local remoteFolder = ReplicatedStorage:FindFirstChild(folderName)
+		if remoteFolder == nil then
+			remoteFolder = Instance.new("Folder")
+			remoteFolder.Name = folderName
+			remoteFolder.Parent = ReplicatedStorage
+		end
+		local existing = remoteFolder:FindFirstChild(Types.Remotes.LINE)
+		if existing and existing:IsA("RemoteEvent") then
+			remoteEvents.line = existing
+		else
+			local event = Instance.new("RemoteEvent")
+			event.Name = Types.Remotes.LINE
+			event.Parent = remoteFolder
+			remoteEvents.line = event
+		end
+	end
+
 	-- Start from an empty Moon (only the lander stands; every structure is a hologram).
 	for _, def in BASE.BUILDS do
 		applied[def.id] = 0
@@ -2007,12 +2410,16 @@ function BaseService.start(worldRefs: any, remoteEvents: Remotes, progressServic
 						saved.credits += job.cost
 					end)
 					sayTo(payer, "carl.base.build_cancelled")
+				elseif job.cost > 0 then
+					-- Stage 11 audit fix: refunded when the payer loads in this server again.
+					tycoon.pendingRefund[job.payerId] = (tycoon.pendingRefund[job.payerId] or 0) + job.cost
 				end
 				worldCall("setBuildLevel", id, applied[id] or 0, false) -- drop the step view
 			end
 		end
 		lastOwnerId = ownerId
 		recompute(false)
+		loadOwnerSilo() -- Stage 11: a new owner brings their own silo
 		refreshPrompts()
 		refreshToolsAll()
 		scheduleSendAll()
@@ -2048,6 +2455,7 @@ function BaseService.handleAction(player: Player?, action: any, trusted: boolean
 	if player == nil or not started or not present[player] then
 		return true
 	end
+	tycoon.lastActive[player] = os.clock() -- Stage 11: any action counts as playing
 	if not trusted and rateLimited(player) then
 		return true
 	end
@@ -2271,6 +2679,17 @@ end
 -- the cargo robot's trips do not count).
 function BaseService.onSiloClaimed(listener: (player: Player, ice: number) -> ())
 	table.insert(siloListeners, listener)
+end
+
+-- Stage 11 tycoon: true when `player` may send the silo's ice and gets the cargo robot's credits:
+-- the world owner (any loaded player while the world has no owner, for older or test servers).
+function BaseService.isSiloOwner(player: Player): boolean
+	return isSiloOwner(player)
+end
+
+-- Stage 11 tycoon: the cargo robot's trip right now (for tests in Studio and other services).
+function BaseService.cargoState(): { phase: string, carried: number, product: string, silo: number }
+	return { phase = tycoon.phase, carried = tycoon.carried, product = tycoon.product, silo = silo }
 end
 
 -- Stage 9: called with (owner, build id, level) when a build level is finished (owner = the player

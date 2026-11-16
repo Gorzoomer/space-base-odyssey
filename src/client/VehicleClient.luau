@@ -24,6 +24,7 @@ local Icons = require(Shared:WaitForChild("Icons"))
 local Client = script.Parent
 local Store = require(Client:WaitForChild("Store"))
 local Ui = require(Client:WaitForChild("Ui"))
+local Audio = require(Client:WaitForChild("Audio")) -- Stage 11 audio
 
 -- Feel and layout (not gameplay numbers).
 local CHASE_MIN_ZOOM = 16
@@ -291,6 +292,7 @@ function VehicleClient.start(root: Instance?)
 
 	local function leave()
 		ride = nil
+		Audio.loop("buggy_engine_loop", false) -- Stage 11 audio
 		restoreCamera()
 		if panel then
 			panel.Visible = false
@@ -307,6 +309,7 @@ function VehicleClient.start(root: Instance?)
 			return
 		end
 		ride = newRide(model, seat)
+		Audio.play("buggy_horn") -- Stage 11 audio: a friendly beep over the radio
 		if savedMinZoom == nil then
 			savedMinZoom = player.CameraMinZoomDistance
 			player.CameraMinZoomDistance = math.min(math.max(player.CameraMinZoomDistance, CHASE_MIN_ZOOM), player.CameraMaxZoomDistance)
@@ -375,6 +378,10 @@ function VehicleClient.start(root: Instance?)
 			drive(current)
 		end
 		renderSpeed()
+		do -- Stage 11 audio: the electric motors hum higher with speed
+			local fraction = math.clamp(math.abs(forwardSpeed(current)) / current.maxSpeed, 0, 1)
+			Audio.loop("buggy_engine_loop", true, { pitch = 0.8 + 0.5 * fraction, volume = 0.5 + 0.5 * fraction })
+		end
 		if numberAttribute(current.model, "SBO_Cargo", 0) ~= shownCargo then
 			renderText()
 		end

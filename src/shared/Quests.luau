@@ -9,6 +9,10 @@
 -- Texts are localization keys built from the ids:
 --   "quest.<id>.title" and "quest.<id>.step<i>" (i = 1, 2, ... in step order; every step text gets the
 --   param {n} = Quests.stepTarget(step)), plus "quest.main_done" once every main quest is done.
+--   Stage 11: COUNTED step texts never contain {n} (the tracker adds "0/4" itself: "Bring ice home
+--   0/4"); build and tool_upgrade texts keep {n} = the level ("Upgrade the antenna to level 2") and
+--   show no fraction. Main quests also have "quest.<id>.praise": C.A.R.L.'s line when the quest is
+--   done, naming the strategy that worked ("More panels made more power"), not the kid.
 --
 -- Step types (only these, so the server can track them):
 --   build        { id, level }  the effective build level stands (any player in the server built it)
@@ -25,9 +29,12 @@
 --   scan         { count }      exploration sites the player has scanned (lifetime total)
 --   skill        { count }      skill levels the player has learned (lifetime total)
 --   collectible  { count }      hidden collectibles the player owns (lifetime total)
--- Counting rule: ice, clean, silo, meteor, eat, vehicle and visit count what happens WHILE the quest
+--   crate        { count }      Stage 11: parts boxes the player carried to a build pad
+-- Counting rule: ice, silo, meteor, eat, crate, vehicle and visit count what happens WHILE the quest
 -- is active (a main quest is active when it is the next one; a side quest once it is open). scan,
 -- skill and collectible are finite, so they use the player's lifetime totals (Quests.isLifetime).
+-- Stage 11: clean is a lifetime total too (dusty panels ever cleaned), so a kid who cleaned a panel
+-- in the Base chores mission before "Talk to Earth" opened is never stuck waiting for dust.
 -- Every step of the active quest shows at once; the quest is done when every step is done, then
 -- its reward (credits and XP) is paid once.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
@@ -47,6 +54,7 @@ export type StepType =
 	| "visit"
 	| "eat"
 	| "collectible"
+	| "crate"
 
 export type Place = "lab" | "greenhouse" | "crater" | "garage"
 
@@ -95,6 +103,7 @@ local STEP_TYPES: { StepType } = {
 	"visit",
 	"eat",
 	"collectible",
+	"crate",
 }
 
 -- Steps that carry a count (vehicle counts drives, always 1).
@@ -107,6 +116,7 @@ local COUNT_TYPES: { [string]: boolean } = {
 	skill = true,
 	eat = true,
 	collectible = true,
+	crate = true,
 }
 
 -- Counted from the player's lifetime totals (finite things), not from when the quest opened.
@@ -114,6 +124,7 @@ local LIFETIME_TYPES: { [string]: boolean } = {
 	scan = true,
 	skill = true,
 	collectible = true,
+	clean = true, -- Stage 11
 }
 
 local PLACES: { Place } = { "lab", "greenhouse", "crater", "garage" }
@@ -154,6 +165,10 @@ end
 -- base level allows (tests/base walks the line with the habitat tree).
 local MAIN: { Quest } = {
 	-- [1] Landing camp: survive one day.
+	-- Stage 11: a first reward within about a minute of landing (start the free habitat at its pad,
+	-- take a parts box at the lander, carry it back). Saves from before Stage 11 skip it
+	-- (QuestService.sanitizeRecord, record version 2).
+	{ id = "m00_landing", kind = "main", order = 0, icon = "crate", steps = { count("crate", 1) }, reward = reward(10, 10) },
 	{ id = "m01_home", kind = "main", order = 0, icon = "home", steps = { build("habitat", 1), build("solar", 1), mission("t1_steps") }, reward = reward(10, 20) },
 	{ id = "m02_food", kind = "main", order = 0, icon = "plant", steps = { build("greenhouse", 1), mission("t2_power"), count("eat", 1) }, reward = reward(10, 20) },
 	{ id = "m03_earth", kind = "main", order = 0, icon = "antenna", steps = { build("antenna", 1), mission("t3_tasks"), count("clean", 1) }, reward = reward(10, 20) },
@@ -184,7 +199,9 @@ local MAIN: { Quest } = {
 -- SIDE quests: optional, open after a main quest (`after`), done in any order.
 local SIDE: { Quest } = {
 	{ id = "s_treasure", kind = "side", order = 0, icon = "gift", steps = { count("collectible", 4) }, reward = reward(40, 60), after = "m04_storm" },
-	{ id = "s_ice_master", kind = "side", order = 0, icon = "ice", steps = { count("ice", 40), count("silo", 10) }, reward = reward(40, 60), after = "m09_drills" },
+	-- Stage 11: was 10 silo claims, which fought the cargo robot (it empties the silo every minute
+	-- after m13). Now it teaches that a bigger drill digs more ice by itself.
+	{ id = "s_ice_master", kind = "side", order = 0, icon = "ice", steps = { count("ice", 40), build("drill_1", 2) }, reward = reward(40, 60), after = "m13_mining" },
 	{ id = "s_scientist", kind = "side", order = 0, icon = "telescope", steps = { count("scan", 5) }, reward = reward(40, 60), after = "m11_explore" },
 	{ id = "s_farmer", kind = "side", order = 0, icon = "food", steps = { count("eat", 10) }, reward = reward(25, 40), after = "m12_garden" },
 	{ id = "s_free_week", kind = "side", order = 0, icon = "planet", steps = { mission("free_play") }, reward = reward(60, 100), after = "m15_repair" },
@@ -305,7 +322,8 @@ function Quests.active(done: { [string]: boolean }): { Quest }
 	return list
 end
 
--- The number a step waits for: its count, its level, or 1. Also the {n} param of the step text.
+-- The number a step waits for: its count, its level, or 1. Also the {n} param of the step text
+-- (only build and tool_upgrade texts show it; counted texts show the "have/need" fraction instead).
 function Quests.stepTarget(step: Step): number
 	if step.count ~= nil then
 		return step.count
@@ -348,6 +366,60 @@ end
 function Quests.stepDone(step: Step, view: View): boolean
 	local have, need = Quests.stepProgress(step, view)
 	return have >= need
+end
+
+-- Stage 11: saved quest records carry a version (QuestService). Version 2 added m00_landing at the
+-- front of MAIN, so an older record's index (a position in the old line) moves one along: that kid
+-- landed long ago and skips the new first quest, and its progress array still fits its quest.
+Quests.RECORD_VERSION = 2
+
+function Quests.migrateIndex(index: number, version: any): number
+	local result = math.floor(index)
+	if version ~= Quests.RECORD_VERSION then
+		result += 1
+	end
+	return math.clamp(result, 1, #MAIN + 1)
+end
+
+-- Stage 11: true when the tracker shows a "have/need" fraction for the step (counted steps with a
+-- target above 1). Build and tool levels never show one: "level 2  1/2" reads as half done.
+function Quests.showsFraction(step: Step): boolean
+	return COUNT_TYPES[step.type] == true and Quests.stepTarget(step) > 1
+end
+
+-- Stage 11: C.A.R.L.'s line when main quest `id` is done (nil for side quests: the generic line).
+function Quests.praiseKey(id: string): string?
+	local quest = byId[id]
+	return if quest and quest.kind == "main" then "quest." .. id .. ".praise" else nil
+end
+
+-- Stage 11: "Hidden treasures" hints. While s_treasure is open, C.A.R.L. gives one riddle-like hint
+-- after a while with no new find (QuestService, MissionData.QUESTS.TREASURE_HINT_SECONDS). Hints go
+-- through the secrets not found yet, nearest first; the first round is vague, later rounds clearer.
+-- Keys: "carl.treasure.<id>.1" and "carl.treasure.<id>.2". Never a marker: it stays a discovery.
+local TREASURE_ORDER: { string } = { "mars_potato", "mini_earth", "cheese", "laika" }
+Quests.TREASURE_QUEST = "s_treasure"
+Quests.TREASURE_ORDER = table.freeze(TREASURE_ORDER)
+
+function Quests.treasureHintKey(id: string, level: number): string
+	return "carl.treasure." .. id .. "." .. tostring(math.clamp(level, 1, 2))
+end
+
+-- The hint to give after `given` hints so far, for the collectibles `owned` (id -> true); nil once
+-- every secret is found.
+function Quests.treasureHint(owned: { [string]: boolean }, given: number): string?
+	local missing: { string } = {}
+	for _, id in TREASURE_ORDER do
+		if owned[id] ~= true then
+			table.insert(missing, id)
+		end
+	end
+	if #missing == 0 then
+		return nil
+	end
+	local round = math.max(0, math.floor(given))
+	local level = math.min(2, round // #missing + 1)
+	return Quests.treasureHintKey(missing[round % #missing + 1], level)
 end
 
 function Quests.questDone(quest: Quest, view: View): boolean

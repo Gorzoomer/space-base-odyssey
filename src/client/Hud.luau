@@ -74,6 +74,7 @@ local Types = require(Shared:WaitForChild("Types"))
 local Meters = require(script.Parent.Meters)
 local Objectives = require(script.Parent.Objectives)
 local Store = require(script.Parent.Store)
+local Audio = require(script.Parent.Audio) -- Stage 11 audio
 local Ui = require(script.Parent.Ui)
 
 local Hud = {}
@@ -532,6 +533,7 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	local walletTop = WALLET_TOP
 	local shownCredits: number? = nil
 	local shownLevel: number? = nil
+	local shownXp: number? = nil -- Stage 11 audio: the XP sound
 	local shownBaseLevel: number? = nil
 	local player = Players.LocalPlayer
 
@@ -676,15 +678,25 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		end
 		local credits = math.floor(state.credits)
 		creditsText.Text = tostring(credits)
-		if shownCredits ~= nil and credits > (shownCredits :: number) and wallet.Visible then
+		local creditsRose = shownCredits ~= nil and credits > (shownCredits :: number) and wallet.Visible
+		if creditsRose then
 			popCredits(credits - (shownCredits :: number))
+			Audio.play(if credits - (shownCredits :: number) >= 50 then "coin_burst" else "coin_single") -- Stage 11 audio
 		end
 		shownCredits = credits
 		levelPill.Text = Store.t("ui.level", { n = state.level })
-		if shownLevel ~= nil and state.level > (shownLevel :: number) and wallet.Visible then
+		local levelRose = shownLevel ~= nil and state.level > (shownLevel :: number) and wallet.Visible
+		if levelRose then
 			popLevel()
+			Audio.play("level_up") -- Stage 11 audio
+			Audio.sting("sting_level_up") -- Stage 11 audio
 		end
 		shownLevel = state.level
+		-- Stage 11 audio: XP alone (no coins, no level up) gets its own small sound.
+		if shownXp ~= nil and state.xp > (shownXp :: number) and wallet.Visible and not creditsRose and not levelRose then
+			Audio.play("xp_gain")
+		end
+		shownXp = state.xp
 		-- Stage 9: the base level is the habitat's level.
 		local baseLevel = BaseBuild.habitatLevel(state.builds)
 		baseLevelText.Text = Store.t("ui.base_level", { n = baseLevel })

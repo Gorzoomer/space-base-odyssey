@@ -94,9 +94,29 @@
 -- missions); what they build goes into the OWNER's save (BaseService), so a guest's own builds never
 -- change in a friend's world. worldOwner / worldOwnerId / isGuest / onOwnerChanged tell BaseService
 -- who owns the world. Player attribute SBO_Guest; workspace attribute SBO_WorldOwner (UserId).
+-- Stage 11 "safer server" (rules in src/shared/ServerGuard.luau, tests/worlds):
+--   * Session lock. A slot loads only after this server takes its lock: an UpdateAsync writes
+--     lock = { job = this server, token = this visit, at = os.time() } into the slot record. A fresh
+--     lock of another visit (a server the player just left, still saving) makes the load wait (every
+--     LOCK_RETRY_SECONDS, at most LOCK_WAIT_SECONDS), then the lock is stolen; a lock older than
+--     LOCK_TIMEOUT_SECONDS is stale and taken at once. Every save checks the lock first and refreshes
+--     `at` (an idle player's slot is re-saved every LOCK_REFRESH_SECONDS or so); the last save on
+--     leave (or BindToClose) releases it. A save from a visit that lost its lock is refused: saving
+--     stops for that visit (and a player still here is asked to join again), so a quick server hop
+--     can never duplicate or overwrite credits.
+--   * Continue never wipes. Only an explicit New game (ChooseSlot fresh = true) replaces a slot. A
+--     slot the meta lists as unused is read like any other: an empty record starts a new explorer, a
+--     record with data is loaded and the meta summary repaired.
+--   * Settings. Each player's settings (Types.PlayerSettings: language, musicVolume, effectsVolume,
+--     funFacts, guidance) live in the meta record (settings, settingsAt) and come back in
+--     SlotsMeta.settings and as player attributes (Language, SBO_MusicVolume, SBO_EffectsVolume,
+--     SBO_FunFacts, SBO_Guidance). Action SaveSettings (and SetLanguage) changes them, at most
+--     SETTINGS_PER_SECOND a second. A trip to a world server carries them in TeleportData.prefs, so
+--     the world has them even before the lobby's meta write lands.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local DataStoreService = game:GetService("DataStoreService")
+local HttpService = game:GetService("HttpService")
 local MemoryStoreService = game:GetService("MemoryStoreService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -111,6 +131,7 @@ local Missions = require(Shared:WaitForChild("Missions"))
 local Types = require(Shared:WaitForChild("Types"))
 local Worlds = require(Shared:WaitForChild("Worlds"))
 local Achievements = require(Shared:WaitForChild("Achievements"))
+local ServerGuard = require(Shared:WaitForChild("ServerGuard")) -- Stage 11
 
 local Codes = require(script.Parent:WaitForChild("Codes"))
 
@@ -170,6 +191,9 @@ export type BaseRecord = {
 	-- Stage 10: learning achievements (src/shared/Achievements.luau Record). A save without the field
 	-- loads as nothing unlocked; unlocks and counters never go down (Achievements.mergeRecord).
 	achievements: Achievements.Record,
+	-- Stage 11 tycoon: the ice in this player's silo when they last played as the world owner, and
+	-- os.time() of that write (BaseService adds what the drills dug while they were away). nil = none.
+	silo: { ice: number, at: number }?,
 }
 
 -- What the start menu shows about this player's slots (meta key), plus account-wide cosmetics.
@@ -177,6 +201,9 @@ type Meta = {
 	slots: { SlotSummary },
 	last: number?,
 	cosmetics: { [string]: boolean },
+	-- Stage 11: the player's settings and os.time() of their last change (0 = never saved).
+	settings: ServerGuard.Settings,
+	settingsAt: number,
 }
 
 type SlotState = "menu" | "teleporting" | "loading" | "loaded"
@@ -233,6 +260,18 @@ type Record = {
 	lastWorldsRequestAt: number, -- ListFriendWorlds rate limit
 	lastJoinAt: number, -- JoinWorld rate limit
 	connections: { RBXScriptConnection },
+	-- Stage 11: the session lock of the loaded slot (see the header).
+	lockToken: string, -- this visit's token (new for every load)
+	lockHeld: boolean, -- this visit took the slot's lock
+	lockLost: boolean, -- another visit took it: saving stopped
+	lockAt: number, -- os.time() of the last write that refreshed the lock
+	savingNow: number, -- slot writes running right now (a lock release waits for them)
+	quietSave: boolean, -- the next write only refreshes the lock: no save notice
+	-- Stage 11: settings (the newest of this visit's changes, the meta's and the trip's).
+	settings: ServerGuard.Settings,
+	settingsAt: number, -- os.time() of the last change known here (0 = defaults)
+	settingsTimes: { number }, -- SaveSettings rate limit (os.clock() of recent requests)
+	arrivalPrefs: { settings: ServerGuard.Settings, at: number }?, -- world servers: TeleportData.prefs
 }
 
 -- Where records are read and written: a DataStore, or memory for this server session.
@@ -288,6 +327,15 @@ local MAX_DATA_DEPTH = 4 -- base.quest nesting
 local MAX_DATA_KEYS = 128 -- entries per table inside base.quest
 local MAX_DATA_STRING = 64
 local MAX_DATA_INDEX = 9999
+-- Stage 11: session lock and settings (technical settings, not gameplay numbers).
+local LOCK_TIMEOUT_SECONDS = 180 -- a lock not refreshed for this long is stale (its server is gone)
+local LOCK_REFRESH_SECONDS = 45 -- an idle loaded slot is re-saved about this often (keeps its lock fresh)
+local LOCK_WAIT_SECONDS = 20 -- a fresh lock of another visit: wait this long for its release, then steal it
+local LOCK_RETRY_SECONDS = 2
+local RELEASE_WAIT_SECONDS = 10 -- a lock release waits at most this for a slot write still running
+local SETTINGS_PER_SECOND = 5 -- SaveSettings / SetLanguage requests per player
+-- This server's id in session locks (game.JobId is empty in Studio).
+local SERVER_ID: string = if game.JobId ~= "" then string.sub(game.JobId, 1, 64) else "studio-" .. HttpService:GenerateGUID(false)
 
 local ProgressService = {}
 
@@ -794,6 +842,7 @@ local function sanitizeBase(value: any, habitatTree: boolean?): BaseRecord
 		gearOn = gearOn,
 		quest = sanitizeQuest(value.quest),
 		achievements = Achievements.sanitizeRecord(value.achievements),
+		silo = BaseBuild.sanitizeSiloSave(MissionData, value.silo, os.time()), -- Stage 11 tycoon
 	}
 end
 
@@ -819,6 +868,7 @@ local function cloneBase(base: BaseRecord): BaseRecord
 		gearOn = table.clone(base.gearOn),
 		quest = sanitizeQuest(base.quest),
 		achievements = Achievements.sanitizeRecord(base.achievements),
+		silo = if base.silo then table.clone(base.silo) else nil, -- Stage 11 tycoon
 	}
 end
 
@@ -844,6 +894,10 @@ local function mergeBase(stored: any, current: BaseRecord, reset: boolean, habit
 		end
 		merged.quest = mergeQuest(old.quest, merged.quest)
 		merged.achievements = Achievements.mergeRecord(old.achievements, merged.achievements)
+		-- Stage 11 tycoon: a silo this server never wrote (a guest in a friend's world) stays as stored.
+		if merged.silo == nil then
+			merged.silo = old.silo
+		end
 	end
 	return merged
 end
@@ -931,7 +985,7 @@ local function emptyMeta(): Meta
 	for i = 1, SLOT_COUNT do
 		slots[i] = emptySummary()
 	end
-	return { slots = slots, last = nil, cosmetics = {} }
+	return { slots = slots, last = nil, cosmetics = {}, settings = ServerGuard.defaultSettings(), settingsAt = 0 }
 end
 
 local function sanitizeSummary(value: any): SlotSummary
@@ -963,6 +1017,11 @@ local function sanitizeMeta(value: any): Meta
 	end
 	meta.last = if isSlot(value.last) then value.last else nil
 	meta.cosmetics = sanitizeSet(value.cosmetics, Codes.isCosmetic)
+	-- Stage 11: settings (an older meta has none: defaults, never saved).
+	meta.settings = ServerGuard.sanitizeSettings(value.settings)
+	meta.settingsAt = if type(value.settingsAt) == "number" and value.settingsAt == value.settingsAt
+		then math.clamp(math.floor(value.settingsAt), 0, MAX_STORED_TIME)
+		else 0
 	return meta
 end
 
@@ -971,14 +1030,25 @@ local function cloneMeta(meta: Meta): Meta
 	for i = 1, SLOT_COUNT do
 		slots[i] = table.clone(meta.slots[i])
 	end
-	return { slots = slots, last = meta.last, cosmetics = table.clone(meta.cosmetics) }
+	return {
+		slots = slots,
+		last = meta.last,
+		cosmetics = table.clone(meta.cosmetics),
+		settings = table.clone(meta.settings),
+		settingsAt = meta.settingsAt,
+	}
 end
 
 -- Another server may have saved another slot meanwhile: per slot, the newest summary wins.
+-- Stage 11: the newest settings win too.
 local function mergeMeta(old: Meta, ours: Meta): Meta
 	local result = cloneMeta(ours)
 	result.last = ours.last or old.last
 	union(result.cosmetics, old.cosmetics)
+	if old.settingsAt > ours.settingsAt then
+		result.settings = table.clone(old.settings)
+		result.settingsAt = old.settingsAt
+	end
 	for i = 1, SLOT_COUNT do
 		if old.slots[i].savedAt > ours.slots[i].savedAt then
 			result.slots[i] = table.clone(old.slots[i])
@@ -1013,19 +1083,79 @@ local function sendSlots(player: Player, record: Record)
 		last = record.meta.last,
 		current = record.slot,
 		offline = if record.metaReady and not record.metaCanSave then true else nil,
+		settings = table.clone(record.settings), -- Stage 11
 	}
 	event:FireClient(player, view)
 end
 
 ----------------------------------------------------------------------------------------------------
+-- Stage 11: settings (see the header)
+
+local SETTING_ATTRIBUTES: { [string]: string } = {
+	musicVolume = "SBO_MusicVolume",
+	effectsVolume = "SBO_EffectsVolume",
+	funFacts = "SBO_FunFacts",
+	guidance = "SBO_Guidance",
+}
+
+-- Mirrors the settings as player attributes (the client Store reads the same names). The language
+-- attribute is only set once the player chose one.
+local function publishSettings(player: Player, settings: ServerGuard.Settings)
+	if player.Parent == nil then
+		return
+	end
+	for name, attribute in SETTING_ATTRIBUTES do
+		local value = (settings :: any)[name]
+		if player:GetAttribute(attribute) ~= value then
+			player:SetAttribute(attribute, value)
+		end
+	end
+	if settings.language ~= nil and player:GetAttribute("Language") ~= settings.language then
+		player:SetAttribute("Language", settings.language)
+	end
+end
+
+-- Uses `settings` when they are newer than what this visit has (the meta read, or a trip's prefs).
+local function adoptSettings(record: Record, settings: ServerGuard.Settings, at: number): boolean
+	if at <= record.settingsAt then
+		return false
+	end
+	record.settings = table.clone(settings)
+	record.settingsAt = at
+	return true
+end
+
+----------------------------------------------------------------------------------------------------
 -- Saving
 
--- Saves the chosen slot. `closing` = the server is closing (or the player left and the caller already
--- waited): no waiting for write budget here.
-local function save(player: Player, record: Record, closing: boolean?)
-	local slot = record.slot
-	if slot == nil or record.state ~= "loaded" or not record.canSave then
+-- Stage 11: this visit lost its slot's lock (another server took it). Saving stops; a player still
+-- here is asked to join again, so they play on the newest save.
+local function onLockLost(player: Player, record: Record)
+	if record.lockLost then
 		return
+	end
+	record.lockLost = true
+	record.lockHeld = false
+	record.canSave = false
+	record.dirty = false
+	warn(`[SpaceBaseOdyssey] {player.Name}'s slot {record.slot} is locked by another server; this server stops saving it`)
+	if records[player] == record and player.Parent ~= nil then
+		local kickText = `{Localization.t("ui.world_kick", nil, "en")} / {Localization.t("ui.world_kick", nil, "es")}`
+		task.defer(function()
+			if player.Parent ~= nil then
+				player:Kick(kickText)
+			end
+		end)
+	end
+end
+
+-- Saves the chosen slot. `closing` = the server is closing (or the player left and the caller already
+-- waited): no waiting for write budget here. Stage 11: the write only happens while this visit holds
+-- the slot's lock (it refreshes the lock's time); `release` = the last save, it frees the lock.
+local function save(player: Player, record: Record, closing: boolean?, release: boolean?)
+	local slot = record.slot
+	if slot == nil or record.state ~= "loaded" or not record.canSave or record.lockLost or not record.lockHeld then
+		return -- Stage 11: no lock (lost, or freed by the last save): nothing more is written
 	end
 	if not closing and not waitForBudget(BUDGET_WAIT_SECONDS) then
 		return -- still dirty: the autosave check schedules it again
@@ -1034,6 +1164,8 @@ local function save(player: Player, record: Record, closing: boolean?)
 	-- A SaveNow that arrives while this write runs waits for the next write (it may hold newer data).
 	local manual = record.manualPending
 	record.manualPending = false
+	local quiet = record.quietSave and not manual
+	record.quietSave = false
 	savesInFlight += 1
 	local completed = table.clone(record.completed)
 	local collectibles = table.clone(record.collectibles)
@@ -1045,7 +1177,20 @@ local function save(player: Player, record: Record, closing: boolean?)
 	-- Stage 10: also stamped when the write starts, so a SaveNow during a running write waits
 	-- MANUAL_SAVE_SPACING from this write instead of writing the same key again at once.
 	record.lastSaveAt = os.clock()
+	local token = record.lockToken
+	local stamp = os.time()
+	local lost = false
+	record.savingNow += 1
+	-- Stage 11 review: a regular save of a player still here may take a missing lock back (an older
+	-- server version saved the slot without one); a final save never does (ServerGuard.canWrite).
+	local allowFree = not release and records[player] == record and player.Parent ~= nil
 	local ok, err = pcall(source.update, slotKey(player, slot), function(old: any): any
+		-- Stage 11: never write a slot whose lock another visit holds now.
+		if not ServerGuard.canWrite(if type(old) == "table" then old.lock else nil, SERVER_ID, token, allowFree) then
+			lost = true
+			return nil -- cancels the write
+		end
+		lost = false
 		local stored = if replaceAll or type(old) ~= "table" then nil else old
 		local merged = {
 			v = DATA_VERSION,
@@ -1055,6 +1200,7 @@ local function save(player: Player, record: Record, closing: boolean?)
 			base = storableBase(
 				mergeBase(stored and stored.base, base, reset or replaceAll, versionOf(stored) < HABITAT_TREE_VERSION)
 			),
+			lock = if release then nil else { job = SERVER_ID, token = token, at = stamp },
 		}
 		union(merged.completed, completed)
 		union(merged.collectibles, collectibles)
@@ -1062,7 +1208,21 @@ local function save(player: Player, record: Record, closing: boolean?)
 		return merged
 	end)
 	savesInFlight -= 1
+	record.savingNow -= 1
 	record.lastSaveAt = os.clock()
+	if ok and lost then
+		onLockLost(player, record)
+		if manual then
+			sendSaved(player, record, false, source.persistent, true)
+		end
+		return
+	end
+	if ok then
+		record.lockAt = stamp
+		if release then
+			record.lockHeld = false
+		end
+	end
 	if not ok then
 		record.dirty = true
 		warn(`[SpaceBaseOdyssey] could not save slot {slot} for {player.Name}: {err}`)
@@ -1077,9 +1237,51 @@ local function save(player: Player, record: Record, closing: boolean?)
 	if replaceAll then
 		record.replaceAll = false
 	end
+	if quiet then
+		return -- a lock refresh: the start menu summary and the save pill stay as they are
+	end
 	record.meta.slots[slot] = summaryOf(record.base, record.mode or "solo")
 	record.metaDirty = true
 	sendSaved(player, record, true, source.persistent, manual)
+end
+
+-- Stage 11: the player left (or the server closes) with nothing left to save: free the slot's lock so
+-- their next server loads it at once. Only this visit's own lock is removed.
+local function releaseLock(player: Player, record: Record)
+	-- A slot write still running must land first (it needs the lock; it may hold the newest data).
+	local deadline = os.clock() + RELEASE_WAIT_SECONDS
+	while record.savingNow > 0 and os.clock() < deadline do
+		task.wait(0.1)
+	end
+	local slot = record.slot
+	if slot == nil or not record.lockHeld or record.lockLost or record.savingNow > 0 then
+		return
+	end
+	record.lockHeld = false
+	local token = record.lockToken
+	savesInFlight += 1
+	local ok, err = pcall(backend.update, slotKey(player, slot), function(old: any): any
+		if type(old) ~= "table" or not ServerGuard.canWrite(old.lock, SERVER_ID, token) then
+			return nil
+		end
+		old.lock = nil
+		return old
+	end)
+	savesInFlight -= 1
+	if not ok then
+		warn(`[SpaceBaseOdyssey] could not release the lock of slot {slot} for {player.Name}: {err}`)
+	end
+end
+
+-- Stage 11: the last write for a record (leaving, or the server closing): the slot when it changed
+-- (that write frees the lock), else only the lock. A failed write keeps the lock: the next server
+-- waits LOCK_WAIT_SECONDS for it, then takes it.
+local function finalSave(player: Player, record: Record)
+	if record.dirty and record.slot ~= nil and record.state == "loaded" and record.canSave and not record.lockLost then
+		save(player, record, true, true)
+	elseif record.lockHeld then
+		releaseLock(player, record)
+	end
 end
 
 local function saveMeta(player: Player, record: Record)
@@ -1122,6 +1324,7 @@ end
 -- uses MANUAL_SAVE_SPACING, the DataStore's own limit).
 local function requestSave(player: Player, record: Record, spacing: number?)
 	record.dirty = true
+	record.quietSave = false -- Stage 11: real changes: this write is a normal save
 	if record.saveScheduled or not record.canSave or record.state ~= "loaded" then
 		return
 	end
@@ -1157,6 +1360,27 @@ local function requestSaveNow(player: Player, record: Record)
 	end
 	record.manualPending = true
 	requestSave(player, record, MANUAL_SAVE_SPACING)
+end
+
+-- Stage 11: SaveSettings (and SetLanguage) on the start menu or in play. At most SETTINGS_PER_SECOND
+-- requests a second per player; bad fields are dropped and volumes clamped (ServerGuard). Kept in the
+-- meta record (saved within MANUAL_SAVE_SPACING, and on leave) and mirrored as player attributes.
+local function requestSettings(player: Player, record: Record, patch: any)
+	if not ServerGuard.allowInWindow(record.settingsTimes, os.clock(), 1, SETTINGS_PER_SECOND) then
+		return
+	end
+	local settings, changed = ServerGuard.applySettings(record.settings, patch)
+	if not changed then
+		return
+	end
+	record.settings = settings
+	record.settingsAt = math.max(os.time(), record.settingsAt + 1)
+	publishSettings(player, settings)
+	if record.metaReady then
+		record.meta.settings = table.clone(settings)
+		record.meta.settingsAt = record.settingsAt
+		requestMetaSave(player, record, MANUAL_SAVE_SPACING)
+	end -- not read yet: the meta read keeps these (they are newer)
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -1510,8 +1734,120 @@ local function arrivalOf(player: Player): Worlds.Arrival?
 	return Worlds.sanitizeArrival(joinData.TeleportData, player.UserId, SLOT_COUNT)
 end
 
+-- Stage 11: the settings a trip carried (TeleportData.prefs), checked; nil when there are none.
+local function arrivalPrefsOf(player: Player): { settings: ServerGuard.Settings, at: number }?
+	local ok, joinData = pcall(function(): any
+		return player:GetJoinData()
+	end)
+	if not ok or type(joinData) ~= "table" then
+		return nil
+	end
+	local source = joinData.SourcePlaceId
+	if source ~= nil and source ~= game.PlaceId then
+		return nil
+	end
+	local data = joinData.TeleportData
+	local prefs = if type(data) == "table" then data.prefs else nil
+	if type(prefs) ~= "table" or type(prefs.at) ~= "number" or prefs.at ~= prefs.at then
+		return nil
+	end
+	-- A time far in the future would keep these settings forever: at most now.
+	local at = math.clamp(math.floor(prefs.at), 0, os.time())
+	if at <= 0 then
+		return nil
+	end
+	return { settings = ServerGuard.sanitizeSettings(prefs), at = at }
+end
+
 ----------------------------------------------------------------------------------------------------
 -- Loading a slot, and trips from the lobby
+
+-- Stage 11: one UpdateAsync with retries (like readKey). False when it could not be written.
+local function updateKey(key: string, who: string, transform: (old: any) -> any): boolean
+	waitForBackend()
+	for attempt = 1, LOAD_ATTEMPTS do
+		local source = backend
+		local ok, err = pcall(source.update, key, transform)
+		if ok then
+			return true
+		end
+		warn(`[SpaceBaseOdyssey] slot lock attempt {attempt} failed for {who}: {err}`)
+		local message = string.lower(tostring(err))
+		if source.persistent and (string.find(message, "studio", 1, true) or string.find(message, "publish", 1, true)) then
+			backend = memoryBackend
+			warn("[SpaceBaseOdyssey] DataStores unavailable, progress kept in memory for this session")
+			local memoryOk = pcall(memoryBackend.update, key, transform)
+			return memoryOk
+		end
+		if attempt < LOAD_ATTEMPTS then
+			task.wait(LOAD_RETRY_SECONDS)
+		end
+	end
+	return false
+end
+
+-- Stage 11: reads the slot and takes its session lock in the same write. Waits while another visit
+-- holds a fresh lock (its last save may still be on its way), at most LOCK_WAIT_SECONDS, then steals
+-- it. Returns false when the slot could not be read, else true and the stored record (nil when empty;
+-- the lock itself is not data).
+local function acquireSlot(player: Player, record: Record, slot: number): (boolean, any)
+	local key = slotKey(player, slot)
+	local token = HttpService:GenerateGUID(false)
+	record.lockToken = token
+	local deadline = os.clock() + LOCK_WAIT_SECONDS
+	local waitedLogged = false
+	while true do
+		local force = os.clock() >= deadline
+		local seen: any = nil
+		local waiting = false
+		local stamp = os.time()
+		local ok = updateKey(key, player.Name, function(old: any): any
+			seen = old
+			local stored = if type(old) == "table" then old else nil
+			local decision = ServerGuard.lockDecision(stored and stored.lock, SERVER_ID, token, stamp, LOCK_TIMEOUT_SECONDS)
+			if decision == "wait" and not force then
+				waiting = true
+				return nil -- no write: try again in a moment
+			end
+			waiting = false
+			local new = stored or { v = DATA_VERSION }
+			new.lock = { job = SERVER_ID, token = token, at = stamp }
+			return new
+		end)
+		if records[player] ~= record then
+			-- Left while loading. Stage 11 review: a lock this visit just wrote is freed again, so the
+			-- player's next server does not wait LOCK_WAIT_SECONDS for it.
+			if ok and not waiting then
+				record.lockHeld = true
+				task.spawn(releaseLock, player, record)
+			end
+			return false, nil
+		end
+		if not ok then
+			return false, nil
+		end
+		if not waiting then
+			if force then
+				warn(`[SpaceBaseOdyssey] slot {slot} of {player.Name} was still locked by another server; lock taken over`)
+			end
+			record.lockHeld = true
+			record.lockAt = stamp
+			local data = if type(seen) == "table" then seen else nil
+			if data and ServerGuard.isEmptySlotRecord(data) then
+				data = nil
+			end
+			return true, data
+		end
+		if not waitedLogged then
+			waitedLogged = true
+			print(`[SpaceBaseOdyssey] slot {slot} of {player.Name} is still saving on another server; waiting`)
+		end
+		task.wait(LOCK_RETRY_SECONDS)
+		if records[player] ~= record then
+			return false, nil
+		end
+	end
+end
 
 local function loadSlot(player: Player, record: Record, choice: Choice)
 	if record.state ~= "menu" and record.state ~= "teleporting" then
@@ -1528,13 +1864,19 @@ local function loadSlot(player: Player, record: Record, choice: Choice)
 	local stored: any = nil
 	local canSave = false
 	local fromLegacy = false
+	-- Stage 11: every load (New game too) takes the slot's session lock first; that write also reads
+	-- the slot.
+	local lockOk, data = acquireSlot(player, record, slot)
+	if records[player] ~= record then
+		return -- left while loading
+	end
 	if choice.fresh then
-		-- New Game: nothing to read, the first save replaces the slot. Only when the slot list could
-		-- be read, so a slot we know nothing about is never overwritten.
-		canSave = record.metaCanSave
+		-- New Game (only an explicit fresh = true): what was read is dropped, the first save replaces
+		-- the slot.
+		canSave = lockOk
 		record.replaceAll = true
 	else
-		local ok, data = readKey(slotKey(player, slot), player.Name)
+		local ok = lockOk
 		if ok and data == nil and slot == LEGACY_SLOT then
 			ok, data = readKey(legacyKey(player), player.Name)
 			fromLegacy = ok and type(data) == "table"
@@ -1699,6 +2041,12 @@ local function startTrip(player: Player, record: Record, choice: Choice, join: {
 		code = reserved
 		data = { owner = player.UserId, slot = choice.slot, mode = choice.mode, fresh = choice.fresh, code = reserved }
 	end
+	-- Stage 11: the player's settings travel along (the meta write may land after the world reads it).
+	if record.settingsAt > 0 then
+		local prefs: { [string]: any } = table.clone(record.settings) :: any
+		prefs.at = record.settingsAt
+		data.prefs = prefs
+	end
 	record.trip = { code = code, data = data, attempts = 0, join = join ~= nil }
 	teleportTrip(player, record, token)
 end
@@ -1711,11 +2059,10 @@ local function applyChoice(player: Player, record: Record, choice: Choice)
 		record.pendingChoice = choice -- handled once the slot list is read
 		return
 	end
-	local fresh = choice.fresh
-	if record.metaCanSave and not record.meta.slots[choice.slot].used then
-		fresh = true -- "Continue" on an empty slot starts a new game there
-	end
-	local final: Choice = { slot = choice.slot, mode = choice.mode, fresh = fresh, guest = choice.guest }
+	-- Stage 11: only an explicit New game wipes a slot. "Continue" on a slot the meta lists as unused
+	-- reads it like any other (an empty record starts a new explorer; data the meta missed is kept and
+	-- the summary repaired), because the meta key is written less often than the slot.
+	local final: Choice = { slot = choice.slot, mode = choice.mode, fresh = choice.fresh == true, guest = choice.guest }
 	if role == "lobby" then
 		startTrip(player, record, final, nil) -- Stage 10 fix: never load a world in the public lobby
 		return
@@ -1773,10 +2120,28 @@ local function addPlayer(player: Player)
 		lastWorldsRequestAt = -math.huge,
 		lastJoinAt = -math.huge,
 		connections = {},
+		lockToken = "",
+		lockHeld = false,
+		lockLost = false,
+		lockAt = 0,
+		savingNow = 0,
+		quietSave = false,
+		settings = ServerGuard.defaultSettings(),
+		settingsAt = 0,
+		settingsTimes = {},
+		arrivalPrefs = nil,
 	}
 	records[player] = record
 	-- Stage 10 fix: a world server only takes players its owner's trip allows (see the header).
 	local arrival = if role == "world" then arrivalOf(player) else nil
+	-- Stage 11: settings from the trip (shown at once; the meta read below may have newer ones).
+	if role == "world" then
+		local prefs = arrivalPrefsOf(player)
+		if prefs and adoptSettings(record, prefs.settings, prefs.at) then
+			record.arrivalPrefs = prefs
+			publishSettings(player, record.settings)
+		end
+	end
 	if role == "world" then
 		setAttribute(player, "SBO_SlotLoading", true) -- arrived for a world: no start menu here
 		setAttribute(player, "SBO_Guest", arrival ~= nil and arrival.guest)
@@ -1821,13 +2186,22 @@ local function addPlayer(player: Player)
 			return -- left while loading
 		end
 		union(meta.cosmetics, record.cosmetics) -- a code redeemed on the start menu meanwhile
+		-- Stage 11: the newest settings win (the meta's, or ones changed or carried here meanwhile).
+		local settingsNewerHere = record.settingsAt > meta.settingsAt
+		if not settingsNewerHere then
+			adoptSettings(record, meta.settings, meta.settingsAt)
+		else
+			meta.settings = table.clone(record.settings)
+			meta.settingsAt = record.settingsAt
+		end
 		record.meta = meta
 		record.metaCanSave = canSave
 		record.metaReady = true
+		publishSettings(player, record.settings)
 		if not canSave then
 			warn(`[SpaceBaseOdyssey] slot list for {player.Name} could not be read; saving is off this session`)
 		end
-		if migrated or next(record.cosmetics) ~= nil then
+		if migrated or next(record.cosmetics) ~= nil or settingsNewerHere then
 			requestMetaSave(player, record, SAVE_INTERVAL_SECONDS)
 		end
 		local pending = record.pendingChoice
@@ -1891,9 +2265,11 @@ local function removePlayer(player: Player)
 	-- Budget is only waited for when save() / saveMeta() will really write (a player leaving from the
 	-- start menu or during a solo teleport has no loaded slot, and must not hold a closing server).
 	local ok, err = pcall(function()
-		if record.dirty and record.slot ~= nil and record.state == "loaded" and record.canSave then
+		-- Stage 11: the last write also frees the slot's session lock (a lock-only write when nothing
+		-- changed), so the player's next server loads the slot at once.
+		if record.lockHeld or (record.dirty and record.slot ~= nil and record.state == "loaded" and record.canSave) then
 			waitForBudget(BUDGET_WAIT_SECONDS)
-			save(player, record, true)
+			finalSave(player, record)
 		end
 		if record.metaDirty and record.metaReady and record.metaCanSave then
 			waitForBudget(BUDGET_WAIT_SECONDS)
@@ -1990,6 +2366,8 @@ function ProgressService.start(worldRefs: any, remoteEvents: Remotes)
 			print(`[SpaceBaseOdyssey] Studio: {STUDIO_DATASTORE_ATTRIBUTE} = false, saves are in memory (lost when Play stops)`)
 		elseif studioSetting == true then
 			storeName = STORE_NAME
+			-- Stage 11: debug keys work in Studio, so their credits would reach real saves.
+			warn(`[SpaceBaseOdyssey] Studio is using the LIVE DataStore "{STORE_NAME}": debug keys change real saves`)
 		elseif game.PlaceId == 0 then
 			storeName = nil
 			print("[SpaceBaseOdyssey] Studio: place not published, saves are in memory (lost when Play stops)")
@@ -2069,6 +2447,17 @@ function ProgressService.start(worldRefs: any, remoteEvents: Remotes)
 				if record then
 					requestSaveNow(player, record)
 				end
+			elseif action.type == "SaveSettings" or action.type == "SetLanguage" then
+				-- Stage 11: settings kept in the meta record (SetLanguage: MissionService also sets the
+				-- Language attribute, as before).
+				local record = records[player]
+				if record then
+					local patch = if action.type == "SetLanguage" then { language = action.language } else action.settings
+					local ok, err = pcall(requestSettings, player, record, patch)
+					if not ok then
+						warn(`[SpaceBaseOdyssey] SaveSettings failed: {err}`)
+					end
+				end
 			elseif action.type == "ListFriendWorlds" then
 				task.spawn(function()
 					local ok, err = pcall(ProgressService.listFriendWorlds, player)
@@ -2119,6 +2508,11 @@ function ProgressService.start(worldRefs: any, remoteEvents: Remotes)
 			for player, record in records do
 				if record.dirty and not record.saveScheduled then
 					requestSave(player, record)
+				elseif record.lockHeld and record.canSave and not record.saveScheduled
+					and os.time() - record.lockAt >= LOCK_REFRESH_SECONDS
+				then
+					requestSave(player, record) -- Stage 11: keeps an idle player's slot lock fresh
+					record.quietSave = true
 				end
 				if record.metaDirty and not record.metaSaveScheduled then
 					requestMetaSave(player, record)
@@ -2139,9 +2533,7 @@ function ProgressService.start(worldRefs: any, remoteEvents: Remotes)
 		end
 		for player, record in records do
 			task.spawn(function()
-				if record.dirty then
-					save(player, record, true)
-				end
+				finalSave(player, record) -- Stage 11: frees the session lock too
 				if record.metaDirty then
 					saveMeta(player, record)
 				end
@@ -2296,9 +2688,9 @@ function ProgressService.joinWorld(player: Player, owner: any, slot: any): boole
 		return true
 	end
 	-- A used slot is played as it is; an empty one starts a new explorer (never a wipe from here).
-	local fresh = record.metaCanSave and not record.meta.slots[slot :: number].used
+	-- Stage 11: never fresh: the world server reads the slot (an empty record is a new explorer).
 	record.state = "menu" -- startTrip starts the trip itself
-	startTrip(player, record, { slot = slot :: number, mode = "friends", fresh = fresh, guest = true }, {
+	startTrip(player, record, { slot = slot :: number, mode = "friends", fresh = false, guest = true }, {
 		owner = ownerId,
 		code = entry.code,
 	})
@@ -2500,6 +2892,12 @@ end
 function ProgressService.isLoaded(player: Player): boolean
 	local record = records[player]
 	return record ~= nil and record.loaded
+end
+
+-- Stage 11: a copy of the player's settings (Types.PlayerSettings; defaults until anything is known).
+function ProgressService.settingsOf(player: Player): ServerGuard.Settings?
+	local record = records[player]
+	return if record then table.clone(record.settings) else nil
 end
 
 -- A copy of the player's base data in the chosen slot (nil when the player has no record, or is still

@@ -12,6 +12,7 @@ local TweenService = game:GetService("TweenService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Icons = require(Shared:WaitForChild("Icons"))
+local Theme = require(Shared:WaitForChild("Theme"))
 local WorldParts = require(script.Parent:WaitForChild("WorldParts"))
 
 type Style = WorldParts.Style
@@ -39,17 +40,18 @@ local PANEL_CLEAN = WorldParts.PANEL_CLEAN
 local ICE_GLOW = WorldParts.ICE_GLOW
 local INTERIOR_LIGHT = WorldParts.INTERIOR_LIGHT
 local PULSE_UPDATE_SECONDS = WorldParts.PULSE_UPDATE_SECONDS
-local SILO_CENTRE = WorldParts.SILO_CENTRE
+local LINE = WorldParts.LINE -- Stage 11 tycoon
+local HUB_APOTHEM = WorldParts.HUB_APOTHEM
+local HUB_WALL = WorldParts.HUB_WALL
+local LAMP_OFF = WorldParts.LAMP_OFF
+local WATER_COLOUR = WorldParts.WATER_COLOUR
 local SILO_GLASS_HEIGHT = WorldParts.SILO_GLASS_HEIGHT
 local SILO_GLASS_DIAMETER = WorldParts.SILO_GLASS_DIAMETER
-local CARGO_DOCK = WorldParts.CARGO_DOCK
 local CARGO_RIDE_HEIGHT = WorldParts.CARGO_RIDE_HEIGHT
 local DRILL_FLOOR_RADIUS = WorldParts.DRILL_FLOOR_RADIUS
 local DRILL_SPREAD = WorldParts.DRILL_SPREAD
 local DRILL_PAD_RADIUS = WorldParts.DRILL_PAD_RADIUS
 local HOPPER_RADIUS = WorldParts.HOPPER_RADIUS
-local CONVEYOR_FOOT_RADIUS = WorldParts.CONVEYOR_FOOT_RADIUS
-local ICE_CUBE_COUNT = WorldParts.ICE_CUBE_COUNT
 local RISE_SECONDS = WorldParts.RISE_SECONDS
 local HOLOGRAM_TRANSPARENCY = WorldParts.HOLOGRAM_TRANSPARENCY
 local HOLOGRAM_MIN_PART = WorldParts.HOLOGRAM_MIN_PART
@@ -86,6 +88,7 @@ local roverSideAngle = WorldParts.roverSideAngle
 
 -- Stage 6 build-and-grow helpers, grouped in one table (a table keeps the module's local count low).
 local Six = {}
+local ROLE = Theme.ROLE -- Stage 11: status lamps and line signs use the Lunar Sunrise roles
 
 ------------------------------------------------------------------------------------------------
 -- Stage 6: automatic ice drills, conveyor, ice silo, cargo robot, build pads and blueprints
@@ -135,7 +138,7 @@ function Six.padSpots(drillAngle: number): { [string]: Vector3 }
 		drill_1 = Six.craterPoint(drillAngle - DRILL_SPREAD, DRILL_PAD_RADIUS, CRATER_RIM_Y), -- rim, above each drill
 		drill_2 = Six.craterPoint(drillAngle + 0.09, DRILL_PAD_RADIUS, CRATER_RIM_Y), -- (next to the rim belt)
 		drill_3 = Six.craterPoint(drillAngle + DRILL_SPREAD, DRILL_PAD_RADIUS, CRATER_RIM_Y),
-		cargo_bot = SILO_CENTRE + Vector3.new(2, 0, -19), -- behind the silo, off the robot's route
+		cargo_bot = Six.worksLayout(drillAngle).cargoPad, -- Stage 11: beside the robot's dock at the water plant
 		lab = S7.LAB_CENTRE + Vector3.new(18, 0, -16),
 		garage = S7.GARAGE_CENTRE + Vector3.new(-26, 0, -22),
 		landing_pad = S7.LANDING_PAD_CENTRE + Vector3.new(36, 0, 14),
@@ -143,29 +146,67 @@ function Six.padSpots(drillAngle: number): { [string]: Vector3 }
 	}
 end
 
--- The cargo robot's route from its dock by the silo to the conveyor's foot at the crater: east of
--- the hub, through the gap between the crawl-space vent and the shelter mound, out to the crater, then
--- around it on flat ground (r = 140). (Stage 7: the lab now stands west of the hub.)
-function Six.cargoRoutePoints(drillAngle: number): { Vector3 }
-	local y = CARGO_RIDE_HEIGHT
-	local points: { Vector3 } = {
-		Vector3.new(CARGO_DOCK.X, y, CARGO_DOCK.Z),
-		Vector3.new(24, y, -42),
-		Vector3.new(38, y, -36),
-		Vector3.new(44.8, y, -24),
-		Vector3.new(46, y, -6),
-		Vector3.new(36, y, 40),
-	}
-	local arcRadius = 140
-	local steps = math.ceil(math.abs(drillAngle - math.pi) / 0.2)
-	for k = 0, steps do
-		local angle = if steps > 0 then math.pi + (drillAngle - math.pi) * k / steps else math.pi
-		table.insert(points, Six.craterPoint(angle, arcRadius, y))
+-- Stage 11 tycoon: where the visible ice line stands. side = +1 when the drills are on the +x side of
+-- the crater, else -1. The silo stands on the crater side of the hub, on the drills' side
+-- (LINE.WORKS_X/Z: clear of the hub-to-crater, garage and shelter tracks); the water plant stands
+-- between the silo and the hub, the air maker beside it (outer side), and the cargo robot drives
+-- from the plant's dock to a supply port on the hub wall (segment at +-45 degrees). Points are on the
+-- ground (y = 0) unless noted.
+export type WorksLayout = {
+	side: number,
+	silo: Vector3,
+	plant: Vector3,
+	air: Vector3,
+	dock: Vector3,
+	toPort: Vector3, -- flat unit from the silo toward the port
+	across: Vector3, -- flat unit, the plant's outer side
+	port: Vector3, -- the supply port on the hub wall
+	portDir: Vector3, -- flat unit out of the hub through the port
+	portStop: Vector3,
+	cargoPad: Vector3,
+	route: { Vector3 }, -- the robot's drive: dock -> port stop (ride height)
+	beltStart: Vector3, -- where the elevated belt leaves the rim band (belt height)
+	beltEnd: Vector3, -- the foot of the silo's bucket lift (belt height)
+}
+
+function Six.worksLayout(drillAngle: number): WorksLayout
+	local side = if math.sin(drillAngle) >= 0 then 1 else -1
+	local silo = Vector3.new(side * LINE.WORKS_X, 0, LINE.WORKS_Z)
+	local portDir = dirFromAngle(side * LINE.PORT_SEGMENT_ANGLE)
+	local port = HABITAT_CENTRE + portDir * (HUB_APOTHEM + HUB_WALL + 1)
+	local portStop = HABITAT_CENTRE + portDir * LINE.PORT_STOP
+	local toPort = flatUnit(portStop - silo, -Vector3.zAxis)
+	local plant = silo + toPort * LINE.PLANT_OFFSET
+	local across = Vector3.new(toPort.Z, 0, -toPort.X)
+	if across.X * side < 0 then
+		across = -across
 	end
-	local outward = dirFromAngle(drillAngle)
-	local side = Vector3.new(-outward.Z, 0, outward.X)
-	table.insert(points, Six.craterPoint(drillAngle, CONVEYOR_FOOT_RADIUS + 4.5, y) + side * 3.5)
-	return points
+	local dock = plant + toPort * LINE.DOCK_OFFSET
+	local y = CARGO_RIDE_HEIGHT
+	local beltStart = Six.craterPoint(drillAngle, 100, LINE.BELT_Y)
+	local fromSilo = flatUnit(beltStart - silo, Vector3.zAxis)
+	local beltEnd = Vector3.new(silo.X, LINE.BELT_Y, silo.Z) + fromSilo * (SILO_GLASS_DIAMETER / 2 + LINE.LIFT_CLEARANCE)
+	return {
+		side = side,
+		silo = silo,
+		plant = plant,
+		air = plant + across * LINE.AIR_OFFSET,
+		dock = dock,
+		toPort = toPort,
+		across = across,
+		port = port,
+		portDir = portDir,
+		portStop = portStop,
+		cargoPad = dock - across * 7, -- beside the dock, off the robot's drive
+		route = { Vector3.new(dock.X, y, dock.Z), Vector3.new(portStop.X, y, portStop.Z) },
+		beltStart = beltStart,
+		beltEnd = beltEnd,
+	}
+end
+
+-- The cargo robot's route (Stage 11: a short drive from the water plant to the hub's supply port).
+function Six.cargoRoutePoints(drillAngle: number): { Vector3 }
+	return Six.worksLayout(drillAngle).route
 end
 
 function Six.keepoutsAlong(points: { Vector3 }, radius: number, spacing: number, into: { Keepout6 })
@@ -209,7 +250,7 @@ function Six.alongPolyline(line: Polyline, distance: number): (Vector3, Vector3)
 end
 
 type DrillBit = { root: BasePart, base: CFrame, level: number }
-export type DrillRefs = { model: Model, bits: { DrillBit } }
+export type DrillRefs = { model: Model, bits: { DrillBit }, liftA: Vector3, liftB: Vector3 } -- liftA/B: its lift belt (Stage 11)
 
 -- One automatic ice drill on the crater floor. Its lift belt carries the ice up the rim wall to
 -- `beltEnd`. Level 2 adds a taller rig and a second light, level 3 a second bit and a power pack.
@@ -271,6 +312,9 @@ function Six.buildDrill(parent: Instance, index: number, angle: number, beltEnd:
 			upgrade(fluteB, level)
 		end
 		weldTo(root, { fluteA, fluteB })
+		-- Stage 11: the client spins the bit around this rest pose (the server no longer moves it).
+		root:SetAttribute("SBO_RestCFrame", bitCf)
+		root:SetAttribute("SBO_BitLevel", level)
 		table.insert(bits, { root = root :: BasePart, base = bitCf, level = level })
 	end
 	addBit("Bit", 0, 8.4, 0.9, 1)
@@ -297,18 +341,69 @@ function Six.buildDrill(parent: Instance, index: number, angle: number, beltEnd:
 	local strutHeight = mid.Y - CRATER_FLOOR_Y
 	vcylinder(m, "LiftStrut", strutHeight, 0.5, Vector3.new(mid.X, CRATER_FLOOR_Y + strutHeight / 2, mid.Z), metal)
 
-	return { model = m, bits = bits }
+	return { model = m, bits = bits, liftA = beltStart + Vector3.new(0, 0.45, 0), liftB = beltEnd + Vector3.new(0, 0.45, 0) }
 end
 
-type ConveyorRefs = { model: Model, cubes: { BasePart }, cubeLine: Polyline, pipeEnd: Vector3 }
+-- Stage 11 tycoon: ground height under a point near the crater (rim band, outer slope, flat ground).
+local function groundYAt(p: Vector3): number
+	local r = (Vector3.new(p.X, 0, p.Z) - Vector3.new(CRATER_CENTRE.X, 0, CRATER_CENTRE.Z)).Magnitude
+	if r <= 100 then
+		return CRATER_RIM_Y
+	elseif r < 116 then
+		return CRATER_RIM_Y * (116 - r) / 16
+	end
+	return 0
+end
 
--- The rim hopper, the open belt over the rim and down its outer slope, and the half-buried ice pipe
--- from there to the silo behind the habitat (it runs under the habitat floor).
-function Six.buildConveyor(base: Instance, angle: number): ConveyorRefs
+-- Icons in a row on a small sign (a SurfaceGui on the part's Front face), tinted with Theme roles.
+local function iconSign(sign: BasePart, icons: { string }, colours: { Color3 })
+	local gui = Instance.new("SurfaceGui")
+	gui.Name = "SignIcons"
+	gui.Face = Enum.NormalId.Front
+	gui.LightInfluence = 0
+	gui.CanvasSize = Vector2.new(64 * #icons, 64)
+	gui.Parent = sign
+	for i, icon in icons do
+		local image = Instance.new("ImageLabel")
+		image.BackgroundTransparency = 1
+		image.Size = UDim2.fromScale(0.8 / #icons, 0.8)
+		image.Position = UDim2.fromScale((i - 1 + 0.1) / #icons, 0.1)
+		image.Image = icon
+		image.ImageColor3 = colours[i] or ROLE.accent
+		image.Parent = gui
+	end
+end
+
+-- A status lamp: a neon ball on a short mast. The server colours it (Theme.ROLE good / warning /
+-- danger, dim when off); it never moves.
+local function statusLamp(parent: Instance, name: string, at: Vector3, height: number): Part
+	vcylinder(parent, name .. "Mast", height, 0.3, at + Vector3.new(0, height / 2, 0), { color = METAL, material = Enum.Material.Metal, collide = false })
+	local lamp = ball(parent, name, 0.9, at + Vector3.new(0, height + 0.3, 0), {
+		color = LAMP_OFF,
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	pointLight(lamp, ROLE.good, 8, 0, false)
+	return lamp
+end
+
+export type ConveyorRefs = {
+	model: Model,
+	cubeLine: { Vector3 }, -- the ice cubes' path: rim hopper -> rim -> over the slope -> lift -> silo top
+	pipeEnd: Vector3, -- the bucket lift's foot (kept under its old name)
+}
+
+-- The rim hopper, the open belt over the rim, then (Stage 11) ONE elevated open belt on posts at rim
+-- height over the outer slope straight to the silo's bucket lift: no buried pipe, so every ice cube
+-- can be watched from the drills to the silo. The cubes are made and moved by the client
+-- (src/client/ProductionLine.luau) from the path in the line folder; the server moves nothing.
+function Six.buildConveyor(base: Instance, angle: number, layout: WorksLayout, siloTop: number): ConveyorRefs
 	local m = model(base, "IceConveyor")
 	local outward = dirFromAngle(angle)
 	local dark: Style = { color = DARK_METAL, material = Enum.Material.Metal }
 	local beltStyle: Style = { color = DARK_METAL, material = Enum.Material.Metal, collide = false }
+	local postStyle: Style = { color = METAL, material = Enum.Material.Metal, collide = false }
 	local stripe: Style = { color = ACCENT_SYSTEM, material = Enum.Material.Neon, collide = false, shadow = false }
 
 	local hopperPos = Six.craterPoint(angle, HOPPER_RADIUS, CRATER_RIM_Y + 1.3)
@@ -316,62 +411,71 @@ function Six.buildConveyor(base: Instance, angle: number): ConveyorRefs
 	local trimPos = hopperPos + Vector3.new(0, 0.95, 0)
 	part(m, "RimHopperTrim", Vector3.new(3.5, 0.35, 3.5), CFrame.lookAt(trimPos, trimPos + outward), stripe)
 
-	local a = Six.craterPoint(angle, HOPPER_RADIUS + 1.7, CRATER_RIM_Y + 0.2)
-	local b = Six.craterPoint(angle, 100, CRATER_RIM_Y + 0.2)
-	local c = Six.craterPoint(angle, 116.5, 0.2)
+	local a = Six.craterPoint(angle, HOPPER_RADIUS + 1.7, LINE.BELT_Y)
+	local b = layout.beltStart
+	local e = layout.beltEnd
 	local up = Vector3.new(0, 0.22, 0)
-	belt(m, "RimBelt", a, b, 2, 0.4, beltStyle)
-	belt(m, "SlopeBelt", b, c, 2, 0.4, beltStyle)
+	belt(m, "RimBelt", a, b, LINE.BELT_WIDTH, 0.4, beltStyle)
 	belt(m, "BeltStripe", a + up, b + up, 0.3, 0.05, stripe)
-	belt(m, "BeltStripe", b + up, c + up, 0.3, 0.05, stripe)
-
-	local foot = Six.craterPoint(angle, CONVEYOR_FOOT_RADIUS, 0)
-	local inletPos = foot + Vector3.new(0, 0.7, 0)
-	part(m, "PipeInlet", Vector3.new(1.8, 1.4, 1.8), CFrame.lookAt(inletPos, inletPos + outward), dark)
-	local towardFoot = flatUnit(foot - SILO_CENTRE, Vector3.zAxis)
-	local pipeEnd = SILO_CENTRE + towardFoot * (SILO_GLASS_DIAMETER / 2 + 1.4)
-	pipe(m, "IcePipe", Vector3.new(foot.X, 0, foot.Z), Vector3.new(pipeEnd.X, 0, pipeEnd.Z), 0.9, {
-		color = METAL,
-		material = Enum.Material.Metal,
-		collide = false,
-		shadow = false,
-	})
-
-	-- Ice cubes riding the open belt (a small pool, moved only while someone is near).
-	local lift = Vector3.new(0, 0.65, 0)
-	local cubeLine = Six.polyline({ a + lift, b + lift, c + lift })
-	local cubes: { BasePart } = {}
-	for k = 1, ICE_CUBE_COUNT do
-		local position, dir = Six.alongPolyline(cubeLine, (k - 1) * cubeLine.total / ICE_CUBE_COUNT)
-		table.insert(
-			cubes,
-			part(m, "IceCube", Vector3.new(0.9, 0.9, 0.9), CFrame.lookAt(position, position + dir), {
-				color = ICE_LOAD,
-				material = Enum.Material.Ice,
-				collide = false,
-				shadow = false,
-			})
-		)
+	belt(m, "LineBelt", b, e, LINE.BELT_WIDTH, 0.4, beltStyle)
+	belt(m, "BeltStripe", b + up, e + up, 0.3, 0.05, stripe)
+	-- Side rails so the belt reads from far away.
+	local run = flatUnit(e - b, Vector3.zAxis)
+	local railSide = Vector3.new(-run.Z, 0, run.X) * (LINE.BELT_WIDTH / 2)
+	for _, sign in { -1, 1 } do
+		local lift = railSide * sign + Vector3.new(0, 0.35, 0)
+		belt(m, "BeltRail", b + lift, e + lift, 0.15, 0.3, postStyle)
 	end
-	return { model = m, cubes = cubes, cubeLine = cubeLine, pipeEnd = pipeEnd }
+	-- Posts down to the ground (the rim's outer slope falls away under the belt).
+	local length = (e - b).Magnitude
+	local count = math.max(1, math.floor(length / LINE.POST_SPACING))
+	for k = 1, count do
+		local p = b:Lerp(e, k / count)
+		local ground = groundYAt(p)
+		local height = p.Y - 0.2 - ground
+		if height > 0.6 then
+			vcylinder(m, "BeltPost", height, 0.45, Vector3.new(p.X, ground + height / 2, p.Z), postStyle)
+		end
+	end
+
+	-- Bucket lift at the silo: a tall column from the belt up past the silo's top, and a chute over
+	-- the hatch. A cube rides up and drops into the silo.
+	local liftTop = siloTop + 2
+	local column = liftTop + 0.6
+	part(m, "BucketLift", Vector3.new(1.6, column, 1.6), CFrame.new(Vector3.new(e.X, column / 2, e.Z)), dark)
+	part(m, "BucketLiftStripe", Vector3.new(1.7, 0.3, 1.7), CFrame.new(Vector3.new(e.X, LINE.BELT_Y + 1, e.Z)), stripe)
+	part(m, "BucketLiftStripe", Vector3.new(1.7, 0.3, 1.7), CFrame.new(Vector3.new(e.X, liftTop - 1, e.Z)), stripe)
+	local siloTopCentre = Vector3.new(layout.silo.X, liftTop, layout.silo.Z)
+	local liftHead = Vector3.new(e.X, liftTop, e.Z)
+	belt(m, "LiftChute", liftHead, siloTopCentre, 1.2, 0.3, beltStyle)
+
+	local lift = Vector3.new(0, LINE.CUBE_LIFT, 0)
+	local cubeLine = { a + lift, b + lift, e + lift, liftHead + lift, siloTopCentre + lift }
+	return { model = m, cubeLine = cubeLine, pipeEnd = e }
 end
 
-type SiloRefs = {
+export type SiloRefs = {
 	model: Model,
 	fill: Part,
 	light: PointLight,
-	ring: Part,
+	ring: Part, -- top ring: the belt's status light (green running, red full)
+	capRing: Part, -- Stage 11: how high the silo may fill at this base level
 	prompt: ProximityPrompt,
+	centre: Vector3,
 	bottomY: number,
 	height: number,
 	diameter: number,
+	top: number,
+	marker: Vector3,
 }
 
--- The ice silo behind the habitat: a glass column that shows how much ice the drills have stored,
--- a lift pipe from the conveyor, and a pipe through the back wall into the water tank.
-function Six.buildSilo(base: Instance, pipeEnd: Vector3): SiloRefs
+-- The ice silo (Stage 11: at the works, beside the water plant): a tall glass column. The fill is
+-- ice / SILO_MAX of its height and a gold cap ring shows how much this base level may hold, so a
+-- bigger base raises the ring and the ice never "drops" (audit fix). A pipe at the foot feeds the
+-- water plant's melter.
+function Six.buildSilo(base: Instance, layout: WorksLayout): SiloRefs
 	local m = model(base, "IceSilo")
-	local c = SILO_CENTRE
+	local c = layout.silo
 	local metal: Style = { color = METAL, material = Enum.Material.Metal }
 	local glassBottom = 1
 	local top = glassBottom + SILO_GLASS_HEIGHT
@@ -397,9 +501,16 @@ function Six.buildSilo(base: Instance, pipeEnd: Vector3): SiloRefs
 	fill:SetAttribute(NO_RISE_ATTRIBUTE, true) -- setSilo tweens it
 	local light = pointLight(fill, ICE_GLOW, 10, 0.8, false)
 	light.Enabled = false
-	for _, y in { 4.7, 8.4 } do
+	for _, y in { 5.5, 10.5 } do
 		vcylinder(m, "SiloBand", 0.4, SILO_GLASS_DIAMETER + 0.3, c + Vector3.new(0, y, 0), metal)
 	end
+	local capRing = vcylinder(m, "SiloCapRing", 0.25, SILO_GLASS_DIAMETER + 0.45, c + Vector3.new(0, glassBottom + SILO_GLASS_HEIGHT / 3, 0), {
+		color = ROLE.star,
+		material = Enum.Material.Neon,
+		collide = false,
+		shadow = false,
+	})
+	capRing:SetAttribute(NO_RISE_ATTRIBUTE, true) -- setSilo moves it
 	local ring = vcylinder(m, "SiloRing", 0.35, SILO_GLASS_DIAMETER + 0.5, c + Vector3.new(0, top - 0.4, 0), {
 		color = ACCENT_SYSTEM,
 		material = Enum.Material.Neon,
@@ -409,45 +520,21 @@ function Six.buildSilo(base: Instance, pipeEnd: Vector3): SiloRefs
 	vcylinder(m, "SiloCap", 0.8, SILO_GLASS_DIAMETER + 0.6, c + Vector3.new(0, top + 0.4, 0), metal)
 	vcylinder(m, "SiloHatch", 0.6, 2.4, c + Vector3.new(0, top + 1.1, 0), { color = WHITE_HULL, material = Enum.Material.SmoothPlastic })
 
-	-- Lift pipe from the ice pipe up the silo's side and over into the top.
-	local side = flatUnit(pipeEnd - c, Vector3.zAxis)
-	local liftAt = c + side * (SILO_GLASS_DIAMETER / 2 + 0.9)
-	vcylinder(m, "IceLift", top + 1.4, 1.1, Vector3.new(liftAt.X, (top + 1.4) / 2, liftAt.Z), metal)
-	pipe(m, "IceLiftTop", liftAt + Vector3.new(0, top + 0.9, 0), c + Vector3.new(0, top + 0.9, 0), 0.8, metal)
-
-	-- Melted ice goes on to the water tank inside (habitat corner), through the back wall up high.
-	local tankTop = HABITAT_CENTRE + S7.TANK_OFFSET + Vector3.new(0, 9.1, 0)
-	local pipeY = 16.6
+	-- Ice goes from the silo's foot to the water plant's melter.
 	local pipeStyle: Style = { color = METAL, material = Enum.Material.Metal, collide = false, shadow = false }
-	local capTop = top + 0.8
-	vcylinder(m, "TankPipe", pipeY - capTop, 0.7, Vector3.new(c.X, (pipeY + capTop) / 2, c.Z), pipeStyle)
-	pipe(m, "TankPipe", Vector3.new(c.X, pipeY, c.Z), Vector3.new(c.X, pipeY, tankTop.Z), 0.7, pipeStyle)
-	pipe(m, "TankPipe", Vector3.new(c.X, pipeY, tankTop.Z), Vector3.new(tankTop.X, pipeY, tankTop.Z), 0.7, pipeStyle)
-	vcylinder(m, "TankPipe", pipeY - tankTop.Y, 0.7, Vector3.new(tankTop.X, (pipeY + tankTop.Y) / 2, tankTop.Z), pipeStyle)
-	for _, corner in { Vector3.new(c.X, pipeY, c.Z), Vector3.new(c.X, pipeY, tankTop.Z), Vector3.new(tankTop.X, pipeY, tankTop.Z) } do
-		ball(m, "TankPipeJoint", 0.85, corner, pipeStyle)
-	end
+	local from = c + layout.toPort * (SILO_GLASS_DIAMETER / 2 + 0.6) + Vector3.new(0, 1.4, 0)
+	local to = layout.plant - layout.toPort * 2.6 + Vector3.new(0, 1.4, 0)
+	pipe(m, "MelterPipe", from, to, 0.8, pipeStyle)
 
-	-- Ice sign facing away from the habitat (where players walk up to it).
-	local sign = part(m, "SiloSign", Vector3.new(2.4, 2.4, 0.2), CFrame.new(c + Vector3.new(0, 6.5, -(SILO_GLASS_DIAMETER / 2 + 0.2))), {
+	-- Ice sign facing the path to the hub.
+	local signAt = c + layout.toPort * (SILO_GLASS_DIAMETER / 2 + 0.25) + Vector3.new(0, 7, 0)
+	local sign = part(m, "SiloSign", Vector3.new(2.4, 2.4, 0.2), CFrame.lookAt(signAt, signAt + layout.toPort), {
 		color = PALETTE.night,
 		material = Enum.Material.SmoothPlastic,
 		collide = false,
 		shadow = false,
 	})
-	local signGui = Instance.new("SurfaceGui")
-	signGui.Name = "SiloIcon"
-	signGui.Face = Enum.NormalId.Front
-	signGui.LightInfluence = 0
-	signGui.CanvasSize = Vector2.new(64, 64)
-	signGui.Parent = sign
-	local signIcon = Instance.new("ImageLabel")
-	signIcon.BackgroundTransparency = 1
-	signIcon.Size = UDim2.fromScale(0.8, 0.8)
-	signIcon.Position = UDim2.fromScale(0.1, 0.1)
-	signIcon.Image = Icons.ice
-	signIcon.ImageColor3 = ACCENT_SYSTEM
-	signIcon.Parent = signGui
+	iconSign(sign, { Icons.ice }, { ACCENT_SYSTEM })
 
 	-- Claim prompt (BaseService decides when it is usable).
 	local promptPoint = Instance.new("Attachment")
@@ -456,7 +543,7 @@ function Six.buildSilo(base: Instance, pipeEnd: Vector3): SiloRefs
 	promptPoint.Parent = siloBase
 	local prompt = Instance.new("ProximityPrompt")
 	prompt.Name = "SiloPrompt"
-	prompt.ActionText = "Collect ice"
+	prompt.ActionText = "Send ice to the base"
 	prompt.ObjectText = ""
 	prompt.HoldDuration = 0.5
 	prompt.MaxActivationDistance = PROMPT_DISTANCE
@@ -470,16 +557,162 @@ function Six.buildSilo(base: Instance, pipeEnd: Vector3): SiloRefs
 		fill = fill,
 		light = light,
 		ring = ring,
+		capRing = capRing,
 		prompt = prompt,
+		centre = c,
 		bottomY = c.Y + glassBottom,
 		height = fillHeight,
 		diameter = fillDiameter,
+		top = top,
+		marker = c + layout.toPort * (SILO_GLASS_DIAMETER / 2 + 2) + Vector3.new(0, 3, 0),
 	}
 end
 
-type CargoRefs = { model: Model, root: Part, load: Part, route: Polyline }
+export type PlantRefs = { model: Model, lamp: Part, water: Part }
 
--- The cargo robot: a small wheeled cart with an ice bin, parked at its dock by the silo.
+-- Stage 11 tycoon: the water plant (stands with the first drill). A melter tank turns silo ice into
+-- water (a warm heater ring, a window with the water inside), a rack of water tanks at the robot's
+-- dock and a sign that reads ice -> water -> air in icons. Its lamp is the plant's status light.
+function Six.buildWaterPlant(base: Instance, layout: WorksLayout): PlantRefs
+	local m = model(base, "WaterPlant")
+	local c = layout.plant
+	local face = CFrame.lookAt(c, c + layout.toPort) -- -Z faces the hub
+	local function at(x: number, y: number, z: number): Vector3
+		return (face * CFrame.new(x, y, z)).Position
+	end
+	local hull: Style = { color = WHITE_HULL, material = Enum.Material.SmoothPlastic }
+	local dark: Style = { color = DARK_METAL, material = Enum.Material.Metal }
+	part(m, "PlantSlab", Vector3.new(9, 0.6, 8), face * CFrame.new(0, 0.3, 0), dark)
+	vcylinder(m, "Melter", 6, 5.4, at(0, 3.6, 0.6), hull)
+	vcylinder(m, "MelterRoof", 0.6, 5.8, at(0, 6.9, 0.6), { color = METAL, material = Enum.Material.Metal })
+	vcylinder(m, "Heater", 0.35, 5.6, at(0, 1.4, 0.6), { color = ROLE.warning, material = Enum.Material.Neon, collide = false, shadow = false })
+	-- Water window on the hub side: a glass strip with the water inside.
+	part(m, "WaterWindow", Vector3.new(1.6, 4, 0.2), face * CFrame.new(0, 3.8, -2.15), {
+		color = Color3.fromRGB(210, 230, 240),
+		material = Enum.Material.Glass,
+		transparency = 0.5,
+		collide = false,
+		shadow = false,
+	})
+	local water = part(m, "PlantWater", Vector3.new(1.3, 2.6, 0.12), face * CFrame.new(0, 3.1, -2.05), {
+		color = WATER_COLOUR,
+		material = Enum.Material.Neon,
+		transparency = 0.15,
+		collide = false,
+		shadow = false,
+	})
+	-- Water tanks waiting for the robot, on a rack at the dock.
+	for i, x in { -2.6, -1.3 } do
+		vcylinder(m, "WaterTank" .. i, 1.8, 0.9, at(x - 1.2, 1.5, -3.2), { color = WATER_COLOUR, material = Enum.Material.SmoothPlastic, collide = false })
+	end
+	-- The chain in icons: ice -> water -> air (a sign on a post facing the hub).
+	local signAt = at(2.9, 4.6, -3.3)
+	vcylinder(m, "ChainSignPost", 4, 0.3, at(2.9, 2, -3.3), { color = METAL, material = Enum.Material.Metal, collide = false })
+	local sign = part(m, "ChainSign", Vector3.new(3.6, 1.3, 0.15), CFrame.lookAt(signAt, signAt + layout.toPort), {
+		color = PALETTE.night,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+		shadow = false,
+	})
+	iconSign(sign, { Icons.ice, Icons.drop, Icons.air }, { ICE_GLOW, ROLE.accent, ROLE.good })
+	local lamp = statusLamp(m, "PlantLamp", at(-3.6, 0.6, -3.2), 2.6)
+	return { model = m, lamp = lamp, water = water }
+end
+
+export type AirRefs = { model: Model, lamp: Part, fan: Part }
+
+-- Stage 11 tycoon: the air maker (stands with the cargo robot). Electricity splits water into oxygen
+-- (real: the ISS Oxygen Generation System, DATA_SOURCES.md), so it has a power box with a cable and
+-- two glass tubes where the client shows bubbles, and a fan on top. Its lamp: green making air,
+-- amber no power.
+function Six.buildAirMaker(base: Instance, layout: WorksLayout): AirRefs
+	local m = model(base, "AirMaker")
+	local c = layout.air
+	local face = CFrame.lookAt(c, c + layout.toPort)
+	local function at(x: number, y: number, z: number): Vector3
+		return (face * CFrame.new(x, y, z)).Position
+	end
+	local hull: Style = { color = WHITE_HULL, material = Enum.Material.SmoothPlastic }
+	local dark: Style = { color = DARK_METAL, material = Enum.Material.Metal }
+	part(m, "AirSlab", Vector3.new(6, 0.6, 6), face * CFrame.new(0, 0.3, 0), dark)
+	part(m, "AirBody", Vector3.new(4.6, 3.6, 3.6), face * CFrame.new(0, 2.4, 0.4), hull)
+	part(m, "AirTrim", Vector3.new(4.7, 0.3, 3.7), face * CFrame.new(0, 4.1, 0.4), { color = ROLE.accent, material = Enum.Material.Neon, collide = false, shadow = false })
+	local tubeHeight = 4.2
+	for i, x in { -1.1, 1.1 } do
+		local foot = at(x, 0.6, -2)
+		local tube = vcylinder(m, "SplitTube" .. i, tubeHeight, 1, foot + Vector3.new(0, tubeHeight / 2, 0), {
+			color = Color3.fromRGB(210, 230, 240),
+			material = Enum.Material.Glass,
+			transparency = 0.55,
+			collide = false,
+			shadow = false,
+		})
+		tube:SetAttribute("SBO_TubeFoot", foot) -- the client's bubbles rise from here
+		tube:SetAttribute("SBO_TubeHeight", tubeHeight)
+		vcylinder(m, "SplitWater" .. i, tubeHeight - 0.8, 0.7, foot + Vector3.new(0, (tubeHeight - 0.8) / 2 + 0.2, 0), {
+			color = WATER_COLOUR,
+			material = Enum.Material.Neon,
+			transparency = 0.45,
+			collide = false,
+			shadow = false,
+		})
+	end
+	-- The fan on top (spun by the client) and its housing.
+	vcylinder(m, "FanHousing", 0.4, 2.8, at(0, 4.5, 0.6), dark)
+	local fan = part(m, "AirFan", Vector3.new(2.4, 0.15, 0.4), face * CFrame.new(0, 4.85, 0.6), { color = METAL, material = Enum.Material.Metal, collide = false, shadow = false })
+	fan:SetAttribute("SBO_RestCFrame", fan.CFrame)
+	-- Power box with the power icon, and a cable toward the hub (machines need electricity).
+	local box = part(m, "PowerBox", Vector3.new(1.4, 1.8, 1), face * CFrame.new(2.9, 1.5, 0.4), dark)
+	local boxFront = Instance.new("SurfaceGui")
+	boxFront.Name = "PowerIcon"
+	boxFront.Face = Enum.NormalId.Front
+	boxFront.LightInfluence = 0
+	boxFront.CanvasSize = Vector2.new(64, 64)
+	boxFront.Parent = box
+	local bolt = Instance.new("ImageLabel")
+	bolt.BackgroundTransparency = 1
+	bolt.Size = UDim2.fromScale(0.8, 0.8)
+	bolt.Position = UDim2.fromScale(0.1, 0.1)
+	bolt.Image = Icons.power
+	bolt.ImageColor3 = ROLE.warning
+	bolt.Parent = boxFront
+	local cableFrom = at(2.9, 0.7, -0.2)
+	belt(m, "PowerCable", cableFrom, cableFrom + layout.toPort * 6, 0.3, 0.2, { color = ROLE.warning, material = Enum.Material.SmoothPlastic, collide = false, shadow = false })
+	-- Water comes in from the plant.
+	local plantSide = layout.plant + Vector3.new(0, 1.2, 0) + flatUnit(c - layout.plant, Vector3.xAxis) * 2.7
+	pipe(m, "WaterInPipe", at(-2.3, 1.2, 0.4), plantSide, 0.6, { color = METAL, material = Enum.Material.Metal, collide = false, shadow = false })
+	local lamp = statusLamp(m, "AirLamp", at(-2.4, 0.6, -2.4), 3.2)
+	return { model = m, lamp = lamp, fan = fan }
+end
+
+export type PortRefs = { model: Model, lamp: Part }
+
+-- Stage 11 tycoon: the supply port on the hub wall where the cargo robot hands in its tanks.
+function Six.buildSupplyPort(base: Instance, layout: WorksLayout): PortRefs
+	local m = model(base, "SupplyPort")
+	local c = layout.port
+	local face = CFrame.lookAt(c, c + layout.portDir) -- -Z faces out of the hub
+	local hull: Style = { color = WHITE_HULL, material = Enum.Material.SmoothPlastic }
+	part(m, "PortBox", Vector3.new(3.2, 3.4, 2), face * CFrame.new(0, 1.7, 0), hull)
+	part(m, "PortHatch", Vector3.new(2.2, 2, 0.15), face * CFrame.new(0, 1.8, -1.05), { color = DARK_METAL, material = Enum.Material.Metal, collide = false })
+	part(m, "PortFrame", Vector3.new(2.6, 0.25, 0.2), face * CFrame.new(0, 2.95, -1.05), { color = ROLE.accent, material = Enum.Material.Neon, collide = false, shadow = false })
+	local signAt = (face * CFrame.new(0, 4.1, -1.02)).Position
+	local sign = part(m, "PortSign", Vector3.new(2.4, 0.9, 0.12), CFrame.lookAt(signAt, signAt + layout.portDir), {
+		color = PALETTE.night,
+		material = Enum.Material.SmoothPlastic,
+		collide = false,
+		shadow = false,
+	})
+	iconSign(sign, { Icons.drop, Icons.air }, { ROLE.accent, ROLE.good })
+	local lamp = statusLamp(m, "PortLamp", (face * CFrame.new(1.9, 0, -1.4)).Position, 2.2)
+	return { model = m, lamp = lamp }
+end
+
+export type CargoRefs = { model: Model, root: Part, loads: { BasePart }, route: Polyline }
+
+-- The cargo robot: a small wheeled cart with a bin, parked at its dock at the water plant. Stage 11:
+-- it carries tanks (water, or air with a powered air maker) to the hub's supply port. The client moves
+-- it from the line folder's SBO_Cargo* attributes; the server only pays on arrival (BaseService).
 function Six.buildCargoBot(base: Instance, route: Polyline): CargoRefs
 	local m = model(base, "CargoRobot")
 	local start = route.points[1]
@@ -489,19 +722,24 @@ function Six.buildCargoBot(base: Instance, route: Polyline): CargoRefs
 	end
 	local glow: Style = { color = ACCENT_SYSTEM, material = Enum.Material.Neon, collide = false, shadow = false }
 	local root = part(m, "Body", Vector3.new(3, 1.2, 4.2), cf, style(WHITE_HULL, Enum.Material.SmoothPlastic))
+	root:SetAttribute("SBO_RestCFrame", cf)
 	local attached: { BasePart } = {}
 	local function add(p: BasePart)
 		table.insert(attached, p)
 	end
 	add(part(m, "Bin", Vector3.new(2.8, 1, 2.8), cf * CFrame.new(0, 1.05, 0.5), style(DARK_METAL, Enum.Material.Metal)))
-	local load = part(m, "IceLoad", Vector3.new(2.3, 0.45, 2.3), cf * CFrame.new(0, 1.65, 0.5), {
-		color = ICE_LOAD,
-		material = Enum.Material.Ice,
-		transparency = 1,
-		collide = false,
-		shadow = false,
-	})
-	add(load)
+	local loads: { BasePart } = {}
+	for i, x in { -0.65, 0.65 } do
+		local tank = cylinder(m, "TankLoad" .. i, 1.6, 1, cf * CFrame.new(x, 2.1, 0.5) * CFrame.Angles(0, 0, math.rad(90)), {
+			color = WATER_COLOUR,
+			material = Enum.Material.SmoothPlastic,
+			transparency = 1,
+			collide = false,
+			shadow = false,
+		})
+		add(tank)
+		table.insert(loads, tank)
+	end
 	local wheelStyle = style(Color3.fromRGB(44, 46, 52), Enum.Material.Rubber)
 	for _, wx in { -1.7, 1.7 } do
 		for _, wz in { -1.4, 1.4 } do
@@ -515,7 +753,7 @@ function Six.buildCargoBot(base: Instance, route: Polyline): CargoRefs
 	add(part(m, "Mast", Vector3.new(0.2, 1.2, 0.2), cf * CFrame.new(1.1, 1.2, -1.6), style(METAL, Enum.Material.Metal)))
 	add(ball(m, "Beacon", 0.45, (cf * CFrame.new(1.1, 1.9, -1.6)).Position, glow))
 	weldTo(root, attached)
-	return { model = m, root = root, load = load, route = route }
+	return { model = m, root = root, loads = loads, route = route }
 end
 
 type PadRefs = { pad: Part, prompt: ProximityPrompt }

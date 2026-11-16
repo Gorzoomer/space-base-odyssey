@@ -14,10 +14,13 @@
 --    The impact model carries attribute SBO_ImpactId (a serial number) and SBO_ExpiresAt (server
 --    time); a player who scanned it gets the player attribute SBO_ScannedImpact = that serial, so
 --    C.A.R.L.'s guidance (client) knows who still has to look at it.
--- 3) DebugMeteor (DemoKeys F2, Studio or the place owner only): an impact lands near that player now.
+-- 3) DebugMeteor (DemoKeys F2, Studio only since Stage 11): an impact lands near that player now.
 --    BaseService routes the action here through BaseService.setDebugMeteorHook.
 -- Server authoritative: prompt distance, the tablet in hand and the cooldown are checked here.
 -- Stage 9: onScan tells listeners (QuestService) about every accepted scan of a site or a crater.
+-- Stage 11 "safer server": an impact remembers who scanned it by UserId and keeps that when they leave,
+-- so leaving and joining again never pays REWARDS.meteor_scanned twice for the same crater; a player
+-- who comes back gets SBO_ScannedImpact again.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -88,7 +91,7 @@ type Impact = {
 	model: Model,
 	prompt: ProximityPrompt?,
 	connection: RBXScriptConnection?,
-	scannedBy: { [Player]: boolean },
+	scannedBy: { [number]: boolean }, -- Stage 11: UserIds (kept when a player leaves)
 }
 
 local started = false
@@ -481,9 +484,9 @@ local function onImpactScanned(player: Player, impact: Impact)
 		sayTo(player, "carl.tool.need_tablet_scan")
 		return
 	end
-	local isNew = not impact.scannedBy[player]
+	local isNew = not impact.scannedBy[player.UserId]
 	if isNew then
-		impact.scannedBy[player] = true
+		impact.scannedBy[player.UserId] = true
 		reward(player, "meteor_scanned")
 		player:SetAttribute("SBO_ScannedImpact", impact.serial)
 	end
@@ -608,9 +611,13 @@ function ExploreService.start(worldRefs: any, baseService: any, toolService: any
 	Players.PlayerRemoving:Connect(function(player: Player)
 		lastScanAt[player] = nil
 		sessionScanned[player] = nil
+		-- Stage 11: impact.scannedBy keeps the UserId (the table goes with the impact).
+	end)
+	-- Stage 11: a player who scanned the crater, left and came back still has it scanned.
+	Players.PlayerAdded:Connect(function(player: Player)
 		local impact = active
-		if impact then
-			impact.scannedBy[player] = nil
+		if impact and impact.scannedBy[player.UserId] then
+			player:SetAttribute("SBO_ScannedImpact", impact.serial)
 		end
 	end)
 
@@ -626,7 +633,7 @@ function ExploreService.start(worldRefs: any, baseService: any, toolService: any
 	end)
 end
 
--- DebugMeteor: an impact lands near the player right now (Studio or the place owner only).
+-- DebugMeteor: an impact lands near the player right now (Studio only).
 function ExploreService.debugMeteor(player: Player, trusted: boolean?)
 	if not started or not isDebugAllowed(player, trusted) then
 		return

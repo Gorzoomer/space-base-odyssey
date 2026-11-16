@@ -19,8 +19,8 @@
 -- first. The queue waits while any full-screen panel is open (HOLD_PANELS: start menu, mission
 -- select, Lab, settings, wardrobe...). Right after a save slot loads nothing toasts (the quest in progress is not new): after a
 -- short settle time one card shows "Your quest right now". The memory resets when the slot changes
--- (player attributes SBO_Slot, SBO_SlotChosen, SBO_SlotLoading). No sound: the project has no UI
--- sound helper.
+-- (player attributes SBO_Slot, SBO_SlotChosen, SBO_SlotLoading). Stage 11 audio: each card plays a
+-- sound as it slides in (Audio.luau).
 -- Stage 10 learning achievements: QuestToasts.achievement(id, xp) queues an "Achievement unlocked!"
 -- card (the achievement's icon and title, +XP; no coin row since achievements pay no credits).
 -- AchievementsPanel.luau calls it when the server says one just unlocked.
@@ -44,6 +44,7 @@ local Types = require(Shared:WaitForChild("Types"))
 
 local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
+local Audio = require(script.Parent.Audio) -- Stage 11 audio
 
 local ROLE = Ui.ROLE
 
@@ -455,6 +456,12 @@ function QuestToasts.start(root: Frame)
 		layoutCard(card, toast)
 		card.frame.Position = hiddenPosition
 		card.frame.Visible = true
+		-- Stage 11 audio: achievement, quest complete, new quest, or a small pop for a step.
+		Audio.play(if toast.header == "ui.toast.achievement" then "achievement_unlock"
+			elseif toast.kind == "step" then "toast_pop"
+			elseif toast.reward ~= nil then "quest_complete"
+			elseif toast.header == "ui.toast.current" then "toast_pop"
+			else "quest_new")
 		TweenService:Create(card.frame, TweenInfo.new(SLIDE_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 			Position = shownPosition,
 		}):Play()

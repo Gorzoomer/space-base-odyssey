@@ -10,6 +10,7 @@ local TextService = game:GetService("TextService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Theme = require(Shared:WaitForChild("Theme"))
 local Icons = require(Shared:WaitForChild("Icons"))
+local Audio = require(script.Parent:WaitForChild("Audio")) -- Stage 11 audio
 
 local Ui = {}
 
@@ -444,7 +445,14 @@ function Ui.button(parent: Instance, props: Props, onClick: () -> ()): TextButto
 	button:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
 		layoutButton(button)
 	end)
-	button.Activated:Connect(onClick)
+	-- Stage 11 audio: a click (a "no" sound on a greyed-out button); close buttons leave it to the
+	-- panel's close sound (Ui.modal).
+	button.Activated:Connect(function()
+		if props.icon ~= Icons.close then
+			Audio.play(if button.AutoButtonColor then "ui_click" else "ui_error")
+		end
+		onClick()
+	end)
 	button.Parent = parent
 	layoutButton(button)
 	return button
@@ -586,6 +594,9 @@ function Ui.modal(parent: Instance, name: string, zindex: number): Frame
 		visible = false,
 	})
 	frame.Active = true
+	frame:GetPropertyChangedSignal("Visible"):Connect(function() -- Stage 11 audio: open / close
+		Audio.play(if frame.Visible then "ui_open" else "ui_close")
+	end)
 	return frame
 end
 

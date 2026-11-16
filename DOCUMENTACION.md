@@ -968,7 +968,7 @@ Además de los conjuntos de pruebas de Lune, el asistente de IA jugó cada etapa
 
 - **Restricción de edad.** Las experiencias nuevas de Roblox solo están abiertas para cuentas con verificación de edad de 16 años o más, hasta que pasen la evaluación de Roblox. Los niños del rango de edad al que va dirigido el juego todavía no pueden jugar la versión pública.
 - **Teléfonos.** La distribución para teléfonos todavía no se ha revisado en un dispositivo real.
-- **Todavía sin sonido.** Los controles deslizantes de volumen de música y efectos existen, listos para audio futuro, pero el juego no tiene sonidos.
+- **Sonido en el vacío.** En el espacio no hay sonido. Afuera, los sonidos del mundo son suaves y apagados, como sentidos a través del traje; los pitidos de radio se oyen claros. Dentro de los módulos los sonidos son normales. La música no es parte del mundo.
 - **Los datos en vivo necesitan HTTP.** Sin "Allow HTTP Requests", o si DONKI no responde en 15 segundos, el juego usa el archivo. Una llamarada solo se repite como falsa alarma cuando su estado de partículas ha tenido dos días para asentarse.
 - **Partidas guardadas en Studio.** En un lugar no publicado, las partidas guardadas viven en memoria y se pierden cuando se detiene Play. Los servidores reservados del modo "Solo yo" funcionan únicamente en el juego publicado.
 - **Ritmo del DataStore.** Roblox permite aproximadamente una escritura por clave cada 6 segundos, así que un "Guardar ahora" puede tardar unos segundos.
@@ -1135,7 +1135,7 @@ Probado en Studio:
   - Un haz de guía apunta a la siguiente tarea.
   - Unos 60 datos curiosos verificados aparecen al azar sin repetirse.
   - El aspecto de la Tierra ahora usa el mapa real de la Tierra.
-- **Configuración:** idioma, volumen de música y de efectos (listo para el audio futuro), interruptores de datos curiosos y de guía, y un cuadro para canjear códigos que se valida en el servidor.
+- **Configuración:** idioma, volumen de música y de efectos, interruptores de datos curiosos y de guía, y un cuadro para canjear códigos que se valida en el servidor.
 - **Reescritura en lenguaje sencillo** de todos los textos para edades de 7 a 12 años.
 
 Probado en Studio:
@@ -1396,7 +1396,7 @@ Las reglas la llaman "Super Intelligence (SI)".
 - La aprobación de los números.
 - Las pruebas de juego, la publicación, el video y la presentación.
 
-Cada archivo de código hecho con ayuda de la IA empieza con una línea de declaración. No se usan imágenes, video ni audio generados por IA.
+Cada archivo de código hecho con ayuda de la IA empieza con una línea de declaración. No se usan imágenes ni video generados por IA. La música y los efectos de sonido se sintetizan con código propio del equipo (escrito con ayuda de IA, sin ningún modelo generativo de audio), y cinco efectos mezclan grabaciones CC0 editadas.
 
 ### 5.6 Problemas conocidos
 
@@ -1799,6 +1799,15 @@ SOFTWARE.
 
 La Tierra que aparece en el juego usa la imagen de la NASA "Blue Marble: Land Surface, Ocean Color and Sea Ice" (NASA Visible Earth, NASA Goddard Space Flight Center), de dominio público, escalada a 1024x512. Crédito: NASA. El uso de material de la NASA no implica su respaldo. El archivo se tomó de la copia de dominio público en Wikimedia Commons ("Whole world - land and oceans.jpg"), porque el servidor de imágenes de la NASA no respondió.
 
+#### Grabaciones de sonido (CC0)
+
+La música y la mayoría de los efectos de sonido son audio original, sintetizado con código por el equipo. Cinco efectos mezclan partes editadas de estas grabaciones CC0 1.0 (dominio público) de Freesound, encontradas con Openverse. CC0 no exige atribución; se listan como cortesía. Ningún sonido del juego es CC BY. Los IDs de los assets de Roblox están en `src/shared/AudioIds.luau`.
+
+- "Ratchet Wrench Fast Multiple" de Rudmer_Rotteveel, https://freesound.org/people/Rudmer_Rotteveel/sounds/591529 (en `build_step`)
+- "Wrench Clanking" de magnuswaker, https://freesound.org/people/magnuswaker/sounds/530074 (en `build_step`)
+- "Heavy Metal Thud on Ground" de 7of9Designs, https://freesound.org/people/7of9Designs/sounds/640204 (en `crate_drop`, `shelter_enter` y `meteor_impact`)
+- "Footsteps Metallic Muffled.wav" de RutgerMuller, https://freesound.org/people/RutgerMuller/sounds/50723 (en `footstep_inside`)
+
 ### 6.3 Licencia
 
 Space Base Odyssey se publica bajo la **Apache License, Version 2.0** (enero de 2004). El texto completo está en el archivo `LICENSE`, en la raíz del repositorio. En resumen:
@@ -1843,4 +1852,4 @@ Usamos **Claude, de Anthropic**, dentro de **Claude Code**, como asistente de IA
 #### Declaración dentro del proyecto
 
 - Cada archivo de código hecho con ayuda de IA empieza con una línea de declaración: "SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team." ("Declaración de SI: generado con ayuda de IA (Claude, Anthropic) y revisado por el equipo."). El archivo de datos archivados de clima espacial (`src/shared/SpaceWeatherArchive.luau`) dice "compiled" ("recopilado") en lugar de "generated" ("generado"), porque contiene datos recopilados y no lógica escrita.
-- En el juego no se usan imágenes, video ni audio generados por IA. El mundo del juego se construye con piezas simples mediante código. Las únicas imágenes son los Tabler Icons y el mapa de la Tierra de la NASA, de dominio público, indicados en 6.2.
+- En el juego no se usan imágenes ni video generados por IA. La música y los efectos de sonido se sintetizan con código propio del equipo (scripts escritos con ayuda de IA; ningún modelo generativo de audio), y cinco efectos mezclan grabaciones CC0 editadas (6.2). El mundo del juego se construye con piezas simples mediante código. Las únicas imágenes son los Tabler Icons y el mapa de la Tierra de la NASA, de dominio público, indicados en 6.2.

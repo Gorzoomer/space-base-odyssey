@@ -33,6 +33,7 @@ local Theme = require(Shared:WaitForChild("Theme"))
 
 local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
+local Audio = require(script.Parent.Audio) -- Stage 11 audio
 
 local GAS = MissionData.BASE.GAS
 local INSIDE_ATTRIBUTE = "SBO_Inside"
@@ -436,6 +437,7 @@ function Gear.start(root: Frame, deps: Deps?)
 				if character:IsA("Model") then
 					bootPuff(character, rootPart)
 				end
+				Audio.play("boots_puff") -- Stage 11 audio
 				character:SetAttribute(DOUBLE_JUMP_AT_ATTRIBUTE, workspace:GetServerTimeNow())
 				jetReadyAt = now + JET_AFTER_DOUBLE
 			else
@@ -464,6 +466,7 @@ function Gear.start(root: Frame, deps: Deps?)
 				spend(usePerSecond * dt)
 				local rise = math.min(velocity.Y + GAS.JETPACK_ACCEL * dt, GAS.JETPACK_MAX_RISE)
 				rootPart.AssemblyLinearVelocity = Vector3.new(velocity.X, rise, velocity.Z)
+				Audio.hold("jetpack_loop") -- Stage 11 audio: on while the jets fire
 				if now - lastJetPuff >= JET_PUFF_EVERY then
 					lastJetPuff = now
 					jetPuff(rootPart)

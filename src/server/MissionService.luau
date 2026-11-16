@@ -27,6 +27,25 @@
 -- the same value. A storm day has one storm for the whole crew; only the training drill repeats, after
 -- STORM.RETRY_GAP_SECONDS and at most STORM.MAX_DRILLS times a shift. survive_storm counts per player.
 -- Stage 10 (learning achievements): onLearn tells AchievementService about science moments.
+-- Stage 11 "safer server" (rules in src/shared/ServerGuard.luau, numbers in MissionData.GUARD):
+--   * Every task prompt (panels, crater ice, water machine, leak, antenna, console) checks on the
+--     server that the player stands within the prompt's range (+ PROMPT_EXTRA_RANGE) and ignores
+--     repeats faster than PROMPT_MIN_GAP_SECONDS.
+--   * Ice: drilling is limited (GUARD.ICE_DRILLS_PER_MINUTE, one every ICE_DRILL_MIN_GAP_SECONDS) and
+--     each carried core remembers where and when it was drilled (an ice ticket). The water machine
+--     takes it only when it could really have travelled that far (GUARD.ICE_TRAVEL_MAX_SPEED), so a
+--     client cannot farm ice for credits by firing prompts. The ice hauler (VehicleService) takes the
+--     ticket with each core it loads (takeIceTicket, iceArrivalOk).
+--   * Mission actions (SetCells, StartMission, StartShift, Restart) need a loaded save slot, and the
+--     public lobby accepts no mission or base action at all.
+--   * Whether a structure stands comes from BaseService's effective builds, never from what the world
+--     shows (the start menu showcase shows everything built); when the showcase starts or ends
+--     (workspace attribute SBO_Showcase) the prompts are refreshed.
+--   * Open-world dust: in the open base (Briefing) dust slowly covers one standing solar panel
+--     (GUARD.ROAM_DUST_*); cleaning it with the brush pays panel_cleaned and counts for quests and
+--     achievements, so "clean a dusty panel" can always be done. No simulation change.
+--   * Snapshots from actions and task prompts are coalesced (scheduleBroadcast, at most one every
+--     BROADCAST_MIN_SECONDS); phase changes still send at once.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -38,6 +57,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local BaseBuild = require(Shared:WaitForChild("BaseBuild"))
 local MissionData = require(Shared:WaitForChild("MissionData"))
 local Missions = require(Shared:WaitForChild("Missions"))
+local ServerGuard = require(Shared:WaitForChild("ServerGuard")) -- Stage 11
 local Simulation = require(Shared:WaitForChild("Simulation"))
 local SpaceWeatherArchive = require(Shared:WaitForChild("SpaceWeatherArchive"))
 local Types = require(Shared:WaitForChild("Types"))
@@ -112,6 +132,8 @@ export type ProgressApi = {
 	redeemCode: (player: Player, code: any) -> (),
 	-- Stage 9: true once the player's save slot is loaded (players on the start menu are not playing).
 	isLoaded: ((player: Player) -> boolean)?,
+	-- Stage 10 fix (optional): "lobby" | "world" | "local". Stage 11: the lobby takes no game actions.
+	role: (() -> string)?,
 }
 
 type StormStage = "quiet" | "warning" | "storm" | "over"
@@ -170,6 +192,17 @@ local BASE_DEBUG_ACTIONS: { [string]: boolean } = { DebugGrantCredits = true, De
 local CARRYING_CRATE_ATTRIBUTE = "SBO_CarryingCrate"
 -- At most this many ice cores in one hauler delivery (a sanity cap, well above the hauler's cargo).
 local MAX_ICE_PER_DELIVERY = 20
+-- Stage 11 (technical settings, not gameplay numbers; gameplay limits are MissionData.GUARD).
+local PROMPT_EXTRA_RANGE = 8 -- studs beyond a prompt's own range (lag), checked on the server
+local PROMPT_MIN_GAP_SECONDS = 0.25 -- the same player triggering the same prompt faster is ignored
+local DRILL_WINDOW_SECONDS = 60 -- GUARD.ICE_DRILLS_PER_MINUTE counts over this window
+local BROADCAST_MIN_SECONDS = 0.1 -- coalesced snapshots: at most one this often
+local ROAM_DUST_TICK_SECONDS = 1
+local GUARD = MissionData.GUARD
+-- Mission actions a player may only send with a loaded save slot.
+local MISSION_FLOW_ACTIONS: { [string]: boolean } = { SetCells = true, StartMission = true, StartShift = true, Restart = true }
+-- Actions the public lobby still accepts (the start menu's Settings panel).
+local LOBBY_ACTIONS: { [string]: boolean } = { SetLanguage = true, RedeemCode = true }
 
 local MissionService = {}
 
@@ -217,6 +250,18 @@ local autoCompleteQueued = false
 local broadcastQueued = false
 local lastLive: LiveMeters? = nil -- live meters in the last snapshot sent during a shift
 local lastLivePushAt = -math.huge
+local lastBroadcastAt = -math.huge -- Stage 11: os.clock() of the last snapshot sent to everyone
+local lastBroadcastRequestAt = -math.huge -- Stage 11: os.clock() of the newest scheduleBroadcast
+
+-- Stage 11: where and when the core a player carries was drilled (os.clock()), drilling times for the
+-- rate limit, and the last time each player triggered each task prompt.
+type IceTicket = { at: number, from: Vector3 }
+local iceTickets: { [Player]: IceTicket } = {}
+local drillTimes: { [Player]: { number } } = {}
+local promptTimes: { [Player]: { [Instance]: number } } = {}
+-- Stage 11: open-world dust (os.clock() times).
+local roamOpenSince = os.clock()
+local roamLastDustAt: number? = nil
 
 -- Stage 9: QuestService listeners.
 export type BaseActionStage = "before" | "after"
@@ -286,6 +331,9 @@ local function sayLater(key: string, params: Params?)
 end
 
 local function setPhase(newPhase: Phase)
+	if newPhase == "Briefing" and phase ~= "Briefing" then
+		roamOpenSince = os.clock() -- Stage 11: open-world dust waits a while after the base opens
+	end
 	phase = newPhase
 	phaseSerial += 1
 	-- Base mode: suits drain outside while players roam between shifts (refills then are free).
@@ -323,6 +371,73 @@ end
 
 local function countPlayers(): number
 	return math.max(1, #activePlayers())
+end
+
+-- Stage 11: true once the player's save slot is loaded (always true without ProgressService).
+local function playerLoaded(player: Player): boolean
+	local api = progress
+	local isLoaded = if api then api.isLoaded else nil
+	if isLoaded == nil then
+		return true
+	end
+	local ok, loaded = pcall(isLoaded, player)
+	return ok and loaded == true
+end
+
+-- Stage 11: true in the public lobby (only the start menu runs there).
+local function inLobby(): boolean
+	local api = progress
+	local role = if api then api.role else nil
+	if role == nil then
+		return false
+	end
+	local ok, value = pcall(role)
+	return ok and value == "lobby"
+end
+
+local function promptPosition(prompt: ProximityPrompt): Vector3?
+	local parent = prompt.Parent
+	if parent and parent:IsA("BasePart") then
+		return parent.Position
+	elseif parent and parent:IsA("Attachment") then
+		return parent.WorldPosition
+	elseif parent and parent:IsA("Model") then
+		return parent:GetPivot().Position
+	end
+	return nil
+end
+
+-- Stage 11: the prompt is triggered by the client; check the character really stands next to it.
+local function closeEnough(player: Player, prompt: ProximityPrompt): boolean
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local position = promptPosition(prompt)
+	if root == nil or not root:IsA("BasePart") or position == nil then
+		return false
+	end
+	return (root.Position - position).Magnitude <= prompt.MaxActivationDistance + PROMPT_EXTRA_RANGE
+end
+
+local function flatDistance(a: Vector3, b: Vector3): number
+	return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude
+end
+
+-- Stage 11: where the water machine takes ice (the processor prompt), or nil.
+local function processorPosition(): Vector3?
+	local prompt = world and world.processorPrompt
+	if typeof(prompt) == "Instance" and prompt:IsA("ProximityPrompt") then
+		return promptPosition(prompt)
+	end
+	return nil
+end
+
+-- Stage 11: could a core drilled at `from` at os.clock() `at` have reached the water machine by now?
+local function iceArrived(from: Vector3, at: number): boolean
+	local target = processorPosition()
+	if target == nil then
+		return true
+	end
+	return ServerGuard.travelOk(flatDistance(from, target), os.clock() - at, GUARD.ICE_TRAVEL_MAX_SPEED)
 end
 
 local function countDusty(): number
@@ -368,9 +483,12 @@ local function buildLevel(id: string): number
 	return if type(value) == "number" then value else 0
 end
 
--- Is a structure standing? The world decides when it can tell (it shows the structure), else the
--- effective builds.
+-- Is a structure standing? Stage 11: BaseService's effective builds decide (the world may be showing
+-- the start menu showcase, where everything looks built). Without BaseService the world tells.
 local function structureBuilt(id: string): boolean
+	if baseApi ~= nil then
+		return buildLevel(id) >= 1
+	end
 	local isBuilt = world and world.isBuilt
 	if type(isBuilt) == "function" then
 		local ok, built = pcall(isBuilt, id)
@@ -384,6 +502,14 @@ end
 -- Solar arrays standing for a new mission: the effective solar level, at least 1.
 local function solarArrays(): number
 	return math.clamp(math.floor(buildLevel("solar")), 1, MissionData.POWER.ARRAYS)
+end
+
+-- Stage 11: solar arrays standing in the open base (0 before the solar build stands).
+local function roamArrays(): number
+	if not structureBuilt("solar") then
+		return 0
+	end
+	return math.clamp(math.floor(buildLevel("solar")), 0, MissionData.POWER.ARRAYS)
 end
 
 -- C.A.R.L. line for "build this first" (only the builds missions need have their own line).
@@ -732,6 +858,7 @@ local function buildSnapshot(): Snapshot
 end
 
 local function broadcast()
+	lastBroadcastAt = os.clock()
 	if remotes then
 		local snapshot = buildSnapshot()
 		remotes.snapshot:FireAllClients(snapshot)
@@ -765,16 +892,29 @@ local function pushLiveIfChanged()
 	end
 end
 
--- One snapshot at the end of this frame, however many objective counters changed.
+-- One snapshot soon, however many objective counters or actions changed meanwhile. Stage 11: at most
+-- one every BROADCAST_MIN_SECONDS, and none when a snapshot already went out after the request.
 local function scheduleBroadcast()
+	-- Stage 11 review: the newest request counts (a change after a snapshot that went out meanwhile
+	-- must still be sent).
+	lastBroadcastRequestAt = os.clock()
 	if broadcastQueued then
 		return
 	end
 	broadcastQueued = true
-	task.defer(function()
+	local delay = math.max(0, lastBroadcastAt + BROADCAST_MIN_SECONDS - lastBroadcastRequestAt)
+	local function send()
 		broadcastQueued = false
+		if lastBroadcastAt > lastBroadcastRequestAt then
+			return -- a later snapshot already carried every requested change
+		end
 		broadcast()
-	end)
+	end
+	if delay <= 0 then
+		task.defer(send)
+	else
+		task.delay(delay, send)
+	end
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -893,8 +1033,12 @@ local function refreshWorld()
 	-- Set after the world's own prompt refresh: unbuilt structures keep their prompts off.
 	local solarBuilt = structureBuilt("solar")
 	local habitatStands = habitatBuilt()
+	-- Stage 11: in the open base a panel the roaming dust covered can be cleaned too.
+	local baseArrays = if baseMode then roamArrays() else 0
 	for i, ref in world.arrays do
-		setPromptEnabled(ref.prompt, inShift and solarBuilt and i <= state.arrays and dusty[i] == true)
+		local shiftDusty = inShift and i <= state.arrays
+		local roamDusty = baseMode and i <= baseArrays
+		setPromptEnabled(ref.prompt, solarBuilt and (shiftDusty or roamDusty) and dusty[i] == true)
 	end
 	for i, node in world.iceNodes do
 		setPromptEnabled(node.prompt, (inShift and not iceUsed[i]) or baseMode)
@@ -1586,7 +1730,73 @@ end
 ----------------------------------------------------------------------------------------------------
 -- Shift task prompts
 
+-- Stage 11: a panel covered by open-world dust, cleaned in the open base (Briefing). Pays like a
+-- shift panel and counts for quests and achievements; no mission or simulation change.
+local function onRoamArrayCleaned(player: Player, index: number)
+	if not dusty[index] or index > roamArrays() then
+		return
+	end
+	if not hasToolInHand(player, "brush") then
+		return
+	end
+	dusty[index] = false
+	sayTo(player, "carl.panel_clean")
+	reward(player, "panel_cleaned")
+	fire(panelListeners, "panel cleaned", player)
+	refreshWorld()
+end
+
+-- Stage 11: in the open base, dust slowly covers one standing solar panel (MissionData.GUARD
+-- ROAM_DUST_*). Only while someone with a loaded slot plays; C.A.R.L. tells them once.
+local function roamDustTick()
+	local t = os.clock()
+	local players = activePlayers()
+	if phase ~= "Briefing" or #players == 0 or world == nil then
+		roamOpenSince = t -- the open-base clock starts when someone plays in the open base
+		return
+	end
+	local standing = roamArrays()
+	local dustyNow = 0
+	for i = 1, standing do
+		if dusty[i] then
+			dustyNow += 1
+		end
+	end
+	if not ServerGuard.roamDustDue(
+		roamOpenSince,
+		roamLastDustAt,
+		t,
+		GUARD.ROAM_DUST_FIRST_SECONDS,
+		GUARD.ROAM_DUST_EVERY_SECONDS,
+		dustyNow,
+		standing,
+		GUARD.ROAM_DUST_MAX_ARRAYS
+	) then
+		return
+	end
+	local clean: { number } = {}
+	for i = 1, math.min(standing, #world.arrays) do
+		if not dusty[i] then
+			table.insert(clean, i)
+		end
+	end
+	if #clean == 0 then
+		return
+	end
+	local index = clean[math.random(1, #clean)]
+	dusty[index] = true
+	roamLastDustAt = t
+	for _, player in players do
+		sayTo(player, "carl.dust_roam")
+	end
+	refreshWorld()
+end
+
 local function onArrayCleaned(player: Player, index: number)
+	if phase == "Briefing" then
+		onRoamArrayCleaned(player, index)
+		return
+	end
 	if phase ~= "Shift" or shift == nil or shiftData == nil or not dusty[index] then
 		return
 	end
@@ -1604,7 +1814,7 @@ local function onArrayCleaned(player: Player, index: number)
 	reward(player, "panel_cleaned")
 	fire(panelListeners, "panel cleaned", player)
 	refreshWorld()
-	broadcast()
+	scheduleBroadcast()
 end
 
 -- During a shift each ice spot gives one core. Base mode (Briefing): the crater is open for manual
@@ -1625,6 +1835,25 @@ local function onIceDrilled(player: Player, index: number)
 	end
 	if not hasToolInHand(player, "drill") then
 		return
+	end
+	-- Stage 11: drilling is limited per player (GUARD), and the core remembers where and when it was
+	-- drilled (the water machine checks the trip).
+	local times = drillTimes[player]
+	if times == nil then
+		times = {}
+		drillTimes[player] = times
+	end
+	if not ServerGuard.allowInWindow(times, os.clock(), DRILL_WINDOW_SECONDS, GUARD.ICE_DRILLS_PER_MINUTE, GUARD.ICE_DRILL_MIN_GAP_SECONDS) then
+		sayTo(player, "carl.drill_rest") -- Stage 11 review: the kid has no ice yet ("bring the ice" was odd)
+		return
+	end
+	local node = world.iceNodes[index]
+	local nodePart = if node then node.part else nil
+	local from = if typeof(nodePart) == "Instance" and nodePart:IsA("BasePart") then nodePart.Position else nil
+	if from then
+		iceTickets[player] = { at = os.clock(), from = from }
+	else
+		iceTickets[player] = nil
 	end
 	if phase == "Shift" and shift ~= nil then
 		if iceUsed[index] then
@@ -1649,20 +1878,28 @@ local function onIceDelivered(player: Player)
 	if not crew.isCarrying(player) or not habitatBuilt() then
 		return
 	end
+	-- Stage 11: a core cannot arrive faster than it can travel from the spot it was drilled.
+	local ticket = iceTickets[player]
+	if ticket and (phase == "Shift" or phase == "Briefing" or phase == "Planning") and not iceArrived(ticket.from, ticket.at) then
+		sayTo(player, "carl.ice_wait")
+		return
+	end
 	if phase == "Shift" and shift ~= nil then
+		iceTickets[player] = nil
 		crew.setCarrying(player, false)
 		shift.iceCoresDelivered += 1
 		say("carl.ice_delivered")
 		addProgress("deliver_ice")
 		addProgress("deliver_ice_total")
 		reward(player, "ice_delivered")
-		broadcast()
+		scheduleBroadcast()
 		fire(iceDeliveredListeners, "ice delivered", player, 1)
 		if state.allocation.LifeSupport > 0 then
 			-- Water plus electricity: the powered air maker turns this ice into air.
 			fire(learnListeners, "learn", { player }, "air_from_water")
 		end
 	elseif phase == "Briefing" or phase == "Planning" then
+		iceTickets[player] = nil
 		crew.setCarrying(player, false)
 		sayTo(player, "carl.ice_saved")
 		reward(player, "ice_delivered")
@@ -1683,7 +1920,7 @@ local function onLeakRepaired(player: Player)
 	addProgress("repair_leak")
 	reward(player, "leak_repaired")
 	refreshWorld()
-	broadcast()
+	scheduleBroadcast()
 end
 
 local function onAntennaAligned(player: Player)
@@ -1721,7 +1958,7 @@ local function onAntennaAligned(player: Player)
 		mars = MissionData.REAL.MARS_LIGHT_TIME_MAX_MIN,
 	})
 	refreshWorld()
-	broadcast()
+	scheduleBroadcast()
 end
 
 local function onConsole(player: Player)
@@ -1731,9 +1968,32 @@ local function onConsole(player: Player)
 	sayTo(player, "carl.plan_hint")
 end
 
+-- Stage 11: the server checks the distance to the prompt and ignores fast repeats before any handler.
+local function promptAllowed(player: Player, prompt: ProximityPrompt): boolean
+	if not closeEnough(player, prompt) then
+		return false
+	end
+	local times = promptTimes[player]
+	if times == nil then
+		times = {}
+		promptTimes[player] = times
+	end
+	local t = os.clock()
+	local last = times[prompt]
+	if last ~= nil and t - last < PROMPT_MIN_GAP_SECONDS then
+		return false
+	end
+	times[prompt] = t
+	return true
+end
+
 local function connectPrompt(prompt: any, handler: (player: Player) -> ())
 	if typeof(prompt) == "Instance" and prompt:IsA("ProximityPrompt") then
-		prompt.Triggered:Connect(function(player: Player)
+		local proximity = prompt :: ProximityPrompt
+		proximity.Triggered:Connect(function(player: Player)
+			if not playerLoaded(player) or not promptAllowed(player, proximity) then
+				return
+			end
 			local ok, err = pcall(handler, player)
 			if not ok then
 				warn(`[SpaceBaseOdyssey] prompt handler failed: {err}`)
@@ -1864,6 +2124,16 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 	end
 	local kind: string = action.type
 
+	-- Stage 11: the public lobby only runs the start menu; mission actions need a loaded save slot.
+	if not trusted and player then
+		if inLobby() and not LOBBY_ACTIONS[kind] then
+			return
+		end
+		if MISSION_FLOW_ACTIONS[kind] and not playerLoaded(player) then
+			return
+		end
+	end
+
 	-- Stage 6: builds, skills, wardrobe, pets and the silo belong to BaseService (it validates).
 	if BASE_ACTIONS[kind] then
 		local api = baseApi
@@ -1905,7 +2175,7 @@ local function handleAction(player: Player?, action: any, trusted: boolean)
 			if cells ~= before then
 				addProgress("set_power")
 			end
-			broadcast()
+			scheduleBroadcast() -- Stage 11: coalesced (4 players moving cells)
 		elseif errorKey then
 			sayTo(player, errorKey)
 		end
@@ -2080,6 +2350,28 @@ function MissionService.start(worldRefs: any, crewService: Crew, progressService
 		end)
 	end
 
+	-- Stage 11: the start menu showcase shows every structure while nobody is loaded; when it starts
+	-- or ends, the prompts follow the real (effective) builds again.
+	workspace:GetAttributeChangedSignal("SBO_Showcase"):Connect(function()
+		task.defer(function()
+			local ok, err = pcall(refreshWorld)
+			if not ok then
+				warn(`[SpaceBaseOdyssey] refresh after the showcase failed: {err}`)
+			end
+		end)
+	end)
+
+	-- Stage 11: open-world dust on one solar panel now and then (Briefing only).
+	task.spawn(function()
+		while true do
+			task.wait(ROAM_DUST_TICK_SECONDS)
+			local ok, err = pcall(roamDustTick)
+			if not ok then
+				warn(`[SpaceBaseOdyssey] open-world dust failed: {err}`)
+			end
+		end
+	end)
+
 	-- The live DONKI query finishes in the background; push its result to everyone.
 	SpaceWeatherService.onChanged(function(_: LiveWeather)
 		broadcast()
@@ -2091,7 +2383,7 @@ function MissionService.start(worldRefs: any, crewService: Crew, progressService
 		if
 			type(action) == "table"
 			and (action.type == "ChooseSlot" or action.type == "RequestSlots" or action.type == "SaveNow"
-				or action.type == "ListFriendWorlds" or action.type == "JoinWorld")
+				or action.type == "ListFriendWorlds" or action.type == "JoinWorld" or action.type == "SaveSettings")
 		then
 			return
 		end
@@ -2111,6 +2403,9 @@ function MissionService.start(worldRefs: any, crewService: Crew, progressService
 	Players.PlayerRemoving:Connect(function(player: Player)
 		actionWindows[player] = nil
 		wentOutside[player] = nil
+		iceTickets[player] = nil -- Stage 11
+		drillTimes[player] = nil
+		promptTimes[player] = nil
 		if shiftData then
 			shiftData.exposed[player] = nil
 			shiftData.stormExposed[player] = nil
@@ -2163,7 +2458,7 @@ function MissionService.deliverIce(player: Player, count: number): number
 		addProgress("deliver_ice", cores)
 		addProgress("deliver_ice_total", cores)
 		reward(player, "ice_delivered", cores)
-		broadcast()
+		scheduleBroadcast() -- Stage 11: one snapshot for every loader paid by the same unload
 		fire(iceDeliveredListeners, "ice delivered", player, cores)
 		if state.allocation.LifeSupport > 0 then
 			fire(learnListeners, "learn", { player }, "air_from_water")
@@ -2176,6 +2471,23 @@ function MissionService.deliverIce(player: Player, count: number): number
 		return cores
 	end
 	return 0
+end
+
+-- Stage 11: the ice ticket of the core `player` carries (where and when it was drilled), removed
+-- from the player: the ice hauler keeps it with the core it loads. nil when there is none.
+function MissionService.takeIceTicket(player: Player): { at: number, from: Vector3 }?
+	local ticket = iceTickets[player]
+	iceTickets[player] = nil
+	return if ticket then { at = ticket.at, from = ticket.from } else nil
+end
+
+-- Stage 11: true when a core drilled at `from` at os.clock() `at` could have reached the water
+-- machine by now (GUARD.ICE_TRAVEL_MAX_SPEED).
+function MissionService.iceArrivalOk(from: Vector3, at: number): boolean
+	if typeof(from) ~= "Vector3" or type(at) ~= "number" then
+		return true
+	end
+	return iceArrived(from, at)
 end
 
 -- Stage 9: true when the mission can be started now (StartMission would accept it): its required

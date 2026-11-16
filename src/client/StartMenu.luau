@@ -1073,6 +1073,7 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			{ key = "src.donki" },
 			{ key = "ui.menu_credit_earth" },
 			{ key = "ui.menu_credit_icons" },
+			{ key = "ui.menu_credit_sounds" }, -- Stage 11 audio
 			{ key = "ui.menu_credits_help", header = true, color = ROLE.reward },
 			{ key = "ui.menu_credit_ai" },
 		})

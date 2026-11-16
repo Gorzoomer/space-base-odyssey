@@ -15,6 +15,10 @@
 -- client (gear gas refills there). The regolith shelter stays a storm shelter, as before.
 -- Stage 9: onRoomChanged tells listeners (QuestService "visit" steps) when a player walks into another
 -- room ("lab", "greenhouse_a", ... the inside zone ids, or "shelter"; nil = outside or no character).
+-- Stage 11 (playtest: "a rescue sends me to the far lander"): an empty suit brings the player to the
+-- NEAREST pressurized room that stands (the hub, the greenhouse domes, the lab, or the lander; never a
+-- narrow tube), on its floor. Between missions the ice they carried comes along; during a shift it
+-- falls (the rescue costs base air already, and C.A.R.L. says so: carl.rescued_ice).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -56,6 +60,8 @@ local MOVING_SPEED = 2 -- studs/s; slower than this counts as standing still
 local REFILL_COUNT_FRACTION = 0.9 -- a refill counts when the suit started below 90% of MAX
 local LOW_WARNING_FRACTION = 0.25 -- C.A.R.L. warns once below 25% of MAX
 local RESCUE_OFFSET = Vector3.new(0, 4, 0)
+local RESCUE_FLOOR_PROBE = 60 -- Stage 11: studs searched below a room's centre for its floor
+local TUBE_SUFFIX = "_tube" -- Stage 11: tubes are too narrow to land in
 
 local SUIT = MissionData.SUIT
 local INSIDE_ATTRIBUTE = "SBO_Inside"
@@ -278,6 +284,39 @@ local function fillSuit(crew: Crew)
 	crew.lowWarned = false
 end
 
+-- Stage 11: where a rescue lands: the floor of the nearest standing pressurized room (not a tube),
+-- or nil (then the lander spawn).
+local function rescueTarget(character: Model, from: Vector3): CFrame?
+	local best: InsideZone? = nil
+	local bestDistance = math.huge
+	for _, zone in builtNow().zones do
+		if string.sub(zone.id, -#TUBE_SUFFIX) == TUBE_SUFFIX then
+			continue
+		end
+		local distance = (zone.part.Position - from).Magnitude
+		if distance < bestDistance then
+			best = zone
+			bestDistance = distance
+		end
+	end
+	if best == nil then
+		return nil
+	end
+	local zonePart = best.part
+	local centre = zonePart.Position
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { character }
+	local hit = workspace:Raycast(centre, Vector3.new(0, -RESCUE_FLOOR_PROBE, 0), params)
+	-- A zone part may itself be solid to queries: fall back to its bottom face.
+	local floorY = if hit and hit.Instance ~= zonePart then hit.Position.Y else centre.Y - zonePart.Size.Y / 2
+	local target = Vector3.new(centre.X, floorY, centre.Z) + RESCUE_OFFSET
+	if not insideZone(best, target) then
+		target = centre -- an odd shape: the middle of the room is inside for sure
+	end
+	return CFrame.new(target)
+end
+
 local function rescue(player: Player, crew: Crew)
 	local character = player.Character
 	if character and spawnLocation then
@@ -292,11 +331,20 @@ local function rescue(player: Player, crew: Crew)
 			end
 			humanoid.Sit = false
 		end
-		character:PivotTo(spawnLocation.CFrame + RESCUE_OFFSET)
+		-- Stage 11: the nearest standing pressurized room, else the lander.
+		local root = character:FindFirstChild("HumanoidRootPart")
+		local from = if root and root:IsA("BasePart") then root.Position else spawnLocation.Position
+		local ok, target = pcall(rescueTarget, character, from)
+		local destination = if ok and target then target else spawnLocation.CFrame + RESCUE_OFFSET
+		character:PivotTo(destination)
 		crew.measured = false -- a teleport, not a walk back inside
 	end
 	crew.suitO2 = math.min(SUIT.RESCUE_REFILL, crew.suitMax)
-	crew.carryingIce = false
+	-- Stage 11: the ice comes along between missions; in a shift it falls.
+	local droppedIce = crew.carryingIce and shiftActive
+	if shiftActive then
+		crew.carryingIce = false
+	end
 	crew.countRefill = false
 	crew.rescueTopUp = true
 	crew.lowWarned = false
@@ -304,6 +352,9 @@ local function rescue(player: Player, crew: Crew)
 		refillCount += 1 -- only shift refills cost base air (a rescue while roaming is free)
 	end
 	sendMessage(player, "carl.rescued")
+	if droppedIce then
+		sendMessage(player, "carl.rescued_ice")
+	end
 end
 
 local function notifyZone(player: Player, inside: boolean, sheltered: boolean, wasInside: boolean, wasSheltered: boolean)

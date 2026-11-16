@@ -37,3 +37,12 @@ SOFTWARE.
 ## Earth image
 
 The in-game Earth uses NASA's "Blue Marble: Land Surface, Ocean Color and Sea Ice" (NASA Visible Earth, NASA Goddard Space Flight Center), public domain, scaled to 1024x512. Credit: NASA. NASA's use does not imply endorsement. The file was taken from the public-domain copy on Wikimedia Commons ("Whole world - land and oceans.jpg"), because NASA's image server did not respond.
+
+## Sound recordings (CC0)
+
+The game's music and most sound effects are original audio, synthesized in code by the team. Five effects mix in edited parts of these CC0 1.0 (public domain) recordings from Freesound, found through Openverse. CC0 needs no attribution; they are listed as a courtesy. No sound in the game is CC BY. The Roblox asset IDs are in `src/shared/AudioIds.luau`.
+
+- "Ratchet Wrench Fast Multiple" by Rudmer_Rotteveel, https://freesound.org/people/Rudmer_Rotteveel/sounds/591529 (in `build_step`)
+- "Wrench Clanking" by magnuswaker, https://freesound.org/people/magnuswaker/sounds/530074 (in `build_step`)
+- "Heavy Metal Thud on Ground" by 7of9Designs, https://freesound.org/people/7of9Designs/sounds/640204 (in `crate_drop`, `shelter_enter` and `meteor_impact`)
+- "Footsteps Metallic Muffled.wav" by RutgerMuller, https://freesound.org/people/RutgerMuller/sounds/50723 (in `footstep_inside`)

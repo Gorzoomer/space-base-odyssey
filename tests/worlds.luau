@@ -200,6 +200,98 @@ do
 	check(Worlds.pickOwner(OWNER, { FRIEND }) == FRIEND, "G: when the owner leaves, the next player in line owns it")
 end
 
+-- H. Stage 11: the session lock of a save slot (src/shared/ServerGuard.luau).
+do
+	local ServerGuard = require("../src/shared/ServerGuard")
+	local TIMEOUT = 180
+	local now = 1_800_000_000
+	local mine = { job = "server-A", token = "visit-1", at = now - 10 }
+	check(ServerGuard.lockDecision(nil, "server-A", "visit-1", now, TIMEOUT) == "take", "H: a slot with no lock is taken")
+	check(ServerGuard.lockDecision("junk", "server-A", "visit-1", now, TIMEOUT) == "take", "H: a damaged lock counts as none")
+	check(ServerGuard.lockDecision(mine, "server-A", "visit-1", now, TIMEOUT) == "own", "H: this visit's own lock")
+	check(
+		ServerGuard.lockDecision(mine, "server-B", "visit-2", now, TIMEOUT) == "wait",
+		"H: a fresh lock of another server makes the load wait (its last save may still come)"
+	)
+	check(
+		ServerGuard.lockDecision(mine, "server-A", "visit-2", now, TIMEOUT) == "wait",
+		"H: the same server, a newer visit (left and joined again) also waits for the release"
+	)
+	local old = { job = "server-A", token = "visit-1", at = now - TIMEOUT - 1 }
+	check(ServerGuard.lockDecision(old, "server-B", "visit-2", now, TIMEOUT) == "take", "H: a stale lock (crashed server) is taken")
+	local future = { job = "server-A", token = "visit-1", at = now + TIMEOUT + 5 }
+	check(ServerGuard.lockDecision(future, "server-B", "visit-2", now, TIMEOUT) == "take", "H: a lock stamped far in the future is stale")
+	check(ServerGuard.lockDecision({ job = "", token = "t", at = now }, "server-B", "v", now, TIMEOUT) == "take", "H: an empty job id is no lock")
+
+	check(ServerGuard.canWrite(mine, "server-A", "visit-1"), "H: the lock holder may write")
+	check(not ServerGuard.canWrite(mine, "server-B", "visit-2"), "H: another server may not write")
+	check(not ServerGuard.canWrite(mine, "server-A", "visit-0"), "H: an older visit on the same server may not write")
+	check(not ServerGuard.canWrite(nil, "server-A", "visit-1"), "H: a released (or stolen and released) lock refuses the old visit")
+	-- Stage 11 review: a regular save while the player is still here may take a missing lock back
+	-- (an older server version wrote the slot without one), never a lock another visit holds.
+	check(ServerGuard.canWrite(nil, "server-A", "visit-1", true), "H: a missing lock is taken back by a player still here")
+	check(ServerGuard.canWrite("junk", "server-A", "visit-1", true), "H: a damaged lock counts as missing")
+	check(not ServerGuard.canWrite(mine, "server-B", "visit-2", true), "H: allowFree never overwrites another visit's lock")
+	check(not ServerGuard.canWrite(nil, "server-A", "visit-1", false), "H: a final save never takes a missing lock back")
+
+	-- Server hop: world A loads, the player hops to world B before A's last save lands.
+	local record: { [string]: any } = { base = { credits = 100 }, lock = { job = "A", token = "a1", at = now } }
+	check(ServerGuard.lockDecision(record.lock, "B", "b1", now + 2, TIMEOUT) == "wait", "H: hop: B waits while A still holds the slot")
+	record.lock = nil -- A's last save on leave releases the lock
+	check(ServerGuard.lockDecision(record.lock, "B", "b1", now + 4, TIMEOUT) == "take", "H: hop: B loads once A released it")
+	record.lock = { job = "B", token = "b1", at = now + 4 }
+	check(not ServerGuard.canWrite(record.lock, "A", "a1"), "H: hop: a late write from A is refused (no duplicated credits)")
+	-- B waited too long and stole A's lock: A's later writes are refused too.
+	local stolen = { job = "B", token = "b2", at = now + 30 }
+	check(not ServerGuard.canWrite(stolen, "A", "a1"), "H: a stolen lock refuses its old holder")
+
+	check(ServerGuard.isEmptySlotRecord(nil), "H: nothing stored is an empty slot")
+	check(ServerGuard.isEmptySlotRecord({ v = 5, lock = mine }), "H: a lock alone is not game data")
+	check(not ServerGuard.isEmptySlotRecord({ v = 5, lock = mine, base = {} }), "H: a record with a base is data (never wiped by Continue)")
+	check(not ServerGuard.isEmptySlotRecord({ completed = {} }), "H: an old record without a version is data")
+end
+
+-- I. Stage 11: settings kept in the meta record (SaveSettings).
+do
+	local ServerGuard = require("../src/shared/ServerGuard")
+	local defaults = ServerGuard.defaultSettings()
+	check(defaults.language == nil and defaults.funFacts and defaults.guidance, "I: defaults follow the device language, C.A.R.L. on")
+	check(defaults.musicVolume >= 0 and defaults.musicVolume <= 1 and defaults.effectsVolume >= 0 and defaults.effectsVolume <= 1, "I: default volumes 0..1")
+	local s, changed = ServerGuard.applySettings(defaults, { language = "es", musicVolume = 0.25, guidance = false })
+	check(changed and s.language == "es" and math.abs(s.musicVolume - 0.25) < 1e-9 and s.guidance == false, "I: a patch changes only its fields")
+	check(s.effectsVolume == defaults.effectsVolume and s.funFacts == defaults.funFacts, "I: other fields stay")
+	check(defaults.language == nil, "I: the patch never changes the settings it started from")
+	local loud = ServerGuard.applySettings(defaults, { musicVolume = 7, effectsVolume = -3 })
+	check(loud.musicVolume == 1 and loud.effectsVolume == 0, "I: volumes are clamped to 0..1")
+	local odd = ServerGuard.applySettings(defaults, { musicVolume = 0 / 0, language = "fr", funFacts = "yes", hack = true })
+	check(odd.musicVolume == defaults.musicVolume and odd.language == nil and odd.funFacts == true and (odd :: any).hack == nil, "I: bad values and unknown fields are ignored")
+	local _, same = ServerGuard.applySettings(s, { language = "es" })
+	check(not same, "I: the same value is no change")
+	local _, junk = ServerGuard.applySettings(s, "junk")
+	check(not junk, "I: a patch that is not a table is ignored")
+	local stepped = ServerGuard.applySettings(defaults, { effectsVolume = 0.333333 })
+	check(math.abs(stepped.effectsVolume - 0.33) < 1e-9, "I: volumes are kept in steps of 0.01")
+	local stored = ServerGuard.sanitizeSettings({ language = "en", musicVolume = 0.5, funFacts = false })
+	check(stored.language == "en" and stored.musicVolume == 0.5 and stored.funFacts == false and stored.guidance == true, "I: a stored record is read, missing fields default")
+	check(ServerGuard.sanitizeSettings(nil).language == nil, "I: an old meta without settings reads as defaults")
+	local count = 0
+	for _ in ServerGuard.SETTING_NAMES do
+		count += 1
+	end
+	check(count == 5, "I: five settings (language, two volumes, fun facts, guidance)")
+
+	-- SaveSettings rate limit (5 a second): the sixth request in the same second is dropped.
+	local times: { number } = {}
+	local accepted = 0
+	for i = 1, 6 do
+		if ServerGuard.allowInWindow(times, 100 + i * 0.1, 1, 5) then
+			accepted += 1
+		end
+	end
+	check(accepted == 5, "I: at most 5 settings requests a second")
+	check(ServerGuard.allowInWindow(times, 102, 1, 5), "I: a second later requests are accepted again")
+end
+
 print(`worlds: {passes} passed, {failures} failed`)
 if failures > 0 then
 	error("worlds tests failed")

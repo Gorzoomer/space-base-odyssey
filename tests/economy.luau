@@ -13,6 +13,9 @@
 --   habitat 5 and the ship in 150-300; income never jumps more than 2.5x from one 10-minute window
 --   to the next; the silo never holds more than its habitat level allows, and the drills of each base
 --   level never pay more than that level's passive cap.
+-- Stage 11 tycoon: the silo and the cargo robot are paid as BaseService pays them (water by hand,
+-- oxygen from the robot with a powered air maker, loads of at least CARGO_MIN_LOAD, no skill bonus on
+-- machine income), and from the cargo robot to the ship the machines earn 30-50% of play income.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local BaseBuild = require("../src/shared/BaseBuild")
@@ -157,11 +160,14 @@ local function simulate(profile: Profile): Result
 		list[index] += amount
 	end
 
+	-- Stage 11 tycoon: silo and cargo robot payouts (passive) get the skill bonus rounded down
+	-- (BaseBuild.passiveBonus), exactly as BaseService pays them.
 	local function grant(addCredits: number, addXp: number, passive: boolean?)
 		local c = math.max(0, math.floor(addCredits))
 		local x = math.max(0, math.floor(addXp))
-		c += BaseBuild.bonusAmount(MissionData, c, BaseBuild.levelOf(skills, "credits"))
-		x += BaseBuild.bonusAmount(MissionData, x, BaseBuild.levelOf(skills, "xp"))
+		local bonus = if passive then BaseBuild.passiveBonus else BaseBuild.bonusAmount
+		c += bonus(MissionData, c, BaseBuild.levelOf(skills, "credits"))
+		x += bonus(MissionData, x, BaseBuild.levelOf(skills, "xp"))
 		credits += c
 		local before = playerLevel()
 		xp += x
@@ -230,16 +236,18 @@ local function simulate(profile: Profile): Result
 		end
 	end
 
+	-- Stage 11 tycoon: a claim by hand at the silo sends the ice to the water plant (water); the cargo
+	-- robot delivers the plant's best product (oxygen with a powered air maker). Both count for the
+	-- silo quest steps (the robot is the kid's own machine).
 	local function claimSilo(manual: boolean)
 		local ice = math.floor(silo)
-		if ice < 1 then
+		if ice < 1 or (not manual and not BaseBuild.cargoReady(MissionData, silo)) then
 			return
 		end
 		silo -= ice
-		grant(ice * BASE.CREDITS_PER_SILO_ICE, ice * BASE.XP_PER_SILO_ICE, true)
-		if manual then
-			event("silo")
-		end
+		local product = if manual then "water" else BaseBuild.plantProduct(MissionData, builds)
+		grant(BaseBuild.productCredits(MissionData, ice, product), BaseBuild.productXp(MissionData, ice), true)
+		event("silo")
 	end
 
 	-- Time passes: the drills fill the silo, the cargo robot empties it, food grows.
@@ -291,6 +299,7 @@ local function simulate(profile: Profile): Result
 		end
 		busy(CRATE_WALK_SECONDS + BASE.ASSEMBLE_HOLD_SECONDS * BaseBuild.builderHoldFactor(MissionData, skills))
 		rewardKind("crate_delivered")
+		event("crate") -- Stage 11 quest step type (parts boxes carried to a pad)
 		rewardKind("stage_done")
 		current.stepsLeft -= 1
 		if current.stepsLeft <= 0 then
@@ -698,10 +707,17 @@ for hab = 1, 5 do
 			best[id] = level
 		end
 	end
-	local perMinute = BaseBuild.icePerMinute(MissionData, best) * BASE.CREDITS_PER_SILO_ICE
+	-- Stage 11 tycoon: with the best product the plant can make at this level (oxygen once the
+	-- cargo robot and its air maker may stand, with every solar array up).
+	if BaseBuild.maxLevelAt(MissionData, "cargo_bot", hab) >= 1 then
+		best.cargo_bot = 1
+	end
+	best.solar = BaseBuild.maxLevelAt(MissionData, "solar", hab)
+	local product = BaseBuild.plantProduct(MissionData, best)
+	local perMinute = BaseBuild.productCredits(MissionData, BaseBuild.icePerMinute(MissionData, best), product)
 	check(perMinute <= PASSIVE_CAP_PER_MINUTE[hab], `silo: habitat {hab} drills pay at most {PASSIVE_CAP_PER_MINUTE[hab]} credits/min ({perMinute})`)
 	-- A full silo is worth at most a few minutes of drilling, so leaving the game never pays a lot.
-	local siloCredits = BaseBuild.siloMax(MissionData, best) * BASE.CREDITS_PER_SILO_ICE
+	local siloCredits = BaseBuild.productCredits(MissionData, BaseBuild.siloMax(MissionData, best), if product == "none" then "water" else product)
 	check(siloCredits <= 150, `silo: a full silo at habitat {hab} pays {siloCredits} credits (at most 150)`)
 	print(string.format("habitat %d: drills up to %2d credits/min, silo %2d ice (peak seen %.1f)", hab, perMinute, BaseBuild.siloMax(MissionData, best), typical.siloPeak[hab] or 0))
 end
@@ -714,6 +730,48 @@ do
 		end
 		local passive = typical.passiveWindows[i] or 0
 		check(amount == 0 or passive <= amount * 0.5, `silo: window {i} passive {passive} of {amount} credits (at most half)`)
+	end
+end
+
+-- Stage 11 tycoon: from the cargo robot (full automation) to the ship, the machines earn about 30-50%
+-- of what playing earns (team: "meaningful, never more than half").
+do
+	local robotAt = minuteOf(typical, "cargo_bot", 1) or END_MINUTES
+	local shipAt = minuteOf(typical, "ship", 1) or END_MINUTES
+	local passiveSum, activeSum = 0, 0
+	for i, amount in typical.windows do
+		local from = (i - 1) * 10
+		if from >= robotAt and from + 10 <= shipAt then
+			local passive = typical.passiveWindows[i] or 0
+			passiveSum += passive
+			activeSum += amount - passive
+		end
+	end
+	local share = passiveSum / math.max(1, activeSum)
+	print(string.format("tycoon: cargo robot to ship, machines earn %.2f of what playing earns", share))
+	check(share >= 0.3 and share <= 0.5, `tycoon: machines earn 30-50% of play income after the cargo robot ({share})`)
+	-- The first drill pays itself back quickly (it used to take 40 minutes).
+	local drill = BaseBuild.buildDef(MissionData, "drill_1")
+	if drill then
+		local minutes = drill.costs[1] / BaseBuild.productCredits(MissionData, BASE.DRILL_ICE_PER_MINUTE[1], "water")
+		check(minutes <= 25, `tycoon: drill_1 pays itself back within 25 minutes ({minutes})`)
+	end
+	-- Every drill upgrade digs at least one more ice a minute (upgrades you can see).
+	for level = 2, #BASE.DRILL_ICE_PER_MINUTE do
+		check(BASE.DRILL_ICE_PER_MINUTE[level] >= BASE.DRILL_ICE_PER_MINUTE[level - 1] + 1, `tycoon: drill level {level} digs at least 1 more ice a minute`)
+	end
+	-- Oxygen (water plus electricity) pays more than water; water pays at least 1 per ice.
+	check(BaseBuild.productCredits(MissionData, 10, "oxygen") > BaseBuild.productCredits(MissionData, 10, "water"), "tycoon: oxygen pays more than water")
+	check(BaseBuild.productCredits(MissionData, 1, "water") >= 1, "tycoon: one ice of water pays at least 1 credit")
+	-- While you were away: at most one full silo, so leaving the game never pays more than playing.
+	for hab = 2, 5 do
+		local builds: BaseBuild.Levels = { habitat = hab, drill_1 = BaseBuild.maxLevelAt(MissionData, "drill_1", hab) }
+		local cap = BaseBuild.siloMax(MissionData, builds)
+		local after, gained = BaseBuild.offlineIce(MissionData, builds, 0, 30 * 24 * 3600)
+		check(after <= cap and gained <= cap, `tycoon: habitat {hab} offline ice stays within the silo ({gained} of {cap})`)
+	end
+	for _, value in { BASE.OXYGEN_BONUS_PERCENT, BASE.CARGO_MIN_LOAD, BASE.OFFLINE_MAX_SECONDS, BASE.CARGO_IDLE_AFTER_SECONDS } do
+		check(type(value) == "number" and value == math.floor(value) and value >= 0, "tycoon: whole numbers")
 	end
 end
 

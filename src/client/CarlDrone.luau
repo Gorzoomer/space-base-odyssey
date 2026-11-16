@@ -70,6 +70,7 @@ local BaseBuild = require(Shared:WaitForChild("BaseBuild"))
 local Types = require(Shared:WaitForChild("Types"))
 
 local Store = require(script.Parent.Store)
+local Audio = require(script.Parent.Audio) -- Stage 11 audio
 local Objectives = require(script.Parent.Objectives)
 local Theme = require(Shared:WaitForChild("Theme"))
 local Icons = require(Shared:WaitForChild("Icons"))
@@ -1637,6 +1638,7 @@ function CarlDrone.start()
 		local rise = math.abs(to.Y - from.Y)
 		hop = { from = from, to = to, started = now, duration = duration, apex = HOP_APEX + rise * 0.5 }
 		emitPuffs(cf, now, 2)
+		Audio.play("carl_hop", { at = from, near = 8, far = 40 }) -- Stage 11 audio
 	end
 
 	local function hide()

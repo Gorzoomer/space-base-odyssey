@@ -80,11 +80,24 @@ export type World = {
 	-- Workspace.Base.BuildPads.<id> (attribute BuildId), each with one ProximityPrompt "BuildPrompt".
 	buildPads: { [string]: BasePart },
 	buildPrompts: { [string]: ProximityPrompt },
-	-- The ice silo behind the habitat (filled by the automatic drills), its claim prompt "SiloPrompt".
+	-- The ice silo (filled by the automatic drills), its claim prompt "SiloPrompt". Stage 11: the
+	-- fill shows ice / top (top = the biggest silo) and a cap ring the size `max` of this base level.
 	siloPrompt: ProximityPrompt,
-	setSilo: (ice: number, max: number) -> (),
-	-- The cargo robot drives between the drills' conveyor and the silo while active (cosmetic).
+	setSilo: (ice: number, max: number, top: number?) -> (),
+	-- Older callers: the cargo robot is built or shown (attribute SBO_CargoOn on the line folder).
 	setCargoActive: (active: boolean) -> (),
+	-- Stage 11 tycoon: Workspace.Base.ProductionLine, a Folder whose attributes describe the ice line
+	-- for the clients (src/client/ProductionLine.luau animates cubes, drill bits, the robot and the air
+	-- maker from them; the server moves none of it). Geometry: BeltCount + Belt1..n (the cubes' path,
+	-- rim hopper to the silo's top), Lift1A/B..Lift3A/B (each drill's lift belt), RouteCount +
+	-- Route1..n (the robot's drive), SBO_DriveSeconds / SBO_LoadSeconds / SBO_DropSeconds.
+	productionLine: Folder,
+	-- Status (see setLineState in build): icePerMinute, status, plantLevel, airStatus, product, drills.
+	setLineState: (state: { [string]: any }) -> (),
+	-- The robot's trip: phase, server start time, seconds, ice carried, product.
+	setCargo: (phase: string, at: number, seconds: number, load: number, product: string) -> (),
+	-- Seconds of each part of a robot trip (BaseService times the phases with them).
+	cargoTimes: { drive: number, load: number, drop: number },
 	-- Stage 7: building in steps. Shows level `level` of build `id` partly done: its blueprint plus the
 	-- real parts revealed from the bottom up in proportion stage / stages (stage 0 = foundation outline
 	-- only). BaseService calls setBuildLevel(id, level, true) when the last step is done (that clears it).
@@ -194,18 +207,11 @@ local ROVER_SPEED = WorldParts.ROVER_SPEED
 local ROVER_LOOP_RADIUS = WorldParts.ROVER_LOOP_RADIUS
 local ROVER_RIM_RADIUS = WorldParts.ROVER_RIM_RADIUS
 local PULSE_UPDATE_SECONDS = WorldParts.PULSE_UPDATE_SECONDS
-local SILO_CENTRE = WorldParts.SILO_CENTRE
-local SILO_GLASS_DIAMETER = WorldParts.SILO_GLASS_DIAMETER
+local LINE = WorldParts.LINE -- Stage 11 tycoon
 local CARGO_SPEED = WorldParts.CARGO_SPEED
-local CARGO_WAIT_SECONDS = WorldParts.CARGO_WAIT_SECONDS
 local DRILL_FLOOR_RADIUS = WorldParts.DRILL_FLOOR_RADIUS
 local DRILL_SPREAD = WorldParts.DRILL_SPREAD
 local HOPPER_RADIUS = WorldParts.HOPPER_RADIUS
-local CONVEYOR_FOOT_RADIUS = WorldParts.CONVEYOR_FOOT_RADIUS
-local DRILL_SPIN_RAD = WorldParts.DRILL_SPIN_RAD
-local DRILL_AWAKE_RANGE = WorldParts.DRILL_AWAKE_RANGE
-local ICE_CUBE_SPEED = WorldParts.ICE_CUBE_SPEED
-local SPIN_UPDATE_SECONDS = WorldParts.SPIN_UPDATE_SECONDS
 local RISE_DROP = WorldParts.RISE_DROP
 local UPGRADE_DROP = WorldParts.UPGRADE_DROP
 local HOLOGRAM_TRANSPARENCY = WorldParts.HOLOGRAM_TRANSPARENCY
@@ -2026,14 +2032,19 @@ function WorldBuilder.build(data: any): World
 	local antenna = buildAntenna(base)
 	local lander = Geo.buildLander(base)
 
-	-- Stage 6 layout first, so random boulders keep clear of the pipe, the robot's route and the pads.
+	-- Stage 6 layout first, so random boulders keep clear of the belt, the robot's route and the pads.
+	-- Stage 11 tycoon: the silo, water plant and air maker stand between the hub and the crater
+	-- (Six.worksLayout), so the whole line, drills to habitat, can be seen.
 	local drillAngle = Six.chooseDrillAngle(rampAngle)
-	local conveyorFoot = Six.craterPoint(drillAngle, CONVEYOR_FOOT_RADIUS, 0)
-	local cargoPoints = Six.cargoRoutePoints(drillAngle)
+	local works = Six.worksLayout(drillAngle)
+	local conveyorFoot = works.beltStart
+	local cargoPoints = works.route
 	local pads = Six.padSpots(drillAngle)
-	Six.keepoutsAlong({ conveyorFoot, SILO_CENTRE }, 5, 12, extraKeepouts)
+	Six.keepoutsAlong({ works.beltStart, works.beltEnd }, 5, 12, extraKeepouts)
 	Six.keepoutsAlong(cargoPoints, 6, 12, extraKeepouts)
-	table.insert(extraKeepouts, { x = SILO_CENTRE.X, z = SILO_CENTRE.Z, r = 9 })
+	for _, spot in { works.silo, works.plant, works.air } do
+		table.insert(extraKeepouts, { x = spot.X, z = spot.Z, r = 9 })
+	end
 	-- Stage 7: the lander, the greenhouse domes and every world site keep their surroundings clear.
 	for _, keep in {
 		{ at = S7.LANDER_CENTRE, r = 45 },
@@ -2216,10 +2227,44 @@ function WorldBuilder.build(data: any): World
 		local beltEnd = Six.craterPoint(drillAngle, HOPPER_RADIUS - 2, CRATER_RIM_Y + 0.6) + across * ((i - 2) * 0.9)
 		table.insert(drills, Six.buildDrill(drillsFolder, i, drillAngle + (i - 2) * DRILL_SPREAD, beltEnd))
 	end
-	local conveyor = Six.buildConveyor(base, drillAngle)
-	local silo = Six.buildSilo(base, conveyor.pipeEnd)
+	-- Stage 11 tycoon: the silo first (the belt's lift reaches its top), the water plant, the air maker
+	-- and the hub's supply port, and the line folder the clients animate from.
+	local silo = Six.buildSilo(base, works)
+	local conveyor = Six.buildConveyor(base, drillAngle, works, silo.top)
 	local cargo = Six.buildCargoBot(base, Six.polyline(cargoPoints))
-	local drillCentre = Six.craterPoint(drillAngle, DRILL_FLOOR_RADIUS, 0)
+	local line = {
+		plant = Six.buildWaterPlant(base, works),
+		air = Six.buildAirMaker(base, works),
+		port = Six.buildSupplyPort(base, works),
+		folder = folder(base, "ProductionLine"),
+		times = {
+			drive = math.max(1, cargo.route.total / CARGO_SPEED),
+			load = LINE.LOAD_SECONDS,
+			drop = LINE.DROP_SECONDS,
+		},
+	}
+	do
+		local f = line.folder
+		f:SetAttribute("BeltCount", #conveyor.cubeLine)
+		for i, point in conveyor.cubeLine do
+			f:SetAttribute("Belt" .. i, point)
+		end
+		for i, drill in drills do
+			f:SetAttribute("Lift" .. i .. "A", drill.liftA)
+			f:SetAttribute("Lift" .. i .. "B", drill.liftB)
+		end
+		f:SetAttribute("RouteCount", #cargo.route.points)
+		for i, point in cargo.route.points do
+			f:SetAttribute("Route" .. i, point)
+		end
+		f:SetAttribute("SBO_DriveSeconds", line.times.drive)
+		f:SetAttribute("SBO_LoadSeconds", line.times.load)
+		f:SetAttribute("SBO_DropSeconds", line.times.drop)
+		f:SetAttribute("SiloCentre", silo.centre)
+		f:SetAttribute("SiloBottomY", silo.bottomY)
+		f:SetAttribute("SiloHeight", silo.height)
+		f:SetAttribute("SBO_CargoPhase", "off")
+	end
 
 	-- Secrets come last and use their own random streams, so the rest of the base keeps its layout.
 	local secretSpots: { [string]: CFrame } = {
@@ -2269,7 +2314,7 @@ function WorldBuilder.build(data: any): World
 		Leak = habitat.leakPart.Position + Vector3.new(2, 0, 0),
 		Greenhouse = greenhouse.centre,
 		Arrays = Vector3.new(RIDGE_CENTRE.X, RIDGE_TOP_Y + 1, RIDGE_CENTRE.Z),
-		Silo = SILO_CENTRE + Vector3.new(0, 3, -(SILO_GLASS_DIAMETER / 2 + 2)),
+		Silo = silo.marker, -- Stage 11: the silo's side toward the hub (the claim prompt)
 		LanderDoor = lander.door + Vector3.new(0, 3, 0),
 		CrateDepot = lander.cratePosition + Vector3.new(0, 2, 0),
 	}
@@ -2663,11 +2708,16 @@ function WorldBuilder.build(data: any): World
 	register("drill_1", 3, {
 		{ level = 1, instance = drills[1].model, dust = drillFloor(1) },
 		{ level = 1, instance = conveyor.model, dust = conveyorFoot },
-		{ level = 1, instance = silo.model, dust = SILO_CENTRE },
+		{ level = 1, instance = silo.model, dust = works.silo },
+		{ level = 1, instance = line.plant.model, dust = works.plant }, -- Stage 11: the water plant
 	})
 	register("drill_2", 3, { { level = 1, instance = drills[2].model, dust = drillFloor(2) } })
 	register("drill_3", 3, { { level = 1, instance = drills[3].model, dust = drillFloor(3) } })
-	register("cargo_bot", 1, { { level = 1, instance = cargo.model } })
+	register("cargo_bot", 1, {
+		{ level = 1, instance = cargo.model },
+		{ level = 1, instance = line.air.model, dust = works.air }, -- Stage 11: the air maker ...
+		{ level = 1, instance = line.port.model }, -- ... and the hub's supply port
+	})
 
 	-- Stage 7: the world sites' structures (each model fully built by WorldSites).
 	local fallbackMax: { [string]: number } = { lab = 1, garage = 2, landing_pad = 1, ship = 1 }
@@ -3162,111 +3212,102 @@ function WorldBuilder.build(data: any): World
 		end
 	end
 
-	-- Silo fill: the ice column grows, and the top ring turns lime when the silo is full.
-	local siloFraction = -1
-	local function setSilo(ice: number, max: number)
+	-- Silo fill (Stage 11): the ice column shows ice / top (top = MissionData.BASE.SILO_MAX, the biggest
+	-- silo) and the gold cap ring shows how much this base level may hold, so a bigger base raises the
+	-- ring instead of making the ice drop. The belt's status colours the top ring (setLineState).
+	-- Stage 11 review: the fill moves in quarter-ice steps (each step is a short server tween that
+	-- replicates), and the cap ring only when the silo size changes.
+	local siloShown = { step = -1, max = -1, scale = -1 }
+	local function setSilo(ice: number, max: number, top: number?)
 		if type(ice) ~= "number" or type(max) ~= "number" or ice ~= ice or max <= 0 then
 			return
 		end
-		local f = math.clamp(ice / max, 0, 1)
-		if math.abs(f - siloFraction) < 1e-3 then
+		local scale = if type(top) == "number" and top >= max then top else max
+		local stepNow = math.floor(math.max(0, ice) * 4 + 1e-6)
+		if stepNow == siloShown.step and max == siloShown.max and scale == siloShown.scale then
 			return
 		end
-		siloFraction = f
+		local grew = siloShown.max > 0 and max > siloShown.max
+		local capChanged = max ~= siloShown.max or scale ~= siloShown.scale
+		siloShown.step = stepNow
+		siloShown.max = max
+		siloShown.scale = scale
+		local f = math.clamp(ice / scale, 0, 1)
 		local height = math.max(0.05, silo.height * f)
-		local centre = Vector3.new(SILO_CENTRE.X, silo.bottomY + height / 2, SILO_CENTRE.Z)
+		local centre = Vector3.new(silo.centre.X, silo.bottomY + height / 2, silo.centre.Z)
 		TweenService:Create(silo.fill, SILO_TWEEN, {
 			Size = Vector3.new(height, silo.diameter, silo.diameter),
 			CFrame = CFrame.new(centre) * CFrame.Angles(0, 0, math.rad(90)),
 			Transparency = if f <= 0 then 1 else 0.05,
 		}):Play()
 		silo.light.Enabled = f > 0
-		silo.ring.Color = if f >= 1 then ACCENT_OK else ACCENT_SYSTEM
+		local capY = silo.bottomY + silo.height * math.clamp(max / scale, 0, 1)
+		local capCf = CFrame.new(Vector3.new(silo.centre.X, capY, silo.centre.Z)) * CFrame.Angles(0, 0, math.rad(90))
+		if capChanged then
+			TweenService:Create(silo.capRing, if grew then TweenInfo.new(1.6, Enum.EasingStyle.Back) else SILO_TWEEN, { CFrame = capCf }):Play()
+		end
+		line.folder:SetAttribute("SBO_SiloIce", ice)
+		line.folder:SetAttribute("SBO_SiloMax", max)
+		line.folder:SetAttribute("SBO_SiloTop", scale)
 	end
 	setSilo(0, 1)
 
-	-- Cargo robot: drives the route (dock -> conveyor foot -> back) while active, parked otherwise.
-	local cargoActive = false
-	local cargoDistance = 0
-	local cargoDirection = 1
-	local cargoWait = 0
-	local cargoAccumulator = 0
-	local function cargoPose(distance: number, direction: number, smooth: boolean): CFrame
-		local position, dir = Six.alongPolyline(cargo.route, distance)
-		local facing = flatUnit(dir * direction, Vector3.zAxis)
-		local target = CFrame.lookAt(position, position + facing)
-		if not smooth then
-			return target
+	-- Stage 11 tycoon: the line's state for every client (ProductionLine.luau animates from it) and the
+	-- status lamps (Theme roles: good = running, danger = silo full, warning = no power; dim = off).
+	-- state: icePerMinute, status ("off" | "run" | "full"), plantLevel (0-2), airStatus ("off" | "run" |
+	-- "nopower"), product ("none" | "water" | "oxygen"), drills ({ level of drill 1, 2, 3 } as shown).
+	local function lampColour(lamp: BasePart, colour: Color3?)
+		local on = colour ~= nil
+		lamp.Color = if colour then colour else LAMP_OFF
+		local glow = lamp:FindFirstChildOfClass("PointLight")
+		if glow then
+			glow.Color = if colour then colour else LAMP_OFF
+			glow.Brightness = if on then 1.2 else 0
 		end
-		local current = cargo.root.CFrame
-		return CFrame.new(position) * current.Rotation:Lerp(target.Rotation, 0.35)
 	end
+	local function setLineState(state: { [string]: any })
+		if type(state) ~= "table" then
+			return
+		end
+		local folderRef = line.folder
+		for _, key in { "icePerMinute", "status", "plantLevel", "airStatus", "product" } do
+			local value = state[key]
+			if type(value) == "number" or type(value) == "string" then
+				local name = "SBO_" .. string.upper(string.sub(key, 1, 1)) .. string.sub(key, 2)
+				if folderRef:GetAttribute(name) ~= value then
+					folderRef:SetAttribute(name, value)
+				end
+			end
+		end
+		if type(state.drills) == "table" then
+			for i = 1, 3 do
+				local level = state.drills[i]
+				folderRef:SetAttribute("SBO_Drill" .. i, if type(level) == "number" then level else 0)
+			end
+		end
+		local status = state.status
+		silo.ring.Color = if status == "full" then Theme.ROLE.danger elseif status == "run" then Theme.ROLE.good else ACCENT_SYSTEM
+		lampColour(line.plant.lamp, if status == "full" then Theme.ROLE.danger elseif status == "run" then Theme.ROLE.good else nil)
+		local air = state.airStatus
+		lampColour(line.air.lamp, if air == "run" then Theme.ROLE.good elseif air == "nopower" then Theme.ROLE.warning else nil)
+		lampColour(line.port.lamp, if air == "run" or air == "nopower" then Theme.ROLE.accent else nil)
+	end
+
+	-- Stage 11 tycoon: the cargo robot's trip, as attributes for the clients (BaseService runs the trip
+	-- and pays on arrival). phase: "off" | "dock" | "rest" | "load" | "go" | "drop" | "back" | "loop"
+	-- (the start menu's showcase: back and forth, nothing paid); at = server time the phase started,
+	-- seconds = how long it lasts, load = ice carried, product = "water" | "oxygen".
+	local function setCargo(phase: string, at: number, seconds: number, load: number, product: string)
+		local folderRef = line.folder
+		folderRef:SetAttribute("SBO_CargoPhase", phase)
+		folderRef:SetAttribute("SBO_CargoAt", at)
+		folderRef:SetAttribute("SBO_CargoSeconds", seconds)
+		folderRef:SetAttribute("SBO_CargoLoad", load)
+		folderRef:SetAttribute("SBO_CargoProduct", product)
+	end
+	-- Older callers: on = the robot is built (or shown); BaseService sets the phases.
 	local function setCargoActive(active: boolean)
-		cargoActive = active == true
-		if not cargoActive then
-			cargoDistance = 0
-			cargoDirection = 1
-			cargoWait = 0
-			cargo.load.Transparency = 1
-			if not buildState.risingParts[cargo.root] then
-				cargo.root.CFrame = cargoPose(0, 1, false)
-			end
-		end
-	end
-
-	-- Drill bits and ice cubes (only while someone is near the drills).
-	local drillsAwake = false
-	local drillSpin: { number } = { 0, 0, 0 }
-	local spinAccumulator = 0
-	local cubeClock = 0
-	local cubeSpacing = conveyor.cubeLine.total / math.max(1, #conveyor.cubes)
-	local function animateDrills(step: number)
-		for i, drill in drills do
-			local level = buildLevel("drill_" .. i)
-			if level < 1 then
-				continue
-			end
-			drillSpin[i] = (drillSpin[i] + DRILL_SPIN_RAD[math.min(level, #DRILL_SPIN_RAD)] * step) % (2 * math.pi)
-			local turn = CFrame.Angles(0, drillSpin[i], 0)
-			for _, bit in drill.bits do
-				if level >= bit.level and not buildState.risingParts[bit.root] then
-					bit.root.CFrame = CFrame.new(bit.base.Position) * turn * bit.base.Rotation
-				end
-			end
-		end
-		if buildLevel("drill_1") >= 1 then
-			cubeClock += step
-			for k, cube in conveyor.cubes do
-				if not buildState.risingParts[cube] then
-					local d = (cubeClock * ICE_CUBE_SPEED + (k - 1) * cubeSpacing) % conveyor.cubeLine.total
-					local position, dir = Six.alongPolyline(conveyor.cubeLine, d)
-					cube.CFrame = CFrame.lookAt(position, position + dir)
-				end
-			end
-		end
-	end
-
-	local function animateCargo(step: number)
-		if not cargoActive or buildLevel("cargo_bot") < 1 or buildState.risingParts[cargo.root] then
-			return
-		end
-		if cargoWait > 0 then
-			cargoWait -= step
-			return
-		end
-		cargoDistance += cargoDirection * CARGO_SPEED * step
-		if cargoDistance >= cargo.route.total then
-			cargoDistance = cargo.route.total
-			cargoDirection = -1
-			cargoWait = CARGO_WAIT_SECONDS
-			cargo.load.Transparency = 0 -- loaded at the conveyor
-		elseif cargoDistance <= 0 then
-			cargoDistance = 0
-			cargoDirection = 1
-			cargoWait = CARGO_WAIT_SECONDS
-			cargo.load.Transparency = 1 -- unloaded at the silo
-		end
-		cargo.root.CFrame = cargoPose(cargoDistance, cargoDirection, true)
+		line.folder:SetAttribute("SBO_CargoOn", active == true)
 	end
 
 	-- Collectibles only bob and spin while someone is near, so idle servers replicate nothing.
@@ -3292,15 +3333,7 @@ function WorldBuilder.build(data: any): World
 			end
 			awake[i] = near
 		end
-		local drillsNear = false
-		for _, position in positions do
-			if (position - drillCentre).Magnitude <= DRILL_AWAKE_RANGE then
-				drillsNear = true
-				break
-			end
-		end
-		-- Stage 10: the start menu's showcase base (BaseService, nobody loaded) turns them for the cameras.
-		drillsAwake = drillsNear or workspace:GetAttribute("SBO_Showcase") == true
+		-- Stage 11 tycoon: the drill bits, ice cubes and cargo robot are animated by the clients now.
 	end
 
 	-- One cheap Heartbeat drives every animation (systems and collectibles); it stops when the base
@@ -3347,21 +3380,8 @@ function WorldBuilder.build(data: any): World
 				item.root.CFrame = item.home * CFrame.new(0, bob, 0) * CFrame.Angles(0, t * COLLECTIBLE_SPIN_RAD, 0)
 			end
 		end
-		-- Stage 6: drill bits and ice cubes (15 times a second, only near the drills), cargo robot.
-		spinAccumulator += dt
-		if spinAccumulator >= SPIN_UPDATE_SECONDS then
-			local step = spinAccumulator
-			spinAccumulator = 0
-			if drillsAwake then
-				animateDrills(step)
-			end
-		end
-		cargoAccumulator += dt
-		if cargoAccumulator >= PULSE_UPDATE_SECONDS then
-			local step = cargoAccumulator
-			cargoAccumulator = 0
-			animateCargo(step)
-		end
+		-- Stage 11 tycoon: drill bits, ice cubes and the cargo robot move on the clients
+		-- (src/client/ProductionLine.luau), so nothing of the ice line replicates every frame.
 	end)
 
 	refreshPrompts()
@@ -3408,6 +3428,10 @@ function WorldBuilder.build(data: any): World
 		siloPrompt = silo.prompt,
 		setSilo = setSilo,
 		setCargoActive = setCargoActive,
+		productionLine = line.folder,
+		setLineState = setLineState,
+		setCargo = setCargo,
+		cargoTimes = line.times,
 		setBuildProgress = setBuildProgress,
 		clearBuildProgress = clearBuildProgress,
 		landerZone = lander.zone :: BasePart,

@@ -138,7 +138,7 @@ local PULSE_UPDATE_SECONDS = 0.05
 -- Stage 6 build-and-grow layout and animation (visual tuning, not gameplay numbers; the gameplay
 -- numbers live in MissionData.BASE).
 local SILO_CENTRE = Vector3.new(22, 0, -29) -- behind the habitat, right outside the water tank's corner
-local SILO_GLASS_HEIGHT = 11
+local SILO_GLASS_HEIGHT = 15 -- Stage 11: taller; the fill shows ice / SILO_MAX, a cap ring shows the silo size
 local SILO_GLASS_DIAMETER = 6
 local CARGO_DOCK = Vector3.new(12, 0, -35)
 local CARGO_RIDE_HEIGHT = 1.3
@@ -165,6 +165,27 @@ local PAD_RING_DIAMETER = 7.2
 local PAD_MAXED_DIAMETER = 2.6
 local BUILD_PROMPT_HOLD = 0.6
 local SILO_TWEEN = TweenInfo.new(0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+-- Stage 11 tycoon: the visible ice line (visual tuning and layout, not gameplay numbers). The silo and
+-- the water plant stand on the crater side of the hub, on the drills' side (x = side * WORKS_X), so
+-- one open belt runs from the rim hopper over the rim's outer slope straight into the silo, and the
+-- cargo robot drives water or air tanks from the plant to a supply port on the hub wall.
+local LINE = {
+	WORKS_X = 38, -- silo centre: |x| (x has the sign of the drills' side) ...
+	WORKS_Z = 92, -- ... and z (between the hub's north door and the crater, clear of the tracks)
+	BELT_Y = CRATER_RIM_Y + 0.2, -- the elevated belt stays at rim height on posts all the way
+	BELT_WIDTH = 2,
+	POST_SPACING = 10,
+	CUBE_LIFT = 0.65, -- ice cubes ride this far above the belt's centre line
+	LIFT_CLEARANCE = 2, -- the bucket lift stands this far outside the silo glass
+	PLANT_OFFSET = 10, -- water plant centre from the silo, toward the habitat port
+	AIR_OFFSET = 8.5, -- the air maker beside the plant (on the outer side)
+	DOCK_OFFSET = 7, -- the robot's loading spot in front of the plant
+	PORT_SEGMENT_ANGLE = math.rad(45), -- the hub wall segment with the supply port (mirrored by side)
+	PORT_STOP = 40, -- the robot stops this far from the hub centre
+	LOAD_SECONDS = 2, -- the robot loads tanks at the plant ...
+	DROP_SECONDS = 2, -- ... and unloads them at the port
+}
 
 -- Invisible guidance points in Workspace.Base.Markers (client contract).
 local MARKER_NAMES = table.freeze({
@@ -743,6 +764,7 @@ WorldParts.PAD_RING_DIAMETER = PAD_RING_DIAMETER
 WorldParts.PAD_MAXED_DIAMETER = PAD_MAXED_DIAMETER
 WorldParts.BUILD_PROMPT_HOLD = BUILD_PROMPT_HOLD
 WorldParts.SILO_TWEEN = SILO_TWEEN
+WorldParts.LINE = table.freeze(LINE) -- Stage 11 tycoon
 WorldParts.MARKER_NAMES = MARKER_NAMES
 WorldParts.CONSTRUCTION_DROP = CONSTRUCTION_DROP
 WorldParts.OUTLINE_MAX_SPAN = OUTLINE_MAX_SPAN

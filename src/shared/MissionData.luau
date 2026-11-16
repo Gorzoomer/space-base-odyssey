@@ -235,14 +235,38 @@ MissionData.BASE = table.freeze({
 	-- Automatic drills fill the ice silo while at least one player is in the server. Silo ice pays
 	-- less than ice carried by hand (REWARDS.ice_delivered): the drills help, but playing matters
 	-- most, so waiting in the server never unlocks the base (tests/economy caps it per base level).
-	DRILL_ICE_PER_MINUTE = table.freeze({ 1, 2, 3 }), -- per drill, by drill level
+	-- Stage 11 tycoon (GAME, team report "the ice line does not even make money"): the line is
+	-- drills -> belt -> silo -> water plant -> cargo robot -> habitat (BaseBuild "Stage 11 tycoon").
+	-- Tuned with tests/economy so the drills are worth it from the first one (drill_1 pays itself
+	-- back in 20 minutes) but stay a helper: from the cargo robot on, machines earn at most about
+	-- half of what playing earns (tests/economy: 30-50%, and never past PASSIVE_CAP_PER_MINUTE).
+	DRILL_ICE_PER_MINUTE = table.freeze({ 2, 3, 4 }), -- GAME: per drill, by drill level (was 1, 2, 3)
 	-- The silo holds SILO_MAX_BY_HABITAT[habitat level] ice (BaseBuild.siloMax); a bigger base has a
 	-- bigger silo. SILO_MAX is the biggest one (habitat 5), kept for older readers.
 	SILO_MAX = 60,
 	SILO_MAX_BY_HABITAT = table.freeze({ 20, 20, 30, 45, 60 }),
-	CREDITS_PER_SILO_ICE = 1,
+	CREDITS_PER_SILO_ICE = 1, -- GAME: credits per ice the water plant melts into water
 	XP_PER_SILO_ICE = 1,
-	CARGO_BOT_SECONDS = 60, -- the cargo robot empties the silo for its owner this often
+	CARGO_BOT_SECONDS = 60, -- GAME: the cargo robot leaves the water plant at most this often
+	-- Stage 11 tycoon (GAME).
+	--   OXYGEN_BONUS_PERCENT: the air maker (built with the cargo robot) splits water into oxygen with
+	--     electricity; a robot load of oxygen pays this much more than water (rounded down).
+	--   AIR_MAKER_SOLAR: the air maker needs this many solar arrays standing (no power, no air: the
+	--     robot then brings water).
+	--   CARGO_MIN_LOAD: the robot waits at the plant until the silo holds this much ice (no tiny trips).
+	--   CARGO_IDLE_AFTER_SECONDS: the robot rests while the base owner has not moved or acted for this
+	--     long (no income for standing still; the silo still fills up to its size).
+	--   OFFLINE_MAX_SECONDS: while the owner is away the drills keep filling the silo, for at most this
+	--     long and never past the silo size (shown once as "while you were away").
+	--   MACHINE_SKILL_BONUS: false = the "credits" / "xp" skills boost the player's own work (REWARDS,
+	--     quests, builds), not what the machines earn (silo and cargo robot). Rounding it up gave a
+	--     1-ice claim +100%; with it the drills would also pass half of what playing earns.
+	OXYGEN_BONUS_PERCENT = 25,
+	AIR_MAKER_SOLAR = 2,
+	CARGO_MIN_LOAD = 5,
+	CARGO_IDLE_AFTER_SECONDS = 300,
+	OFFLINE_MAX_SECONDS = 8 * 3600,
+	MACHINE_SKILL_BONUS = false,
 	-- Extra credits on top of REWARDS.antenna_aligned, by antenna level (BaseBuild.antennaBonus): the
 	-- bigger dish and the laser link send more data each time they are linked.
 	ANTENNA_ALIGN_BONUS = table.freeze({ 0, 3, 6 }),
@@ -265,7 +289,8 @@ MissionData.BASE = table.freeze({
 	SPEED_BONUS_PER_LEVEL = 1.5, -- studs/s added to walking and running (and the running threshold)
 	TANK_BONUS_PER_LEVEL = 25, -- suit air added to SUIT.MAX
 	-- credits / xp skills: each level adds this share of a reward, ROUNDED UP to a whole number, so a
-	-- kid never sees decimals and every level adds at least 1 (BaseBuild.bonusAmount).
+	-- kid never sees decimals and every level adds at least 1 (BaseBuild.bonusAmount). Stage 11: machine
+	-- income (silo, cargo robot) follows MACHINE_SKILL_BONUS instead (BaseBuild.passiveBonus).
 	REWARD_BONUS_PER_LEVEL = 0.1,
 	BUILDER_HOLD_FACTOR = table.freeze({ 0.8, 0.65, 0.5 }), -- Assemble hold time, by builder level
 	DOUBLE_JUMP_FRACTION = 0.8, -- the air boots' second jump is 80% of a normal jump
@@ -356,6 +381,41 @@ MissionData.ACHIEVEMENTS = table.freeze({
 		explorer = 0,
 		chapter_hero = 0,
 	}),
+})
+
+-- Stage 11 "safer server" (GAME). Limits the server checks so rewards stay fair (src/shared/
+-- ServerGuard.luau has the rules; tests/missions checks them against the speeds above).
+--   ICE_TRAVEL_MAX_SPEED: studs/s; no ice core reaches the water machine faster than this from the
+--     spot it was drilled (the moon buggy, VEHICLES maxSpeed 45, is the fastest legal ride).
+--   ICE_DRILLS_PER_MINUTE / ICE_DRILL_MIN_GAP_SECONDS: drilling per player (a kid filling the ice
+--     hauler with the best drill manages about 10 a minute).
+--   ROAM_DUST_*: between missions dust slowly covers one solar panel, so "clean a dusty panel" can
+--     always be done in the open base (the first dust a minute after the base opens, then every 3
+--     minutes, at most one dusty panel at a time).
+MissionData.GUARD = table.freeze({
+	ICE_TRAVEL_MAX_SPEED = 50,
+	ICE_DRILLS_PER_MINUTE = 15,
+	ICE_DRILL_MIN_GAP_SECONDS = 1,
+	ROAM_DUST_FIRST_SECONDS = 60,
+	ROAM_DUST_EVERY_SECONDS = 180,
+	ROAM_DUST_MAX_ARRAYS = 1,
+})
+
+-- Stage 11 "quests that teach" (GAME; QuestService and src/shared/Quiz.luau). C.A.R.L. asks one
+-- short question after some quests: QUIZ_XP for the right answer (a small bonus: the 11 questions
+-- add 55 XP over the whole game, less than one player level after level 3), never a penalty. A
+-- question waits QUIZ_AFTER_QUEST_SECONDS after its quest (the celebration first), at least
+-- QUIZ_GAP_SECONDS between two questions, and QUIZ_RETRY_SECONDS before a missed or skipped one
+-- comes back. Hidden treasures: one hint after TREASURE_HINT_SECONDS with no new find. Healthy
+-- sessions: after BREAK_AFTER_MINUTES of play, the next finished quest is followed by one gentle
+-- "great time for a break" line (once per visit; nothing decays while away).
+MissionData.QUESTS = table.freeze({
+	QUIZ_XP = 5,
+	QUIZ_AFTER_QUEST_SECONDS = 12,
+	QUIZ_GAP_SECONDS = 45,
+	QUIZ_RETRY_SECONDS = 180,
+	TREASURE_HINT_SECONDS = 300,
+	BREAK_AFTER_MINUTES = 45,
 })
 
 return table.freeze(MissionData)

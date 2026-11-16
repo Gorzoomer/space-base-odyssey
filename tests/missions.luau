@@ -471,6 +471,81 @@ for _, language in Localization.LANGUAGES do
 	end
 end
 
+-- Stage 11 "safer server": ice travel limits, drilling rate, hauler payments and open-world dust
+-- (src/shared/ServerGuard.luau, numbers in MissionData.GUARD).
+do
+	local ServerGuard = require("../src/shared/ServerGuard")
+	local GUARD = MissionData.GUARD
+	local BASE = MissionData.BASE
+	-- No legal way of carrying ice may be slower than the limit, or real kids would be refused.
+	local fastestRun = MissionData.WORLD.RUN_SPEED + 3 * BASE.SPEED_BONUS_PER_LEVEL + BASE.FOOD.BOOST_SPEED
+	check(GUARD.ICE_TRAVEL_MAX_SPEED >= fastestRun, "guard: the ice speed limit is above the fastest run (skills + food)")
+	for _, vehicle in BASE.VEHICLES do
+		check(GUARD.ICE_TRAVEL_MAX_SPEED >= vehicle.maxSpeed, `guard: the ice speed limit is above the {vehicle.id}'s top speed`)
+	end
+	-- The crater is about 200 studs from the water machine: even the fastest ride takes seconds.
+	check(not ServerGuard.travelOk(200, 1, GUARD.ICE_TRAVEL_MAX_SPEED), "guard: ice from the crater cannot arrive in 1 s")
+	check(ServerGuard.travelOk(200, 200 / BASE.VEHICLES[1].maxSpeed, GUARD.ICE_TRAVEL_MAX_SPEED), "guard: a buggy run at top speed is accepted")
+	check(ServerGuard.travelOk(200, 200 / MissionData.WORLD.WALK_SPEED, GUARD.ICE_TRAVEL_MAX_SPEED), "guard: a walk is accepted")
+	check(ServerGuard.travelOk(0, 0, GUARD.ICE_TRAVEL_MAX_SPEED), "guard: no distance, no wait")
+
+	-- Drilling: a kid filling the ice hauler with the best drill (hold 2.5 s x best holdFactor, plus a
+	-- moment to load each core) is never refused.
+	local drill = BASE.TOOL_UPGRADES.drill
+	local fastestDrill = 2.5 * drill.holdFactor[drill.maxLevel]
+	check(GUARD.ICE_DRILL_MIN_GAP_SECONDS <= fastestDrill, "guard: the drill gap is shorter than the fastest drill hold")
+	local times: { number } = {}
+	local t = 0
+	local accepted = 0
+	for _ = 1, 60 do
+		t += fastestDrill + 0.5 -- drill, then load it into the hauler
+		if ServerGuard.allowInWindow(times, t, 60, GUARD.ICE_DRILLS_PER_MINUTE, GUARD.ICE_DRILL_MIN_GAP_SECONDS) then
+			accepted += 1
+		end
+	end
+	check(accepted >= 10, "guard: a fast kid still drills at least 10 cores in about a minute")
+	local spam: { number } = {}
+	local spamAccepted = 0
+	for i = 1, 600 do
+		if ServerGuard.allowInWindow(spam, i * 0.1, 60, GUARD.ICE_DRILLS_PER_MINUTE, GUARD.ICE_DRILL_MIN_GAP_SECONDS) then
+			spamAccepted += 1
+		end
+	end
+	check(spamAccepted <= GUARD.ICE_DRILLS_PER_MINUTE, "guard: a script firing the drill 10 times a second gets the cap a minute")
+	check(not ServerGuard.allowInWindow({ 10 }, 10.5, 60, 99, 1), "guard: a repeat inside the minimum gap is refused")
+
+	-- Hauler payments: each core pays its loader; a loader who left leaves it to the unloader.
+	local here = { [1] = true, [2] = true }
+	local counts, order = ServerGuard.splitCores({ 1, 2, 1, 3 }, function(id: number): boolean
+		return here[id] == true
+	end, 2)
+	check(counts[1] == 2 and counts[2] == 2 and counts[3] == nil, "guard: two cores each, the absent loader's core goes to the unloader")
+	check(#order == 2 and order[1] == 1 and order[2] == 2, "guard: payees in the order of the bed")
+	local none = ServerGuard.splitCores({}, function(): boolean
+		return true
+	end, 1)
+	check(next(none) == nil, "guard: an empty bed pays nobody")
+
+	-- Open-world dust: quest m03 ("clean dusty solar panels") can always be done in the open base.
+	local first, every, max = GUARD.ROAM_DUST_FIRST_SECONDS, GUARD.ROAM_DUST_EVERY_SECONDS, GUARD.ROAM_DUST_MAX_ARRAYS
+	check(first > 0 and every >= first and max >= 1, "guard: dust comes after a while, gently, at least one panel")
+	check(not ServerGuard.roamDustDue(0, nil, first - 1, first, every, 0, 1, max), "guard: no dust right after the base opens")
+	check(ServerGuard.roamDustDue(0, nil, first, first, every, 0, 1, max), "guard: the first dust comes after ROAM_DUST_FIRST_SECONDS")
+	check(not ServerGuard.roamDustDue(0, nil, first * 10, first, every, 0, 0, max), "guard: no dust without solar panels")
+	check(not ServerGuard.roamDustDue(0, first, first + every, first, every, max, 3, max), "guard: never more than ROAM_DUST_MAX_ARRAYS dusty")
+	check(not ServerGuard.roamDustDue(0, first, first + every - 1, first, every, 0, 3, max), "guard: then not before ROAM_DUST_EVERY_SECONDS")
+	check(ServerGuard.roamDustDue(0, first, first + every, first, every, 0, 3, max), "guard: then again every ROAM_DUST_EVERY_SECONDS")
+	check(not ServerGuard.roamDustDue(500, first, 500 + every - 1, first, every, 0, 3, max), "guard: a base that opened again waits its gap first")
+	-- The panel brush exists, so the dusty panel can be cleaned.
+	local hasBrush = false
+	for _, tool in BASE.TOOLS do
+		if tool.id == "brush" then
+			hasBrush = true
+		end
+	end
+	check(hasBrush, "guard: the panel brush is a tool")
+end
+
 print(`missions: {passes} passed, {failures} failed`)
 if failures > 0 then
 	error("mission tests failed")

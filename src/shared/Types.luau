@@ -193,6 +193,13 @@ export type BaseState = {
 	-- Stage 9: the quest tracker (QuestService, src/shared/Quests.luau). nil with an older server or
 	-- before the player's data is loaded.
 	quest: QuestState?,
+	-- Stage 11 tycoon (the ice line, BaseService; nil with an older server):
+	siloOwner: boolean?, -- true = this player may send the silo's ice (the world owner)
+	lineStatus: string?, -- "off" | "run" | "full" (full = the belt stopped)
+	plantLevel: number?, -- 0 none, 1 water plant (melter), 2 with the air maker
+	airStatus: string?, -- "off" | "run" | "nopower" (the air maker needs solar arrays)
+	product: string?, -- what the cargo robot delivers: "none" | "water" | "oxygen"
+	machineCreditsPerMinute: number?, -- credits a minute the machines make now (before rounding per trip)
 }
 
 -- Stage 9: one step of a quest in the tracker. key = Quests.stepKey(id, i), shown with
@@ -203,6 +210,31 @@ export type QuestStepState = {
 	target: number,
 	done: boolean,
 	mission: string?, -- mission steps: the mission id (the client may offer to start it)
+	-- Stage 11: true when the tracker should add "  progress/target" (counted steps with a target
+	-- above 1, Quests.showsFraction). Build and tool levels say "level 2" in the text instead.
+	counted: boolean?,
+}
+
+-- Stage 11 "C.A.R.L. asks" (QuestService, src/shared/Quiz.luau): the question card in
+-- QuestState.quiz. The right answer is never sent; the client answers with Action AnswerQuiz.
+export type QuizAnswer = {
+	key: string, -- "quiz.<id>.a<i>"
+	icon: string, -- key in src/shared/Icons.luau (picture answers for young readers)
+}
+export type QuizPrompt = {
+	id: string,
+	questionKey: string, -- "quiz.<id>.q"
+	icon: string, -- card header icon (Icons)
+	answers: { QuizAnswer }, -- 2 or 3, in button order (choice = index)
+	xp: number, -- XP for the right answer (before the XP skill bonus)
+}
+-- How the last answer went (kept about 8 s so the card can show it). lineKey is what C.A.R.L.
+-- said: "quiz.<id>.why" when right, "quiz.<id>.hint" when wrong (the question comes back later).
+export type QuizResult = {
+	id: string,
+	right: boolean,
+	xp: number, -- XP paid (0 when wrong)
+	lineKey: string,
 }
 
 -- Stage 9: one quest as the tracker shows it. stepIndex = the first step not done (#steps + 1 when
@@ -233,6 +265,9 @@ export type QuestState = {
 	mainCount: number,
 	mainTotal: number,
 	sides: { QuestView },
+	-- Stage 11: the "C.A.R.L. asks" question to show now (base mode only), and the last result.
+	quiz: QuizPrompt?,
+	quizResult: QuizResult?,
 }
 
 -- Stage 9 save slots: one row of the start menu (Remotes.SLOTS). used = false for an empty slot.
@@ -256,6 +291,21 @@ export type SlotsMeta = {
 	last: number?, -- the slot played last
 	current: number?, -- the slot this player plays in this server (nil on the start menu)
 	offline: boolean?, -- true = saves could not be read: progress is kept only for this visit
+	-- Stage 11: this player's saved settings (meta record; see PlayerSettings). nil = an older server.
+	settings: PlayerSettings?,
+}
+
+-- Stage 11 "safer server": per-player settings kept in the player's meta record ("p_<userId>_meta",
+-- field settings), so they survive the lobby-to-world teleport and rejoins. Sent in SlotsMeta.settings
+-- and mirrored as player attributes the server sets: Language, SBO_MusicVolume, SBO_EffectsVolume,
+-- SBO_FunFacts, SBO_Guidance (the client Store's SETTING_ATTRIBUTES). Changed with the SaveSettings
+-- action (src/shared/ServerGuard.luau checks and clamps it).
+export type PlayerSettings = {
+	language: ("en" | "es")?, -- nil = never chosen: follow the device language
+	musicVolume: number, -- 0..1 (steps of 0.01)
+	effectsVolume: number, -- 0..1
+	funFacts: boolean, -- C.A.R.L. fun facts on
+	guidance: boolean, -- C.A.R.L. guidance beam on
 }
 
 -- Stage 10 fix: one open friends world on the "Join a friend" screen (src/shared/Worlds.luau View).
@@ -277,6 +327,28 @@ export type FriendWorlds = {
 }
 
 -- Stage 10: sent to one player after each save of their slot (Remotes.SAVED).
+-- Stage 11 tycoon: ice line moments for the client (Remotes.LINE, created by BaseService). "+N" pops
+-- and cards are client work (wave 2); position = where the pop belongs in the world. mine = this
+-- player got the credits (the world owner).
+--   delivery: the cargo robot handed in a load at the hub's supply port (credits paid on arrival).
+--   claim: ice sent to the base by hand at the silo (water).
+--   away: sent once when the owner's slot loads: the drills dug `ice` for the silo while they were
+--     away for `seconds` (capped = the silo filled up or OFFLINE_MAX_SECONDS ran out).
+--   full: the silo is full and the belt stopped (once per fill, to the owner).
+export type LineEvent = {
+	kind: "delivery" | "claim" | "away" | "full",
+	credits: number?,
+	xp: number?,
+	ice: number?,
+	product: string?, -- "water" | "oxygen"
+	position: Vector3?,
+	mine: boolean?,
+	seconds: number?,
+	capped: boolean?,
+	siloIce: number?,
+	siloMax: number?,
+}
+
 export type SaveNotice = {
 	ok: boolean, -- false only for a "Save now" that could not be written
 	real: boolean, -- true = a DataStore (it stays); false = memory (only this test session)
@@ -334,9 +406,17 @@ export type Action =
 	-- Stage 10, Settings panel "Save now": ProgressService saves the loaded slot as soon as the
 	-- DataStore allows and answers on Remotes.SAVED (manual = true). Ignored before a slot is loaded.
 	| { type: "SaveNow" }
+	-- Stage 11: save this player's settings (any subset of PlayerSettings fields; bad fields are
+	-- ignored, volumes clamped to 0..1). ProgressService accepts it on the start menu and in play, at
+	-- most 5 a second, and keeps it in the meta record. SetLanguage also updates settings.language.
+	| { type: "SaveSettings", settings: { language: ("en" | "es")?, musicVolume: number?, effectsVolume: number?, funFacts: boolean?, guidance: boolean? } }
 	-- Stage 10 achievements: the Sources screen ("Real NASA data") was opened. AchievementService
 	-- accepts it only for a loaded slot, at most once every few seconds per player.
 	| { type: "OpenSources" }
+	-- Stage 11 "C.A.R.L. asks": answer the question in BaseState.quest.quiz. choice = 1..#answers, or
+	-- 0 for "Not now". QuestService accepts only the question it offers right now, at most one answer
+	-- a second; right = small XP bonus, wrong = a hint and the question comes back later.
+	| { type: "AnswerQuiz", id: string, choice: number }
 	-- Stage 6 (BaseService validates: level, credits, requirements, ownership, distance for prompts).
 	| { type: "Build", id: string } -- build or upgrade to the next level (also from the world prompt)
 	| { type: "LearnSkill", id: string }
@@ -375,6 +455,7 @@ local Remotes = table.freeze({
 	SAVED = "Saved", -- server -> one client: SaveNotice (Stage 10, after each save of their slot)
 	WORLDS = "Worlds", -- server -> one client: FriendWorlds (Stage 10 fix, the "Join a friend" list)
 	ACHIEVEMENTS = "Achievements", -- server -> one client: AchievementState (Stage 10 learning achievements)
+	LINE = "IceLine", -- server -> one client: LineEvent (Stage 11 tycoon, created by BaseService)
 })
 
 return table.freeze({

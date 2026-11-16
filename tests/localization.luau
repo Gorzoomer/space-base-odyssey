@@ -725,6 +725,7 @@ local EXPECTED: { [string]: { string } } = {
 	["ui.menu_credits_data"] = {},
 	["ui.menu_credit_earth"] = {},
 	["ui.menu_credit_icons"] = {},
+	["ui.menu_credit_sounds"] = {}, -- Stage 11 audio
 	["ui.menu_credits_help"] = {},
 	["ui.menu_credit_ai"] = {},
 	["ui.menu_quest_badge"] = {},
@@ -816,6 +817,92 @@ do
 	for notice in Worlds.NOTICES do
 		assert(EXPECTED["ui.menu_notice_" .. notice] ~= nil, "no menu line for world notice " .. notice)
 		assert(EXPECTED["carl.world." .. notice] ~= nil, "no C.A.R.L. line for world notice " .. notice)
+	end
+end
+
+-- Stage 11 "safer server": C.A.R.L.'s lines for the server checks.
+for key, params in {
+	["carl.ice_wait"] = {},
+	["carl.rescued_ice"] = {},
+	["carl.dust_roam"] = {},
+	["carl.drill_rest"] = {},
+} :: { [string]: { string } } do
+	EXPECTED[key] = params
+end
+
+-- Stage 11 tycoon: the ice line's new lines (reworded older keys keep their entries).
+for key, params in {
+	["carl.base.silo_full"] = {},
+	["carl.base.silo_bigger"] = { "n" },
+	["carl.base.delivery_water"] = { "n" },
+	["carl.base.delivery_oxygen"] = { "n" },
+	["carl.base.air_no_power"] = {},
+	["carl.base.away"] = { "n" },
+	["base.why.not_your_silo"] = {},
+	["ui.line.title"] = {},
+	["ui.line.rate"] = { "n" },
+	["ui.line.credits"] = { "n" },
+	["ui.line.status_run"] = {},
+	["ui.line.status_full"] = {},
+	["ui.line.status_off"] = {},
+	["ui.line.air_nopower"] = {},
+	["ui.line.chain"] = {},
+	["ui.line.away_title"] = {},
+	["ui.line.away"] = { "n" },
+	["ui.line.delivery"] = { "n" },
+	["ui.line.water"] = {},
+	["ui.line.air"] = {},
+	["ui.line.robot_rest"] = {},
+} :: { [string]: { string } } do
+	EXPECTED[key] = params
+end
+
+-- Stage 11 "quests that teach". Quest step placeholders follow the step type: COUNTED steps have
+-- no {n} (the tracker adds "0/4", so "Bring ice home: 4  0/4" cannot come back); build and tool
+-- levels keep {n} = the level. Every main quest has a praise line; C.A.R.L. asks questions, the
+-- Hidden treasures hints and the picture glossary are listed by their modules.
+do
+	local Quests = require("../src/shared/Quests")
+	local Quiz = require("../src/shared/Quiz")
+	local Glossary = require("../src/shared/Glossary")
+	for _, quest in Quests.LIST do
+		EXPECTED[Quests.titleKey(quest.id)] = {}
+		for index, step in quest.steps do
+			local levelled = (step.type == "build" or step.type == "tool_upgrade") and (step.level or 1) > 1
+			EXPECTED[Quests.stepKey(quest.id, index)] = if levelled then { "n" } else {}
+		end
+		local praise = Quests.praiseKey(quest.id)
+		if praise then
+			EXPECTED[praise] = {}
+		end
+	end
+	for _, id in Quests.TREASURE_ORDER do
+		EXPECTED[Quests.treasureHintKey(id, 1)] = {}
+		EXPECTED[Quests.treasureHintKey(id, 2)] = {}
+	end
+	for _, question in Quiz.LIST do
+		EXPECTED[Quiz.questionKey(question.id)] = {}
+		EXPECTED[Quiz.hintKey(question.id)] = {}
+		EXPECTED[Quiz.whyKey(question.id)] = {}
+		for index = 1, #question.answers do
+			EXPECTED[Quiz.answerKey(question.id, index)] = {}
+		end
+	end
+	for _, term in Glossary.LIST do
+		EXPECTED[Glossary.wordKey(term.id)] = {}
+		EXPECTED[Glossary.defKey(term.id)] = {}
+	end
+	for key, params in {
+		["carl.quest.skill_build_lab"] = {},
+		["carl.quest.skill_lab_ready"] = {},
+		["carl.quest.skill_point"] = {},
+		["carl.quest.break"] = {},
+		["ui.quiz.title"] = {},
+		["ui.quiz.later"] = {},
+		["ui.quiz.right"] = { "xp" },
+		["ui.quiz.try_again"] = {},
+	} :: { [string]: { string } } do
+		EXPECTED[key] = params
 	end
 end
 
@@ -991,6 +1078,36 @@ for _, lang in Localization.LANGUAGES do
 					string.find(dataSources, clean, 1, true) ~= nil,
 					string.format("%s %s quotes %s, not found in DATA_SOURCES.md", lang, key, clean)
 				)
+			end
+		end
+	end
+end
+
+-- 2e. Stage 11: question cards and glossary cards quote no numbers (nothing can drift from
+-- DATA_SOURCES.md), a glossary word is at most 3 words, counted quest steps never show the target in
+-- the text, and the level-up line no longer promises a skill point before the Lab exists.
+do
+	for _, lang in Localization.LANGUAGES do
+		for key, text in Localization.STRINGS[lang] do
+			if string.sub(key, 1, 5) == "quiz." or string.sub(key, 1, 9) == "glossary." or string.sub(key, 1, 14) == "carl.treasure." then
+				check(string.find(text, "%d") == nil, `{lang} {key} quotes no number: {text}`)
+			end
+			if string.sub(key, 1, 9) == "glossary." and string.sub(key, -5) == ".word" then
+				check(wordCount(text) <= 3, `{lang} {key} is a short word: {text}`)
+			end
+		end
+		check(
+			string.find(string.lower(Localization.STRINGS[lang]["carl.base.level_up"]), "skill") == nil
+				and string.find(string.lower(Localization.STRINGS[lang]["carl.base.level_up"]), "habilidad") == nil,
+			`{lang} carl.base.level_up does not mention skill points`
+		)
+	end
+	local Quests = require("../src/shared/Quests")
+	for _, quest in Quests.LIST do
+		for index, step in quest.steps do
+			if Quests.isCounted(step.type) then
+				local key = Quests.stepKey(quest.id, index)
+				check(string.find(Localization.STRINGS.en[key] or "", "{n}", 1, true) == nil, `{key}: a counted step shows its target once (no n in the text)`)
 			end
 		end
 	end

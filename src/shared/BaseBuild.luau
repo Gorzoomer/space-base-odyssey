@@ -358,6 +358,126 @@ function BaseBuild.icePerMinute(data: any, effective: Levels): number
 	return total
 end
 
+----------------------------------------------------------------------------------------------------
+-- Stage 11 tycoon: the ice line (drills -> belt -> silo -> water plant -> cargo robot -> habitat).
+-- The water plant stands with the first drill and melts silo ice into WATER. The cargo robot build
+-- adds the AIR MAKER: water plus electricity makes OXYGEN (real: the ISS Oxygen Generation System,
+-- DATA_SOURCES.md), which pays more, but only with power (solar level AIR_MAKER_SOLAR or more).
+-- Ice that reaches the base pays for what the plant made of it (productCredits).
+
+export type Product = "none" | "water" | "oxygen"
+export type LineStatus = "off" | "run" | "full" -- the belt: no drills, running, stopped (silo full)
+export type AirStatus = "off" | "run" | "nopower" -- the air maker: not built, making air, no power
+
+-- Water plant level: 0 = none (no drill yet), 1 = melter (ice -> water), 2 = air maker as well.
+function BaseBuild.plantLevel(effective: Levels?): number
+	if levelOf(effective, "drill_1") < 1 then
+		return 0
+	end
+	return if levelOf(effective, "cargo_bot") >= 1 then 2 else 1
+end
+
+-- True when the base has the power the air maker needs (machines need electricity).
+function BaseBuild.plantPowered(data: any, effective: Levels?): boolean
+	return levelOf(effective, "solar") >= (data.BASE.AIR_MAKER_SOLAR or 1)
+end
+
+-- What the cargo robot delivers: oxygen with a powered air maker, else water ("none" without a plant).
+function BaseBuild.plantProduct(data: any, effective: Levels?): Product
+	local level = BaseBuild.plantLevel(effective)
+	if level <= 0 then
+		return "none"
+	elseif level >= 2 and BaseBuild.plantPowered(data, effective) then
+		return "oxygen"
+	end
+	return "water"
+end
+
+-- The air maker's status light: green "run", amber "nopower", or "off" when it is not built.
+function BaseBuild.airStatus(data: any, effective: Levels?): AirStatus
+	if BaseBuild.plantLevel(effective) < 2 then
+		return "off"
+	end
+	return if BaseBuild.plantPowered(data, effective) then "run" else "nopower"
+end
+
+-- The belt's status light: "off" with no drills, "full" (red, the belt stops) when the silo is full,
+-- else "run" (green).
+function BaseBuild.lineStatus(silo: number, cap: number, perMinute: number): LineStatus
+	if perMinute <= 0 then
+		return "off"
+	end
+	return if silo >= cap then "full" else "run"
+end
+
+-- Base credits (before the "credits" skill) for `ice` whole ice turned into `product`: water pays
+-- CREDITS_PER_SILO_ICE per ice; oxygen OXYGEN_BONUS_PERCENT more, rounded down (whole numbers).
+function BaseBuild.productCredits(data: any, ice: number, product: Product): number
+	if type(ice) ~= "number" or ice ~= ice or ice < 1 or product == "none" then
+		return 0
+	end
+	local whole = math.floor(ice)
+	local base = whole * data.BASE.CREDITS_PER_SILO_ICE
+	if product == "oxygen" then
+		return math.floor(base * (100 + (data.BASE.OXYGEN_BONUS_PERCENT or 0)) / 100 + 1e-9)
+	end
+	return base
+end
+
+-- XP for the same delivery (XP_PER_SILO_ICE per ice, whatever the product).
+function BaseBuild.productXp(data: any, ice: number): number
+	if type(ice) ~= "number" or ice ~= ice or ice < 1 then
+		return 0
+	end
+	return math.floor(ice) * data.BASE.XP_PER_SILO_ICE
+end
+
+-- The "credits" / "xp" skill bonus on a silo or cargo robot payout (machine income). Stage 11 audit
+-- fix: bonusAmount rounds UP, so a 1-ice claim got +100%. Machines get no skill bonus while
+-- MACHINE_SKILL_BONUS is false; when it is true the bonus is rounded DOWN ("1 more for every 10").
+function BaseBuild.passiveBonus(data: any, base: number, skillLevel: number): number
+	if base <= 0 or skillLevel <= 0 or data.BASE.MACHINE_SKILL_BONUS ~= true then
+		return 0
+	end
+	return math.floor(base * data.BASE.REWARD_BONUS_PER_LEVEL * skillLevel + 1e-9)
+end
+
+-- True when the silo holds enough whole ice for a cargo robot trip (CARGO_MIN_LOAD, at least 1).
+function BaseBuild.cargoReady(data: any, siloIce: number): boolean
+	return math.floor(siloIce) >= math.max(1, data.BASE.CARGO_MIN_LOAD or 1)
+end
+
+-- "While you were away": the ice the drills dug for the silo in `seconds` away (at most
+-- OFFLINE_MAX_SECONDS, and never past the silo size). Returns the new silo amount and the ice gained
+-- (both may have decimals; show whole ice). Bad or negative times give nothing.
+function BaseBuild.offlineIce(data: any, effective: Levels?, stored: number, seconds: number): (number, number)
+	local cap = BaseBuild.siloMax(data, effective)
+	local start = if type(stored) == "number" and stored == stored then math.clamp(stored, 0, cap) else 0
+	if type(seconds) ~= "number" or seconds ~= seconds or seconds <= 0 then
+		return start, 0
+	end
+	local away = math.min(seconds, data.BASE.OFFLINE_MAX_SECONDS or 0)
+	local perMinute = BaseBuild.icePerMinute(data, effective or {})
+	local after = math.min(cap, start + perMinute * away / 60)
+	return after, math.max(0, after - start)
+end
+
+-- A clean silo save { ice, at } from stored data (nil when there is none or it is broken). ice is
+-- clamped to 0..SILO_MAX, at (os.time() of the last write) to 0..now.
+function BaseBuild.sanitizeSiloSave(data: any, value: any, now: number): { ice: number, at: number }?
+	if type(value) ~= "table" then
+		return nil
+	end
+	local ice, at = value.ice, value.at
+	if type(ice) ~= "number" or ice ~= ice or type(at) ~= "number" or at ~= at then
+		return nil
+	end
+	return {
+		ice = math.clamp(math.floor(ice * 100 + 0.5) / 100, 0, data.BASE.SILO_MAX),
+		at = math.clamp(math.floor(at), 0, math.max(0, now)),
+	}
+end
+
 -- Skill effects (all numbers from MissionData.BASE).
 function BaseBuild.speedBonus(data: any, skills: Levels?): number
 	return levelOf(skills, "speed") * data.BASE.SPEED_BONUS_PER_LEVEL

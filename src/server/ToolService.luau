@@ -17,6 +17,8 @@
 -- turn, the tablet screen glows. That happens while the player holds any prompt with the tool in hand,
 -- for a moment after clicking with it, and when another service calls ToolService.pulse.
 -- Stage 9: onEat tells listeners (QuestService "eat" steps) every time a player eats fresh food.
+-- Stage 11 "safer server": the greenhouse food prompt checks on the server that the player stands
+-- within its range (+ PROMPT_EXTRA_RANGE).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -87,6 +89,7 @@ local GLOW_BRIGHTNESS = 3
 local REST_BRIGHTNESS = 1.2
 local GLOW_LIGHT = 2
 local REST_LIGHT = 0.6
+local PROMPT_EXTRA_RANGE = 8 -- Stage 11: studs beyond a prompt's own range (lag), checked on the server
 
 -- Level tint of the drill's battery stripe: basic, upgraded, best.
 local LEVEL_COLORS: { Color3 } = { Theme.ROLE.good, Theme.ROLE.accent, Theme.ROLE.star }
@@ -422,10 +425,29 @@ local function removePlayer(player: Player)
 	end
 end
 
-local function onFoodPrompt(player: Player)
+-- Stage 11: the prompt is triggered by the client; check the character really stands next to it.
+local function closeEnough(player: Player, prompt: ProximityPrompt): boolean
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local parent = prompt.Parent
+	local position = if parent and parent:IsA("BasePart")
+		then parent.Position
+		elseif parent and parent:IsA("Attachment") then parent.WorldPosition
+		elseif parent and parent:IsA("Model") then parent:GetPivot().Position
+		else nil
+	if root == nil or not root:IsA("BasePart") or position == nil then
+		return false
+	end
+	return (root.Position - position).Magnitude <= prompt.MaxActivationDistance + PROMPT_EXTRA_RANGE
+end
+
+local function onFoodPrompt(player: Player, prompt: ProximityPrompt)
 	local record = records[player]
 	local api = baseApi
 	if record == nil or api == nil or toolLevel(player, "food") <= 0 then
+		return
+	end
+	if not closeEnough(player, prompt) then
 		return
 	end
 	if record.food then
@@ -478,7 +500,7 @@ function ToolService.start(world: any, baseService: BaseApi, crewService: CrewAp
 	local foodPrompt = world and world.greenhouseFoodPrompt
 	if typeof(foodPrompt) == "Instance" and foodPrompt:IsA("ProximityPrompt") then
 		foodPrompt.Triggered:Connect(function(player: Player)
-			local ok, err = pcall(onFoodPrompt, player)
+			local ok, err = pcall(onFoodPrompt, player, foodPrompt)
 			if not ok then
 				warn(`[SpaceBaseOdyssey] food prompt failed: {err}`)
 			end

@@ -18,6 +18,12 @@
 --     MissionService.deliverIce(player, count).
 --   * Stage 9: onDrive tells listeners (QuestService "vehicle" steps) when a player sits in a driver
 --     seat; nearGarage says whether a player stands in the garage (its "visit" step).
+--   * Stage 11 "safer server": each core on the hauler bed remembers who loaded it and its ice ticket
+--     (where and when it was drilled, MissionService.takeIceTicket). Unloading needs the unloader
+--     standing by the water machine too (the hauler's position belongs to the driver's client), and
+--     hands in only the cores that could really have travelled from their ice spot by now
+--     (MissionService.iceArrivalOk); the others stay on the bed. Each core pays the player who loaded
+--     it (ServerGuard.splitCores), or the unloader when that player left.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -28,6 +34,7 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local MissionData = require(Shared:WaitForChild("MissionData"))
 local Types = require(Shared:WaitForChild("Types"))
+local ServerGuard = require(Shared:WaitForChild("ServerGuard")) -- Stage 11
 
 local VehicleModels = require(script.Parent:WaitForChild("VehicleModels"))
 
@@ -41,11 +48,19 @@ type VehicleDef = {
 	cargo: number?,
 }
 
+-- Stage 11: one ice core on the hauler bed.
+type Core = {
+	by: number, -- UserId of the player who loaded it (0 = unknown)
+	at: number?, -- os.clock() when it was drilled (nil = unknown: no ticket)
+	from: Vector3?, -- where it was drilled
+}
+
 type Slot = {
 	def: VehicleDef,
 	bay: CFrame,
 	rig: Rig?,
 	cargo: number, -- ice cores on the hauler bed (kept when the hauler goes back to its bay)
+	cores: { Core }, -- Stage 11: who loaded each core and its ice ticket (#cores == cargo)
 	lastUsed: number,
 	flipTime: number,
 	spawnAt: number?,
@@ -370,6 +385,17 @@ local function nearWaterMachine(rig: Rig): boolean
 	return flatDistance(part.Position, target) <= UNLOAD_RANGE
 end
 
+-- Stage 11: keeps the core list as long as the cargo count (cores without bookkeeping, for example
+-- after a bed clamped to a smaller hauler, belong to nobody in particular: the unloader is paid).
+local function syncCores(slot: Slot)
+	while #slot.cores > slot.cargo do
+		table.remove(slot.cores)
+	end
+	while #slot.cores < slot.cargo do
+		table.insert(slot.cores, { by = 0, at = nil, from = nil })
+	end
+end
+
 ----------------------------------------------------------------------------------------------------
 -- Vehicle life cycle
 
@@ -402,16 +428,59 @@ local function onLoad(slot: Slot, player: Player)
 		sayTo(player, "carl.vehicle.need_ice")
 		return
 	end
+	-- Stage 11: the core keeps its ice ticket and who loaded it.
+	local takeTicket = mission and mission.takeIceTicket
+	local ticket: any = nil
+	if type(takeTicket) == "function" then
+		local ok, result = pcall(takeTicket, player)
+		ticket = if ok and type(result) == "table" then result else nil
+	end
 	crew.setCarrying(player, false)
 	slot.cargo += 1
+	table.insert(slot.cores, {
+		by = player.UserId,
+		at = if ticket and type(ticket.at) == "number" then ticket.at else nil,
+		from = if ticket and typeof(ticket.from) == "Vector3" then ticket.from else nil,
+	})
 	VehicleModels.setCargo(rig, slot.cargo)
 	sayTo(player, "carl.vehicle.loaded", { n = slot.cargo, max = rig.cargoMax })
 end
 
+-- Stage 11: the unloader must stand by the water machine too (the hauler's position comes from the
+-- driver's client).
+local function playerNearWaterMachine(player: Player): boolean
+	local target = processorPosition()
+	local root = rootOf(player)
+	if target == nil or root == nil then
+		return false
+	end
+	return flatDistance(root.Position, target) <= UNLOAD_RANGE + PROMPT_EXTRA_RANGE
+end
+
+-- Stage 11: true when this core could have reached the water machine by now.
+local function coreArrived(core: Core): boolean
+	local check = mission and mission.iceArrivalOk
+	if type(check) ~= "function" or core.at == nil or core.from == nil then
+		return true
+	end
+	local ok, result = pcall(check, core.from, core.at)
+	return not ok or result ~= false
+end
+
+-- Stage 11: the player a core pays (its loader while here, else the unloader).
+local function payeeOf(core: Core, unloader: Player): number
+	if core.by > 0 then
+		local loader = Players:GetPlayerByUserId(core.by)
+		if loader ~= nil and loader.Parent ~= nil then
+			return core.by
+		end
+	end
+	return unloader.UserId
+end
+
 local function onUnload(slot: Slot, player: Player)
 	local rig = slot.rig
-	local count = slot.cargo
-	if rig == nil or count <= 0 or not nearWaterMachine(rig) then
+	if rig == nil or slot.cargo <= 0 or not nearWaterMachine(rig) or not playerNearWaterMachine(player) then
 		return
 	end
 	local deliver = mission and mission.deliverIce
@@ -420,23 +489,64 @@ local function onUnload(slot: Slot, player: Player)
 		sayTo(player, "carl.vehicle.unload_later")
 		return
 	end
-	local ok, result = pcall(deliver, player, count)
-	if not ok then
-		warn(`[SpaceBaseOdyssey] deliverIce failed: {result}`)
+	syncCores(slot)
+	-- Cores that could not have travelled this far yet stay on the bed.
+	-- Stage 11 review: each ready core's payee is decided once (deliverIce runs listeners; a loader
+	-- leaving meanwhile must not leave a paid core on the bed).
+	local ready: { [number]: number } = {} -- core index -> payee UserId
+	local loaders: { number } = {}
+	for index, core in slot.cores do
+		if coreArrived(core) then
+			local payee = payeeOf(core, player)
+			ready[index] = payee
+			table.insert(loaders, payee)
+		end
+	end
+	if #loaders == 0 then
+		sayTo(player, "carl.vehicle.unload_later")
 		return
 	end
-	-- deliverIce may return how many cores it took (number), false for none, or nothing for all.
-	local delivered = count
-	if result == false then
-		delivered = 0
-	elseif type(result) == "number" then
-		delivered = math.clamp(math.floor(result), 0, count)
+	-- Each core pays the player who loaded it; a loader who left leaves it to the unloader.
+	local counts, order = ServerGuard.splitCores(loaders, function(userId: number): boolean
+		return Players:GetPlayerByUserId(userId) ~= nil
+	end, player.UserId)
+	local taken: { [number]: number } = {}
+	local delivered = 0
+	for _, userId in order do
+		local payee = Players:GetPlayerByUserId(userId) or player
+		local want = counts[userId]
+		local ok, result = pcall(deliver, payee, want)
+		if not ok then
+			warn(`[SpaceBaseOdyssey] deliverIce failed: {result}`)
+			continue
+		end
+		-- deliverIce may return how many cores it took (number), false for none, or nothing for all.
+		local got = want
+		if result == false then
+			got = 0
+		elseif type(result) == "number" then
+			got = math.clamp(math.floor(result), 0, want)
+		end
+		taken[userId] = got
+		delivered += got
 	end
 	if delivered <= 0 then
 		sayTo(player, "carl.vehicle.unload_later")
 		return
 	end
-	slot.cargo -= delivered
+	-- Take the delivered cores off the bed; the rest stay.
+	local remaining: { Core } = {}
+	for index, core in slot.cores do
+		local payee = ready[index]
+		local left = if payee ~= nil then taken[payee] else nil
+		if payee ~= nil and left ~= nil and left > 0 then
+			taken[payee] = left - 1
+		else
+			table.insert(remaining, core)
+		end
+	end
+	slot.cores = remaining
+	slot.cargo = #remaining
 	VehicleModels.setCargo(rig, slot.cargo)
 	sayTo(player, "carl.vehicle.unloaded", { n = delivered })
 end
@@ -458,6 +568,7 @@ local function spawnRig(slot: Slot)
 	slot.lastUsed = os.clock()
 	slot.flipTime = 0
 	slot.cargo = math.clamp(slot.cargo, 0, rig.cargoMax)
+	syncCores(slot) -- Stage 11
 	VehicleModels.setCargo(rig, slot.cargo)
 	setOwner(rig, nil)
 
@@ -731,6 +842,7 @@ function VehicleService.start(worldRefs: any, baseService: any, missionService: 
 			bay = bay,
 			rig = nil,
 			cargo = 0,
+			cores = {},
 			lastUsed = os.clock(),
 			flipTime = 0,
 			spawnAt = nil,

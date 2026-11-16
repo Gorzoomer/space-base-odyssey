@@ -17,6 +17,7 @@ local MissionData = require(Shared:WaitForChild("MissionData"))
 
 local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
+local Audio = require(script.Parent.Audio) -- Stage 11 audio
 
 type TextRef = Store.TextRef
 
@@ -306,6 +307,7 @@ function Messages.new(root: Frame): MessagesView
 		setTool(if isFact then nil else toolImageFor(current.key))
 		render()
 		bubble.Visible = true
+		Audio.play(if string.sub(current.key, 1, 9) == "base.why." then "ui_error" else "carl_beep") -- Stage 11 audio
 		local seconds = if #queue > 0 then SHOW_SECONDS_BUSY elseif isFact then FACT_SECONDS else SHOW_SECONDS
 		task.delay(seconds, function()
 			if token == myToken then

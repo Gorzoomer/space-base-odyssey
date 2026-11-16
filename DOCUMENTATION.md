@@ -983,7 +983,7 @@ Besides the Lune suites, every stage was played in Studio by the AI assistant us
 - **One base per server.** Gravity and lighting are global in Roblox, so each server runs one shared base.
 - **Meters are game units.** Air, food and radiation run from 0 to 100 so kids can read them. The real values are shown separately on the Sources panel.
 - **The Moon's signal delay is short.** At 1.3 seconds, the delay itself is not a problem on the Moon, so the game makes the antenna link the decision and compares it with Mars, where it would be 3 to 22 minutes.
-- **No sound yet.** The music and effects volume sliders exist, ready for future audio, but the game has no sounds.
+- **Sound in vacuum.** There is no sound in space. Outside, world sounds are soft and muffled, as if felt through the suit; radio beeps stay clear. Inside modules sounds are normal. Music is not part of the world.
 - **Live data needs HTTP.** Without "Allow HTTP Requests", or if DONKI does not answer within 15 seconds, the game uses the archive. A flare is only replayed as a false alarm once its particle status has had two days to settle.
 - **Saves in Studio.** In an unpublished place, saves live in memory and are lost when Play stops. Solo reserved servers work only in the published game.
 - **DataStore pace.** Roblox allows about one write per key every 6 seconds, so a "Save now" may wait a few seconds.
@@ -1150,7 +1150,7 @@ Tested in Studio:
   - A guidance beam points to the next task.
   - About 60 verified fun facts appear at random without repeats.
   - The Earth skin now uses the real Earth map.
-- **Settings:** language, music and effects volume (ready for future audio), fun facts and guidance toggles, and a redeem-code box validated on the server.
+- **Settings:** language, music and effects volume, fun facts and guidance toggles, and a redeem-code box validated on the server.
 - **Plain-language rewrite** of all texts for ages 7–12.
 
 Tested in Studio:
@@ -1411,7 +1411,7 @@ The rules call this "Super Intelligence (SI)".
 - Approving the numbers.
 - Playtesting, publishing, the video and the presentation.
 
-Every AI-assisted code file starts with a disclosure line. No AI-generated images, video or audio are used.
+Every AI-assisted code file starts with a disclosure line. No AI-generated images or video are used. The music and sound effects are synthesized by the team's own code (written with AI assistance, no generative audio model), and five effects mix in edited CC0 recordings.
 
 ### 5.6 Known issues
 
@@ -1814,6 +1814,15 @@ SOFTWARE.
 
 The in-game Earth uses NASA's "Blue Marble: Land Surface, Ocean Color and Sea Ice" (NASA Visible Earth, NASA Goddard Space Flight Center), public domain, scaled to 1024x512. Credit: NASA. NASA's use does not imply endorsement. The file was taken from the public-domain copy on Wikimedia Commons ("Whole world - land and oceans.jpg"), because NASA's image server did not respond.
 
+#### Sound recordings (CC0)
+
+The game's music and most sound effects are original audio, synthesized in code by the team. Five effects mix in edited parts of these CC0 1.0 (public domain) recordings from Freesound, found through Openverse. CC0 needs no attribution; they are listed as a courtesy. No sound in the game is CC BY. The Roblox asset IDs are in `src/shared/AudioIds.luau`.
+
+- "Ratchet Wrench Fast Multiple" by Rudmer_Rotteveel, https://freesound.org/people/Rudmer_Rotteveel/sounds/591529 (in `build_step`)
+- "Wrench Clanking" by magnuswaker, https://freesound.org/people/magnuswaker/sounds/530074 (in `build_step`)
+- "Heavy Metal Thud on Ground" by 7of9Designs, https://freesound.org/people/7of9Designs/sounds/640204 (in `crate_drop`, `shelter_enter` and `meteor_impact`)
+- "Footsteps Metallic Muffled.wav" by RutgerMuller, https://freesound.org/people/RutgerMuller/sounds/50723 (in `footstep_inside`)
+
 ### 6.3 License
 
 Space Base Odyssey is released under the **Apache License, Version 2.0** (January 2004). The full text is in the `LICENSE` file at the root of the repository. In short:
@@ -1858,5 +1867,5 @@ We used **Claude, by Anthropic**, working inside **Claude Code**, as an AI assis
 #### Disclosure in the project
 
 - Every AI-assisted code file starts with a disclosure line: "SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team." The archived space weather data file (`src/shared/SpaceWeatherArchive.luau`) says "compiled" instead of "generated", because it holds compiled data rather than written logic.
-- No AI-generated images, video or audio are used in the game. The game world is built from plain parts by code. The only images are the Tabler Icons and the public-domain NASA Earth map listed in 6.2, plus a near-black skybox face made by the team.
+- No AI-generated images or video are used in the game. The music and sound effects are synthesized by the team's own code (scripts written with AI assistance; no generative audio model), and five effects mix in edited CC0 recordings (6.2). The game world is built from plain parts by code. The only images are the Tabler Icons and the public-domain NASA Earth map listed in 6.2, plus a near-black skybox face made by the team.
 - Still to confirm before submitting: the demo video contains no AI-generated images, video or voices. If any are added, they need a visible watermark.

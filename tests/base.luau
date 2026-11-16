@@ -10,6 +10,7 @@
 --      and the jump skill is the air boots now;
 --   F. pets: collectible pets are found, never bought; bought pets need level and credits;
 --   G. automatic drills: ice per minute, silo pay;
+--   Q. Stage 11 tycoon: water plant, air maker power, delivery pay, offline ice, silo saves;
 --   H. a new player can reach the first builds with START_CREDITS and simple work (no dead end);
 --   I. building in steps: steps per level, assemble hold;
 --   J. tools: unlocks, the drill tool upgrade (hold time, costs, gates);
@@ -1150,6 +1151,79 @@ do
 	check(Quests.stepDone({ type = "vehicle" }, { counts = { vehicle = 1 } }), "O: vehicle step")
 	local first = Quests.MAIN[1]
 	check(not Quests.questDone(first, {}), "O: the first quest is not done at the start")
+
+	-- Stage 11 "quests that teach".
+	-- A first reward within about a minute: one parts box carried to a pad (the free habitat's).
+	check(first.id == "m00_landing", "O11: the main line starts with the landing quest")
+	check(#first.steps == 1 and first.steps[1].type == "crate" and first.steps[1].count == 1, "O11: the landing quest asks for one parts box")
+	check(Quests.questDone(first, { counts = { crate = 1 } }), "O11: one parts box finishes the landing quest")
+	check(Quests.isCounted("crate") and not Quests.isLifetime("crate"), "O11: parts boxes count while the quest is active")
+	check(BaseBuild.nextCost(MissionData, {}, "habitat") == 0, "O11: the habitat (the first pad with parts to carry) is free")
+	-- Cleaned panels are a lifetime total: a kid who cleaned one in Base chores before Talk to Earth
+	-- opened is not stuck waiting for dust.
+	check(Quests.isLifetime("clean"), "O11: cleaned panels are a lifetime total")
+	local m03 = Quests.byId("m03_earth")
+	check(
+		m03 ~= nil and Quests.questDone(m03, { builds = { antenna = 1 }, missions = { t3_tasks = true }, counts = { clean = 1 } }),
+		"O11: Talk to Earth finishes with a panel cleaned earlier"
+	)
+	-- The tracker shows "have/need" only for counted steps with a target above 1.
+	check(Quests.showsFraction({ type = "ice", count = 4 }), "O11: Bring ice home shows 0/4")
+	check(not Quests.showsFraction({ type = "eat", count = 1 }), "O11: a count of 1 shows no fraction")
+	check(not Quests.showsFraction({ type = "build", id = "solar", level = 2 }), "O11: a build level shows no fraction")
+	check(not Quests.showsFraction({ type = "tool_upgrade", id = "drill", level = 2 }), "O11: a tool level shows no fraction")
+	-- Praise lines for main quests only.
+	for _, quest in Quests.MAIN do
+		check(Quests.praiseKey(quest.id) == `quest.{quest.id}.praise`, `O11: {quest.id} has a praise line`)
+	end
+	for _, quest in Quests.SIDE do
+		check(Quests.praiseKey(quest.id) == nil, `O11: side quest {quest.id} uses the generic done line`)
+	end
+	-- Once the cargo robot can stand, no quest counts silo claims (the robot empties the silo every
+	-- CARGO_BOT_SECONDS, so a hand claim would feel random).
+	local robotAt: number? = nil
+	for index, quest in Quests.MAIN do
+		for _, step in quest.steps do
+			if step.type == "build" and step.id == "cargo_bot" then
+				robotAt = robotAt or index
+			end
+		end
+	end
+	check(robotAt ~= nil, "O11: the main line builds the cargo robot")
+	for index, quest in Quests.LIST do
+		local opensAt = if quest.kind == "main" then index else (if quest.after then Quests.mainIndex(quest.after) else 1)
+		if robotAt and opensAt and opensAt >= robotAt then
+			for i, step in quest.steps do
+				check(step.type ~= "silo", `O11: {quest.id} step {i} does not count silo claims after the cargo robot`)
+			end
+		end
+	end
+	-- Saves from before Stage 11 skip the new first quest (QuestService record version 2).
+	check(Quests.migrateIndex(1, nil) == 2 and Quests.MAIN[Quests.migrateIndex(1, nil)].id == "m01_home", "O11: an old save on Build your Moon home stays on it")
+	check(Quests.migrateIndex(5, nil) == 6, "O11: an old save index moves one along")
+	check(Quests.migrateIndex(#Quests.MAIN, nil) == #Quests.MAIN + 1, "O11: an old save with every quest done stays done")
+	check(Quests.migrateIndex(999, nil) == #Quests.MAIN + 1, "O11: migrated index is clamped")
+	check(Quests.migrateIndex(1, Quests.RECORD_VERSION) == 1, "O11: a new save is not moved")
+	check(Quests.migrateIndex(7, Quests.RECORD_VERSION) == 7, "O11: a version 2 save keeps its index")
+	-- Hidden treasures hints: every collectible once, nearest first, vague then clearer, none once found.
+	check(#Quests.TREASURE_ORDER == #Missions.COLLECTIBLES, "O11: one hint line per collectible")
+	for _, id in Missions.COLLECTIBLES do
+		check(table.find(Quests.TREASURE_ORDER, id) ~= nil, `O11: collectible {id} has hints`)
+	end
+	local treasure = Quests.byId(Quests.TREASURE_QUEST)
+	check(treasure ~= nil and treasure.kind == "side" and treasure.steps[1].type == "collectible", "O11: the hints belong to Hidden treasures")
+	local firstId = Quests.TREASURE_ORDER[1]
+	local secondId = Quests.TREASURE_ORDER[2]
+	check(Quests.treasureHint({}, 0) == `carl.treasure.{firstId}.1`, "O11: the first hint is vague, for the nearest secret")
+	check(Quests.treasureHint({}, 1) == `carl.treasure.{secondId}.1`, "O11: the next hint is the next secret")
+	check(Quests.treasureHint({}, #Quests.TREASURE_ORDER) == `carl.treasure.{firstId}.2`, "O11: the second round is clearer")
+	check(Quests.treasureHint({}, 99) ~= nil and string.sub(Quests.treasureHint({}, 99) :: string, -2) == ".2", "O11: later hints stay clear")
+	check(Quests.treasureHint({ [firstId] = true }, 0) == `carl.treasure.{secondId}.1`, "O11: a found secret gets no hint")
+	local all: { [string]: boolean } = {}
+	for _, id in Quests.TREASURE_ORDER do
+		all[id] = true
+	end
+	check(Quests.treasureHint(all, 0) == nil, "O11: no hint once every secret is found")
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -1183,6 +1257,95 @@ do
 	check(a.habitat == 2 and b.solar == 3, "P: shownLevels does not change the inputs")
 	shown = BaseBuild.shownLevels(MissionData, {}, { habitat = true })
 	check(shown.habitat == nil, "P: busy builds with nobody loaded show what stands (nothing)")
+end
+
+----------------------------------------------------------------------------------------------------
+-- Q. Stage 11 tycoon: the ice line (drills -> belt -> silo -> water plant -> cargo robot -> hub).
+
+do
+	-- The water plant stands with the first drill; the cargo robot adds the air maker.
+	check(BaseBuild.plantLevel({}) == 0, "Q: no drill, no water plant")
+	check(BaseBuild.plantLevel({ drill_1 = 1 }) == 1, "Q: the first drill brings the water plant")
+	check(BaseBuild.plantLevel({ drill_1 = 1, cargo_bot = 1 }) == 2, "Q: the cargo robot adds the air maker")
+	-- Oxygen comes from water plus electricity: no power, no air.
+	local powered = { drill_1 = 1, cargo_bot = 1, solar = BASE.AIR_MAKER_SOLAR }
+	local unpowered = { drill_1 = 1, cargo_bot = 1, solar = BASE.AIR_MAKER_SOLAR - 1 }
+	check(BaseBuild.plantProduct(MissionData, {}) == "none", "Q: nothing to deliver without a plant")
+	check(BaseBuild.plantProduct(MissionData, { drill_1 = 1, solar = 3 }) == "water", "Q: the plant alone makes water")
+	check(BaseBuild.plantProduct(MissionData, powered) == "oxygen", "Q: a powered air maker makes air")
+	check(BaseBuild.plantProduct(MissionData, unpowered) == "water", "Q: the air maker without power makes no air")
+	check(BaseBuild.airStatus(MissionData, powered) == "run", "Q: air lamp green with power")
+	check(BaseBuild.airStatus(MissionData, unpowered) == "nopower", "Q: air lamp amber without power")
+	check(BaseBuild.airStatus(MissionData, { drill_1 = 1 }) == "off", "Q: no air maker, no air lamp")
+	check(BASE.AIR_MAKER_SOLAR >= 1 and BASE.AIR_MAKER_SOLAR <= BaseBuild.buildDef(MissionData, "solar").maxLevel, "Q: the air maker's power can be built")
+	-- The belt's status light.
+	check(BaseBuild.lineStatus(0, 20, 0) == "off", "Q: no drills, belt off")
+	check(BaseBuild.lineStatus(5, 20, 2) == "run", "Q: belt runs while the silo has room")
+	check(BaseBuild.lineStatus(20, 20, 2) == "full", "Q: belt stops when the silo is full")
+	-- What a delivery pays: whole numbers, oxygen more than water, nothing for no ice.
+	check(BaseBuild.productCredits(MissionData, 0, "water") == 0, "Q: no ice, no credits")
+	check(BaseBuild.productCredits(MissionData, 3.7, "water") == 3 * BASE.CREDITS_PER_SILO_ICE, "Q: only whole ice pays")
+	check(BaseBuild.productCredits(MissionData, 5, "none") == 0, "Q: nothing made, nothing paid")
+	for ice = 1, 60 do
+		local water = BaseBuild.productCredits(MissionData, ice, "water")
+		local oxygen = BaseBuild.productCredits(MissionData, ice, "oxygen")
+		check(isWhole(water, 1) and isWhole(oxygen, 1) and oxygen >= water, `Q: {ice} ice pays whole credits, air at least water`)
+		check(oxygen <= water * (100 + BASE.OXYGEN_BONUS_PERCENT) / 100 + 1e-9, `Q: {ice} ice of air pays at most the bonus`)
+	end
+	check(BaseBuild.productXp(MissionData, 4) == 4 * BASE.XP_PER_SILO_ICE, "Q: XP per ice")
+	-- Machine income: never the rounding-up bonus (a 1-ice claim used to pay double).
+	for credits = 1, 30 do
+		for level = 1, 3 do
+			local bonus = BaseBuild.passiveBonus(MissionData, credits, level)
+			check(bonus >= 0 and bonus <= credits * BASE.REWARD_BONUS_PER_LEVEL * level + 1e-9, `Q: machine bonus on {credits} at skill {level} is never rounded up`)
+			if credits >= 3 then
+				check(bonus <= credits * 0.34, `Q: machine bonus on {credits} at skill {level} stays under a third`)
+			end
+		end
+	end
+	check(BaseBuild.passiveBonus(MissionData, 1, 1) == 0, "Q: a 1-ice claim is never doubled")
+	-- The cargo robot waits for a real load.
+	check(not BaseBuild.cargoReady(MissionData, BASE.CARGO_MIN_LOAD - 0.01), "Q: the robot waits below its load")
+	check(BaseBuild.cargoReady(MissionData, BASE.CARGO_MIN_LOAD), "Q: the robot leaves with a full load")
+	check(BASE.CARGO_MIN_LOAD <= BASE.SILO_MAX_BY_HABITAT[1], "Q: the smallest silo holds a robot load")
+	-- While you were away: capped by the silo and by OFFLINE_MAX_SECONDS, never for bad times.
+	local drills = { habitat = 2, drill_1 = 1 }
+	local cap = BaseBuild.siloMax(MissionData, drills)
+	local rate = BaseBuild.icePerMinute(MissionData, drills)
+	local after, gained = BaseBuild.offlineIce(MissionData, drills, 0, 60)
+	check(math.abs(gained - rate) < 1e-9 and math.abs(after - rate) < 1e-9, "Q: one minute away = one minute of drilling")
+	after, gained = BaseBuild.offlineIce(MissionData, drills, 2, 365 * 24 * 3600)
+	check(after == cap and math.abs(gained - (cap - 2)) < 1e-9, "Q: a long time away fills the silo, no more")
+	after, gained = BaseBuild.offlineIce(MissionData, drills, 3, -500)
+	check(after == 3 and gained == 0, "Q: a clock in the past gives nothing")
+	after, gained = BaseBuild.offlineIce(MissionData, drills, 0 / 0, 0 / 0)
+	check(after == 0 and gained == 0, "Q: broken numbers give nothing")
+	after, gained = BaseBuild.offlineIce(MissionData, {}, 5, 3600)
+	check(gained == 0, "Q: no drills, nothing dug while away")
+	after = BaseBuild.offlineIce(MissionData, drills, 999, 60)
+	check(after == cap, "Q: a stored silo above the silo size is clamped")
+	local bigCap = BaseBuild.siloMax(MissionData, { habitat = 5 })
+	local bigRate = BaseBuild.icePerMinute(MissionData, { habitat = 5, drill_1 = 3, drill_2 = 3, drill_3 = 3 })
+	check(bigRate * BASE.OFFLINE_MAX_SECONDS / 60 >= bigCap, "Q: the offline time can fill the biggest silo")
+	check(BASE.OFFLINE_MAX_SECONDS <= 24 * 3600, "Q: offline time is capped at a day or less")
+	-- Silo saves.
+	local now = 1_800_000_000
+	check(BaseBuild.sanitizeSiloSave(MissionData, nil, now) == nil, "Q: no silo save")
+	check(BaseBuild.sanitizeSiloSave(MissionData, { ice = "x", at = 1 }, now) == nil, "Q: broken silo save")
+	local clean = BaseBuild.sanitizeSiloSave(MissionData, { ice = 999, at = now + 1000 }, now)
+	check(clean ~= nil and clean.ice == BASE.SILO_MAX and clean.at == now, "Q: silo save clamped (ice and future time)")
+	clean = BaseBuild.sanitizeSiloSave(MissionData, { ice = -4, at = -10 }, now)
+	check(clean ~= nil and clean.ice == 0 and clean.at == 0, "Q: negative silo save clamped")
+	clean = BaseBuild.sanitizeSiloSave(MissionData, { ice = 12.3456, at = now - 60 }, now)
+	check(clean ~= nil and math.abs(clean.ice - 12.35) < 1e-9 and clean.at == now - 60, "Q: silo save keeps two decimals")
+	-- Every drill upgrade adds ice; machines never pay past the passive cap of tests/economy.
+	for level = 2, #BASE.DRILL_ICE_PER_MINUTE do
+		check(BASE.DRILL_ICE_PER_MINUTE[level] > BASE.DRILL_ICE_PER_MINUTE[level - 1], `Q: drill level {level} digs more ice`)
+	end
+	for _, value in { BASE.OXYGEN_BONUS_PERCENT, BASE.CARGO_MIN_LOAD, BASE.CARGO_IDLE_AFTER_SECONDS, BASE.OFFLINE_MAX_SECONDS, BASE.AIR_MAKER_SOLAR } do
+		check(isWhole(value, 0), "Q: tycoon numbers are whole")
+	end
+	check(BASE.MACHINE_SKILL_BONUS == false or BASE.MACHINE_SKILL_BONUS == true, "Q: MACHINE_SKILL_BONUS is a switch")
 end
 
 ----------------------------------------------------------------------------------------------------

@@ -206,6 +206,20 @@ do
 		warn(`[SpaceBaseOdyssey] StartMenu unavailable: {result}`)
 	end
 end
+-- Stage 11 audio: music state machine and game sounds (src/client/Audio.luau; pcall: never breaks the client).
+do
+	local ok, result = pcall(function()
+		local module: any = require(Client:WaitForChild("Audio", 5) :: any)
+		module.start({
+			menuOpen = function(): boolean
+				return startMenu ~= nil and startMenu.isOpen()
+			end,
+		})
+	end)
+	if not ok then
+		warn(`[SpaceBaseOdyssey] Audio unavailable: {result}`)
+	end
+end
 local wardrobe = loadPanel("Wardrobe", { showMessage = messages.show })
 local achievementsPanel = loadPanel("AchievementsPanel", {}) -- Stage 10 learning achievements
 
@@ -583,6 +597,10 @@ if gearModule then
 		warn(`[SpaceBaseOdyssey] Gear failed to start: {result}`)
 	end
 end
+-- Stage 11 tycoon: the ice line's cubes, drill bits, cargo robot and air maker move here (pcall: never breaks the client).
+pcall(function()
+	(require(Client:WaitForChild("ProductionLine", 5) :: any) :: any).start()
+end)
 -- Stage 10: "Game saved" pill after each save (src/client/SaveIndicator.luau; pcall: never breaks the client).
 do
 	local ok, result = pcall(function()
