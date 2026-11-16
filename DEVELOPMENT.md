@@ -419,6 +419,8 @@ Tested in Studio (assistant-driven):
 - **Roblox badges.** `MissionData.ACHIEVEMENTS.BADGES` maps each id to a badge id (0 = none yet). For ids above 0 the server checks `UserHasBadgeAsync`, then calls `AwardBadge` in pcall with one retry. Players who unlocked an achievement before its badge existed get the badge the next time their slot loads. The team creates the badges in Creator Hub and pastes the ids.
 - **Tests.** `tests/achievements`: unique ids, icons exist, every text in en and es, facts quote REAL values found in `DATA_SOURCES.md`, the rules, old saves and merges. `tests/localization` now checks the achievement keys too.
 
+**Stage 10 release (16 November 2026).** Private worlds, the storm and radiation fixes and the learning achievements were tested in Studio (menu with Join a friend, a world owned by the first player, the Fact finder achievement, live radiation rising from 0.5 to 23.1 while standing outside during the training storm) and published to the live experience. The place's server size was set to 4 through Open Cloud.
+
 ## Decisions
 
 | Decision | Who decided | Why |
