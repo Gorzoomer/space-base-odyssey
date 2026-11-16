@@ -17,7 +17,7 @@
 -- sounds, so only the base level up adds a sting here (Feel.STYLES.sting) and stars add their notes
 -- in Report.luau. With "reduce motion" there is no confetti or sparkles, only a very soft flash and
 -- a title that fades in place.
--- Images: only the team's Tabler star icon (Icons.luau), tinted with Theme colours. No emoji.
+-- Images: none (the sparks use Roblox's default soft particle, tinted with Theme colours). No emoji.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -27,7 +27,6 @@ local TweenService = game:GetService("TweenService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Feel = require(Shared:WaitForChild("Feel"))
-local Icons = require(Shared:WaitForChild("Icons"))
 local Theme = require(Shared:WaitForChild("Theme"))
 
 local Store = require(script.Parent.Store)
@@ -274,7 +273,8 @@ local function sparkles(at: Vector3, colors: { string })
 	holder.Parent = workspace.Terrain
 	for index, name in colors do
 		local emitter = Instance.new("ParticleEmitter")
-		emitter.Texture = Icons.star
+		-- Stage 11 test: the star icon is a UI image with no 3D texture version (Studio warned "No
+		-- asset content representation"), so the sparks keep Roblox's default soft particle.
 		emitter.Color = ColorSequence.new(color(name))
 		emitter.LightEmission = 0.7
 		emitter.Size = NumberSequence.new({

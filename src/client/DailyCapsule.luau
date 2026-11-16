@@ -393,6 +393,7 @@ function DailyCapsule.start(root: Frame, deps: Deps)
 			minText = 8,
 			zindex = Z + 3,
 		})
+		Ui.oneLine(amount) -- Stage 11 test: "Franjas del traje" wrapped and lost its last word
 		local done = Ui.icon(frame, ICONS.check, {
 			name = "Done",
 			size = UDim2.fromScale(0.36, 0.22),

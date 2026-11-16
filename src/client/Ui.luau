@@ -175,9 +175,18 @@ end
 -- 7-10 units became 4-5 pixels on a landscape phone). Touch-only devices also lay out for a smaller
 -- reference height, so the whole UI (text limits, strokes, touch targets) is about 1.3x bigger there.
 -- Every text minimum made here goes through readableMin; createRoot re-applies them on resize.
-local READABLE_TEXT_PIXELS = 11
+local READABLE_TEXT_PIXELS = 10
 local TOUCH_REFERENCE_HEIGHT = 560
 local function readableFloor(): number
+	-- Only phones and tablets need the floor: on a computer screen it pushed long lines (quest
+	-- steps, vitals names) out of their boxes (Studio test, Stage 11).
+	local ok, touch = pcall(function(): boolean
+		local input = game:GetService("UserInputService")
+		return input.TouchEnabled and not input.KeyboardEnabled and not input.GamepadEnabled
+	end)
+	if not (ok and touch == true) then
+		return 0
+	end
 	return math.ceil(READABLE_TEXT_PIXELS / math.max(currentScale, 0.01))
 end
 -- A text minimum raised to the readable floor (never above the label's own maximum).
