@@ -1,5 +1,5 @@
 --!strict
--- Space Base Odyssey - demo keys for testing and recording. Only in Studio or for the place owner:
+-- Space Base Odyssey - demo keys for testing and recording. Studio only (Stage 11: never in the live game):
 --   F2: a meteorite lands near this player now, to scan with the tablet (DebugMeteor).
 --   F3: finish the build in progress, or build the next structure free (DebugBuildNext). Stage 9: it
 --       follows the habitat tree: everything the current base level allows, then the next base level.
@@ -32,7 +32,8 @@ local DemoKeys = {}
 local started = false
 
 local function allowed(): boolean
-	return RunService:IsStudio() or Players.LocalPlayer.UserId == game.CreatorId
+	-- Stage 11 (team, live game): the debug keys only exist in Roblox Studio.
+	return RunService:IsStudio()
 end
 
 -- Stage 10: recording helpers (client only). The start menu's own shots (owner "menu") are never

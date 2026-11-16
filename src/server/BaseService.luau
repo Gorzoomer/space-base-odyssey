@@ -253,7 +253,8 @@ local function isDebugAllowed(player: Player, trusted: boolean): boolean
 	if trusted or RunService:IsStudio() then
 		return true
 	end
-	return player.UserId == game.CreatorId
+	-- Stage 11 (team, live game): debug actions are Studio-only now, never in live servers.
+	return false
 end
 
 local function rateLimited(player: Player): boolean
