@@ -278,7 +278,21 @@ do
 	for _ in ServerGuard.SETTING_NAMES do
 		count += 1
 	end
-	check(count == 5, "I: five settings (language, two volumes, fun facts, guidance)")
+	-- Stage 11 menu: plus big text, reduce motion, colour helper and message speed.
+	check(count == 9, "I: nine settings (language, two volumes, fun facts, guidance, four accessibility)")
+	check(defaults.bigText == false and defaults.reduceMotion == false and defaults.colourHelper == false and defaults.messageSpeed == 1, "I: accessibility defaults are off, normal speed")
+	local access, accessChanged = ServerGuard.applySettings(defaults, { bigText = true, reduceMotion = true, colourHelper = true, messageSpeed = 2 })
+	check(accessChanged and access.bigText and access.reduceMotion and access.colourHelper and access.messageSpeed == 2, "I: accessibility settings are saved")
+	local badSpeed = ServerGuard.applySettings(defaults, { messageSpeed = 7, bigText = "yes" })
+	check(badSpeed.messageSpeed == 1 and badSpeed.bigText == false, "I: an unknown message speed or a non-boolean flag is ignored")
+	local nearSpeed = ServerGuard.applySettings(defaults, { messageSpeed = 1.5000000001 })
+	check(nearSpeed.messageSpeed == 1.5, "I: message speed snaps to a listed value")
+	check(ServerGuard.applySettings(defaults, { messageSpeed = 0 / 0 }).messageSpeed == 1, "I: NaN message speed is ignored")
+	for _, speed in ServerGuard.MESSAGE_SPEEDS do
+		check(speed >= 1 and speed <= 3, "I: message speeds only make bubbles stay longer: " .. tostring(speed))
+	end
+	local oldStored = ServerGuard.sanitizeSettings({ language = "es", musicVolume = 0.4 })
+	check(oldStored.bigText == false and oldStored.messageSpeed == 1, "I: a meta from before Stage 11 menu reads accessibility defaults")
 
 	-- SaveSettings rate limit (5 a second): the sixth request in the same second is dropped.
 	local times: { number } = {}

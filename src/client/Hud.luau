@@ -11,7 +11,9 @@
 --   signs high above the pads, clear of the pad's own prompt.
 --   Wallet (Stage 6: shift, roaming, base mode and mission select): credits, player level and an XP
 --   bar, with a "+N" pop when credits rise. Stage 9: a third row with the base level (the habitat's
---   level, the town hall of the habitat tree), which pops when it goes up.
+--   level, the town hall of the habitat tree), which pops when it goes up. Stage 11 tycoon client: a
+--   slim "Machines: +N credits a minute" pill just under the wallet while this player's machines
+--   earn (IncomePops.machineRate), and a friend's silo row is dimmed for a guest.
 --   Stage 7 (field): a "Carrying parts" pill while the player carries a parts crate from the lander,
 --   a food boost timer while player attribute SBO_FoodBoostUntil (server time) is in the future, and a
 --   small build-progress sign (a local BillboardGui) over every build pad with a build in progress
@@ -45,7 +47,9 @@
 --                             y 0.10-0.12; its bottom comes from deps.columnTop), then in a shift
 --                             the meters panel (0.19 tall: air, food, radiation, water, data
 --                             waiting), then the vitals panel (field modes, 0.049-0.119 tall: one
---                             to three rows of 0.035), then the wallet (0.125). The first panel
+--                             to three rows of 0.035), then the wallet (0.125) with, while the
+--                             machines earn (not in a shift), the income pill 0.006 under it (0.036,
+--                             Stage 11 tycoon client; a child of the wallet). The first panel
 --                             starts at y 0.105 (0.12 for the meters) when nothing is above it,
 --                             lower when the Roblox top bar is taller (e.g. on phones). Worst case
 --                             (a shift with the tallest objectives) ends near y 0.85.
@@ -76,6 +80,9 @@ local Objectives = require(script.Parent.Objectives)
 local Store = require(script.Parent.Store)
 local Audio = require(script.Parent.Audio) -- Stage 11 audio
 local Ui = require(script.Parent.Ui)
+-- Stage 11 tycoon client: machine income and whose silo it is.
+local IncomePops = require(script.Parent.IncomePops)
+local IceLineView = require(Shared:WaitForChild("IceLineView"))
 
 local Hud = {}
 
@@ -99,6 +106,9 @@ local WALLET_TOP = 0.105 -- under the Roblox menu buttons when nothing else is i
 local WALLET_HEIGHT = 0.125 -- Stage 9: three rows (credits and level, XP, base level)
 -- The first two rows keep their Stage 6 size: fractions of the old 0.09-tall wallet scaled by this.
 local WALLET_K = 0.09 / WALLET_HEIGHT
+-- Stage 11 tycoon client: the machine income pill under the wallet (fractions of the screen).
+local INCOME_HEIGHT = 0.036
+local INCOME_GAP = 0.006
 local TOPBAR_GAP_PIXELS = 8 -- under the Roblox top bar (menu and chat buttons)
 local POP_SECONDS = 0.9
 local FOOD_BOOST_ATTRIBUTE = "SBO_FoodBoostUntil"
@@ -526,6 +536,27 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 	})
 	local baseLevelScale = Instance.new("UIScale")
 	baseLevelScale.Parent = baseLevelText
+	-- Stage 11 tycoon client: "Machines: +N credits a minute" in a slim pill just under the wallet
+	-- (the wallet keeps its size, so its rows never move), while this player's machines earn.
+	local incomePill = Ui.iconText(wallet, {
+		name = "MachineIncome",
+		size = UDim2.fromScale(1, INCOME_HEIGHT / WALLET_HEIGHT),
+		position = UDim2.fromScale(0, 1 + INCOME_GAP / WALLET_HEIGHT),
+		color = ROLE.panel,
+		transparency = 0.08,
+		stroke = 2,
+		strokeColor = ROLE.star,
+		icon = Ui.ICONS.robot,
+		tint = ROLE.star,
+		textColor = ROLE.star,
+		maxText = 18,
+		zindex = 16,
+		visible = false,
+	})
+	incomePill.icon.Size = UDim2.fromScale(0.11, 0.78)
+	incomePill.label.Size = UDim2.fromScale(0.83, 0.82)
+	incomePill.label.Position = UDim2.fromScale(0.15, 0.5)
+	Ui.oneLine(incomePill.label)
 
 	local visible = false
 	local mode: Mode = "none"
@@ -681,7 +712,11 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		local creditsRose = shownCredits ~= nil and credits > (shownCredits :: number) and wallet.Visible
 		if creditsRose then
 			popCredits(credits - (shownCredits :: number))
-			Audio.play(if credits - (shownCredits :: number) >= 50 then "coin_burst" else "coin_single") -- Stage 11 audio
+			-- Stage 11 audio; Stage 11 tycoon client: quiet when a "+N" pop near the player just played
+			-- its own coin for the same delivery (IncomePops).
+			if not IncomePops.coinHeardRecently() then
+				Audio.play(if credits - (shownCredits :: number) >= 50 then "coin_burst" else "coin_single")
+			end
 		end
 		shownCredits = credits
 		levelPill.Text = Store.t("ui.level", { n = state.level })
@@ -715,8 +750,22 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 		else
 			xpBar.set(1, ROLE.reward, tostring(math.floor(state.xp)), nil) -- top level
 		end
+		-- Stage 11 tycoon client: what this player's machines earn a minute (the world owner's only).
+		local rate = IncomePops.machineRate()
+		-- Not in a shift: the column is tallest then (it would reach the phone thumbstick).
+		local earning = wallet.Visible and mode ~= "shift" and rate > 0 and IncomePops.isSiloOwner()
+		incomePill.frame.Visible = earning
+		if earning then
+			incomePill.label.Text = Store.t("ui.line.machines", { n = IceLineView.formatRate(rate) })
+		end
 		placeColumn()
 	end
+
+	-- Stage 11 tycoon client: the machine income comes with the BaseState IncomePops keeps (it may
+	-- arrive just after the Store's copy), so the wallet renders again then.
+	IncomePops.onState(function()
+		renderWallet()
+	end)
 
 	-- Defined below (after the gear widgets); render() calls it.
 	local renderGear: () -> ()
@@ -818,6 +867,10 @@ function Hud.new(root: Frame, deps: Deps?): HudView
 			local max = math.floor(state.siloMax)
 			siloRow.name.Text = Store.t("ui.vitals.silo")
 			local color = if ice >= max then ROLE.star else Ui.COLORS.ice
+			-- Stage 11 tycoon client: a friend's silo is shown dimmed (the guest cannot send its ice).
+			if not IncomePops.isSiloOwner() then
+				color = ROLE.textDim
+			end
 			siloRow.bar.set(ice / max, color, `{ice}/{max}`, nil)
 		end
 		layoutVitals()

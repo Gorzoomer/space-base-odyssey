@@ -12,7 +12,15 @@
 --   * the cargo robot drives its trip from SBO_CargoPhase / SBO_CargoAt / SBO_CargoSeconds along
 --     Route1..n, with tanks on board (water = cyan, air = cream) while it carries a load.
 --   * the air maker's fan turns and bubbles rise in its split tubes while it makes air.
--- Purely visual: credits come from the server (Remotes.LINE events; "+N" pops are wave 2).
+-- Purely visual: credits come from the server (Remotes.LINE events; the "+N" pops and the "While you
+-- were away" card are IncomePops.luau).
+-- Stage 11 tycoon client: two world signs (local BillboardGuis) float over the silo and the water
+-- plant while the camera is near: the silo's ice n/max, ice a minute and a status light; the plant's
+-- product (water or air), credits a minute (BaseState.machineCreditsPerMinute; a guest sees "Your
+-- friend's silo" instead) and its own status light. Each light has a short reason: running, silo
+-- full (the belt stopped), the air maker needs power, or build a drill first (src/shared/
+-- IceLineView.luau). A guest's copy of the silo prompt is switched off (the server refuses a guest's
+-- claim anyway: "This is your friend's silo.").
 -- Everything sleeps when the camera is far from the line.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
@@ -22,6 +30,10 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Theme = require(Shared:WaitForChild("Theme"))
+local IceLineView = require(Shared:WaitForChild("IceLineView")) -- Stage 11 tycoon client
+local Store = require(script.Parent.Store)
+local Ui = require(script.Parent.Ui)
+local IncomePops = require(script.Parent.IncomePops)
 
 local ProductionLine = {}
 
@@ -507,6 +519,258 @@ local function step(dt: number)
 	animateAir(dt, attrString("SBO_AirStatus", "off") == "run")
 end
 
+-- Stage 11 tycoon client: world signs over the silo and the water plant ---------------------------
+
+local SIGN_SIZE = UDim2.fromScale(10, 4.4) -- studs (smaller far away, like a real sign)
+local SIGN_MAX_DISTANCE = 140
+local SIGN_REFRESH_SECONDS = 0.5
+local SIGN_ABOVE_SILO = 5.5 -- studs above the silo glass top
+local SIGN_ABOVE_PLANT = 4.5 -- studs above the melter roof
+local SIGN_PULSE_SPEED = 5 -- the full / no power stroke pulses (unless motion is reduced)
+local LIGHT_COLOURS: { [string]: Color3 } = {
+	run = Theme.ROLE.good,
+	full = Theme.ROLE.danger,
+	nopower = Theme.ROLE.warning,
+	off = Theme.ROLE.stroke,
+}
+
+type Sign = {
+	anchor: Attachment,
+	gui: BillboardGui,
+	stroke: UIStroke?,
+	topIcon: ImageLabel,
+	topText: TextLabel,
+	midIcon: ImageLabel,
+	midText: TextLabel,
+	light: Frame,
+	reason: TextLabel,
+	alert: boolean,
+}
+
+local signs: { silo: Sign?, plant: Sign? } = {}
+local signTimer = SIGN_REFRESH_SECONDS
+local hiddenPrompt: ProximityPrompt? = nil -- the silo prompt this client switched off (a guest)
+
+local function makeSign(name: string): Sign
+	local anchor = Instance.new("Attachment")
+	anchor.Name = "SBO_" .. name .. "SignPoint"
+	anchor.Parent = Workspace.Terrain
+	local gui = Instance.new("BillboardGui")
+	gui.Name = name .. "Sign"
+	gui.Adornee = anchor
+	gui.Size = SIGN_SIZE
+	gui.LightInfluence = 0
+	gui.MaxDistance = SIGN_MAX_DISTANCE
+	gui.AlwaysOnTop = false
+	gui.ResetOnSpawn = false
+	gui.Enabled = false
+	gui.Parent = anchor
+	local panel = Ui.panel(gui, {
+		name = "Panel",
+		size = UDim2.fromScale(1, 1),
+		color = Theme.ROLE.panel,
+		transparency = 0.12,
+		corner = 0.14,
+		stroke = 2,
+		strokeColor = Theme.ROLE.accent,
+	})
+	local function row(y: number, iconName: string): (ImageLabel, TextLabel)
+		local icon = Ui.icon(panel, iconName, {
+			name = "Icon",
+			size = UDim2.fromScale(0.16, 0.26),
+			position = UDim2.fromScale(0.04, y),
+			anchor = Vector2.new(0, 0.5),
+			tint = Theme.ROLE.text,
+			zindex = 2,
+		})
+		local text = Ui.label(panel, {
+			name = "Text",
+			size = UDim2.fromScale(0.76, 0.27),
+			position = UDim2.fromScale(0.21, y),
+			anchor = Vector2.new(0, 0.5),
+			alignX = Enum.TextXAlignment.Left,
+			textColor = Theme.ROLE.text,
+			maxText = 40,
+			minText = 6,
+			zindex = 2,
+		})
+		return icon, text
+	end
+	local topIcon, topText = row(0.2, Ui.Icons.silo)
+	local midIcon, midText = row(0.5, Ui.Icons.ice)
+	-- The status light: a round lamp (colour) and its short reason (text, so colour is not the only cue).
+	local light = Ui.frame(panel, {
+		name = "Light",
+		size = UDim2.fromScale(0.1, 0.18),
+		position = UDim2.fromScale(0.07, 0.8),
+		anchor = Vector2.new(0, 0.5),
+		color = LIGHT_COLOURS.off,
+		corner = 0.5,
+		aspect = 1,
+		stroke = 2,
+		strokeColor = Theme.ROLE.background,
+		zindex = 2,
+	})
+	local reason = Ui.body(panel, {
+		name = "Reason",
+		size = UDim2.fromScale(0.76, 0.24),
+		position = UDim2.fromScale(0.21, 0.8),
+		anchor = Vector2.new(0, 0.5),
+		textColor = Theme.ROLE.textDim,
+		maxText = 32,
+		minText = 6,
+		zindex = 2,
+	})
+	return {
+		anchor = anchor,
+		gui = gui,
+		stroke = panel:FindFirstChildOfClass("UIStroke"),
+		topIcon = topIcon,
+		topText = topText,
+		midIcon = midIcon,
+		midText = midText,
+		light = light,
+		reason = reason,
+		alert = false,
+	}
+end
+
+local function showStatus(sign: Sign, status: IceLineView.SignStatus)
+	sign.light.BackgroundColor3 = LIGHT_COLOURS[status.light] or LIGHT_COLOURS.off
+	sign.reason.Text = Store.t(status.reasonKey)
+	sign.alert = status.light == "full" or status.light == "nopower"
+	local stroke = sign.stroke
+	if stroke and not sign.alert then
+		stroke.Color = Theme.ROLE.accent
+		stroke.Transparency = 0
+	end
+end
+
+-- Top of a model's part (the plant's melter roof), else the model's bounding box top.
+local function topOf(model: Instance, partName: string): Vector3?
+	local named = model:FindFirstChild(partName, true)
+	if named and named:IsA("BasePart") then
+		return named.Position + Vector3.new(0, named.Size.Y / 2, 0)
+	end
+	if model:IsA("Model") then
+		local cf, size = model:GetBoundingBox()
+		return cf.Position + Vector3.new(0, size.Y / 2, 0)
+	end
+	return nil
+end
+
+-- The silo prompt: a guest's local copy is switched off; given back when this player owns the silo.
+local function guardSiloPrompt(silo: Instance?, owner: boolean)
+	local found = if silo then silo:FindFirstChild("SiloPrompt", true) else nil
+	local prompt: ProximityPrompt? = if found and found:IsA("ProximityPrompt") then found :: ProximityPrompt else nil
+	if prompt and not owner then
+		if prompt.Enabled then
+			prompt.Enabled = false
+		end
+		hiddenPrompt = prompt
+	elseif hiddenPrompt ~= nil then
+		local was = hiddenPrompt
+		hiddenPrompt = nil
+		if was.Parent ~= nil and not was.Enabled then
+			was.Enabled = Store.buildLevel("drill_1") >= 1 -- the server's own rule (BaseService)
+		end
+	end
+end
+
+local function hideSigns()
+	for _, sign in { signs.silo, signs.plant } do
+		if sign then
+			sign.gui.Enabled = false
+		end
+	end
+end
+
+local function updateSigns()
+	local base = Workspace:FindFirstChild("Base")
+	local silo = if base then base:FindFirstChild("IceSilo") else nil
+	local plant = if base then base:FindFirstChild("WaterPlant") else nil
+	local owner = IncomePops.isSiloOwner()
+	guardSiloPrompt(silo, owner)
+	local f = folder
+	-- Only in the player's own game (not the start menu's showcase base) and near the line.
+	if f == nil or not awake or Workspace:GetAttribute("SBO_Showcase") == true or not Store.isSlotChosen() then
+		hideSigns()
+		return
+	end
+	local line = IncomePops.lineState()
+	local info: IceLineView.LineInfo = {
+		lineStatus = attrString("SBO_Status", line.lineStatus or "off"),
+		airStatus = attrString("SBO_AirStatus", line.airStatus or "off"),
+		icePerMinute = attrNumber("SBO_IcePerMinute", line.icePerMinute or 0),
+	}
+	-- The silo: ice n/max, ice a minute, the belt's light.
+	local centre = f:GetAttribute("SiloCentre")
+	if silo and typeof(centre) == "Vector3" then
+		local sign = signs.silo or makeSign("Silo")
+		signs.silo = sign
+		local top = attrNumber("SiloBottomY", centre.Y) + attrNumber("SiloHeight", 14)
+		sign.anchor.WorldPosition = Vector3.new(centre.X, top + SIGN_ABOVE_SILO, centre.Z)
+		local state = Store.getBase()
+		local ice = math.floor(attrNumber("SBO_SiloIce", if state then state.siloIce else 0))
+		local max = math.floor(attrNumber("SBO_SiloMax", if state then state.siloMax else 0))
+		Ui.setIcon(sign.topIcon, Ui.Icons.silo, Ui.COLORS.ice)
+		sign.topText.Text = Store.t("ui.line.ice", { n = ice, max = max })
+		sign.topText.TextColor3 = if max > 0 and ice >= max then Theme.ROLE.star else Theme.ROLE.text
+		Ui.setIcon(sign.midIcon, Ui.Icons.drill, Theme.ROLE.textDim)
+		sign.midText.Text = Store.t("ui.line.rate", { n = IceLineView.formatRate(info.icePerMinute or 0) })
+		showStatus(sign, IceLineView.siloStatus(info))
+		sign.gui.Enabled = true
+	elseif signs.silo then
+		(signs.silo :: Sign).gui.Enabled = false
+	end
+	-- The water plant: what it makes, credits a minute (the owner's), the plant's light.
+	local plantTop = if plant then topOf(plant, "MelterRoof") else nil
+	if plant and plantTop then
+		local sign = signs.plant or makeSign("Plant")
+		signs.plant = sign
+		sign.anchor.WorldPosition = plantTop + Vector3.new(0, SIGN_ABOVE_PLANT, 0)
+		local oxygen = attrString("SBO_Product", line.product or "water") == "oxygen"
+		Ui.setIcon(sign.topIcon, if oxygen then Ui.ICONS.air else Ui.ICONS.drop, Theme.ROLE.accent)
+		sign.topText.Text = Store.t(if oxygen then "ui.line.air" else "ui.line.water")
+		sign.topText.TextColor3 = Theme.ROLE.text
+		if owner then
+			Ui.setIcon(sign.midIcon, Ui.Icons.coin, Theme.ROLE.star)
+			sign.midText.Text = Store.t("ui.line.credits", { n = IceLineView.formatRate(IncomePops.machineRate()) })
+			sign.midText.TextColor3 = Theme.ROLE.star
+		else
+			Ui.setIcon(sign.midIcon, Ui.ICONS.home, Theme.ROLE.textDim)
+			sign.midText.Text = Store.t("ui.line.friend_silo")
+			sign.midText.TextColor3 = Theme.ROLE.textDim
+		end
+		showStatus(sign, IceLineView.plantStatus(info))
+		sign.gui.Enabled = true
+	elseif signs.plant then
+		(signs.plant :: Sign).gui.Enabled = false
+	end
+end
+
+-- A full silo or a plant without power: the sign's border pulses (still when motion is reduced).
+local function pulseSigns()
+	local still = IncomePops.reduceMotion()
+	local wave = (math.sin(os.clock() * SIGN_PULSE_SPEED) + 1) / 2
+	for _, sign in { signs.silo, signs.plant } do
+		local stroke = if sign then sign.stroke else nil
+		if sign and stroke and sign.alert and sign.gui.Enabled then
+			stroke.Color = sign.light.BackgroundColor3
+			stroke.Transparency = if still then 0 else 0.5 * wave
+		end
+	end
+end
+
+local function signStep(dt: number)
+	signTimer += dt
+	if signTimer >= SIGN_REFRESH_SECONDS then
+		signTimer = 0
+		updateSigns()
+	end
+	pulseSigns()
+end
+
 -- Starts the animation (once). Cubes and bubbles live in a client-only folder in Workspace.
 function ProductionLine.start()
 	if started then
@@ -517,6 +781,7 @@ function ProductionLine.start()
 	holder.Name = "SBO_IceLineLocal"
 	holder.Parent = Workspace
 	cubeFolder = holder
+	local signWarned = false
 	RunService.RenderStepped:Connect(function(rawDt: number)
 		local ok, err = pcall(step, math.min(rawDt, 0.1))
 		if not ok then
@@ -525,6 +790,12 @@ function ProductionLine.start()
 				warned = true
 				warn(`[SpaceBaseOdyssey] ProductionLine step failed: {err}`)
 			end
+		end
+		-- Stage 11 tycoon client: the world signs (their own pcall: a sign never stops the line).
+		local signOk, signErr = pcall(signStep, math.min(rawDt, 0.1))
+		if not signOk and not signWarned then
+			signWarned = true
+			warn(`[SpaceBaseOdyssey] ProductionLine signs failed: {signErr}`)
 		end
 	end)
 end

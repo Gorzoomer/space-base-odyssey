@@ -6,7 +6,8 @@
 --     the lock (UpdateAsync); a lock another visit refreshed within the timeout makes it wait, an older
 --     one is stale and may be stolen. A write from a visit that no longer holds the lock is refused,
 --     so a quick server hop can never duplicate or overwrite credits.
---   * Player settings (language, music and effects volume, C.A.R.L. fun facts and guidance), kept in
+--   * Player settings (language, music and effects volume, C.A.R.L. fun facts and guidance; Stage 11
+--     menu: big text, reduce motion, colour helper and message speed), kept in
 --     the player's meta record so they survive teleports and rejoins. SaveSettings patches are checked
 --     and clamped here.
 --   * Ice travel: an ice core cannot reach the water machine faster than the fastest legal way to
@@ -103,6 +104,11 @@ export type Settings = {
 	effectsVolume: number, -- 0..1
 	funFacts: boolean,
 	guidance: boolean,
+	-- Stage 11 menu: accessibility (Settings panel, second page).
+	bigText: boolean, -- bigger text everywhere (Ui text helpers)
+	reduceMotion: boolean, -- no camera shake, no big tweens
+	colourHelper: boolean, -- icons and patterns next to colour-only signals
+	messageSpeed: number, -- C.A.R.L. bubbles stay this many times longer (one of MESSAGE_SPEEDS)
 }
 
 -- UI defaults (not gameplay numbers), the same as the client Store's.
@@ -112,10 +118,40 @@ local DEFAULT_SETTINGS: Settings = table.freeze({
 	effectsVolume = 0.8,
 	funFacts = true,
 	guidance = true,
+	bigText = false, -- Stage 11 menu
+	reduceMotion = false,
+	colourHelper = false,
+	messageSpeed = 1,
 })
 local VOLUME_STEP = 0.01
 
-ServerGuard.SETTING_NAMES = table.freeze({ "language", "musicVolume", "effectsVolume", "funFacts", "guidance" })
+ServerGuard.SETTING_NAMES = table.freeze({
+	"language",
+	"musicVolume",
+	"effectsVolume",
+	"funFacts",
+	"guidance",
+	"bigText", -- Stage 11 menu
+	"reduceMotion",
+	"colourHelper",
+	"messageSpeed",
+})
+-- Stage 11 menu: how much longer C.A.R.L.'s bubbles stay (UI choice, not a gameplay number):
+-- normal, slow, slower.
+ServerGuard.MESSAGE_SPEEDS = table.freeze({ 1, 1.5, 2 })
+local SETTING_FLAGS = { "funFacts", "guidance", "bigText", "reduceMotion", "colourHelper" }
+
+local function cleanMessageSpeed(value: any): number?
+	if type(value) ~= "number" or value ~= value then
+		return nil
+	end
+	for _, speed in ServerGuard.MESSAGE_SPEEDS do
+		if math.abs(value - speed) < 1e-6 then
+			return speed
+		end
+	end
+	return nil
+end
 
 function ServerGuard.defaultSettings(): Settings
 	return table.clone(DEFAULT_SETTINGS)
@@ -157,12 +193,17 @@ function ServerGuard.applySettings(current: Settings, patch: any): (Settings, bo
 			changed = true
 		end
 	end
-	for _, name in { "funFacts", "guidance" } do
+	for _, name in SETTING_FLAGS do
 		local flag = patch[name]
 		if type(flag) == "boolean" and flag ~= (result :: any)[name] then
 			(result :: any)[name] = flag
 			changed = true
 		end
+	end
+	local speed = cleanMessageSpeed(patch.messageSpeed) -- Stage 11 menu
+	if speed ~= nil and speed ~= result.messageSpeed then
+		result.messageSpeed = speed
+		changed = true
 	end
 	return result, changed
 end

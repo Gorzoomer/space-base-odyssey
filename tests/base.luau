@@ -19,7 +19,8 @@
 --   M. save migration (Stage 8): the old jump skill becomes air boots, its points come back;
 --   N. the habitat tree (Stage 9): every structure level opens at one habitat level, per-level effects;
 --   O. quests (Stage 9): step types, mission ids, builds reachable in order with the habitat tree;
---   P. the showcase base (Stage 10): every build at its top level while nobody has loaded a save.
+--   P. the showcase base (Stage 10): every build at its top level while nobody has loaded a save;
+--   R. Stage 11 tycoon client: sign lights, income rate, "+N" pops, the away card, the silo guide.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local BaseBuild = require("../src/shared/BaseBuild")
@@ -1346,6 +1347,90 @@ do
 		check(isWhole(value, 0), "Q: tycoon numbers are whole")
 	end
 	check(BASE.MACHINE_SKILL_BONUS == false or BASE.MACHINE_SKILL_BONUS == true, "Q: MACHINE_SKILL_BONUS is a switch")
+end
+
+----------------------------------------------------------------------------------------------------
+-- R. Stage 11 tycoon client (src/shared/IceLineView.luau): what the signs, pops, the away card and
+-- C.A.R.L. show from what the server sent.
+
+do
+	local View = require("../src/shared/IceLineView")
+	-- Sign lights and their reasons.
+	local s = View.siloStatus({ lineStatus = "run", airStatus = "off", icePerMinute = 2 })
+	check(s.light == "run" and s.reasonKey == "ui.line.status_run", "R: running silo")
+	s = View.siloStatus({ lineStatus = "full", airStatus = "run", icePerMinute = 2 })
+	check(s.light == "full" and s.reasonKey == "ui.line.status_full", "R: full silo stops the belt")
+	s = View.siloStatus({ lineStatus = "run", icePerMinute = 0 })
+	check(s.light == "off" and s.reasonKey == "ui.line.status_off", "R: no drills: off")
+	s = View.siloStatus({})
+	check(s.light == "off", "R: an older server (no fields): off")
+	s = View.plantStatus({ lineStatus = "run", airStatus = "nopower", icePerMinute = 3 })
+	check(s.light == "nopower" and s.reasonKey == "ui.line.air_nopower", "R: plant without power says so")
+	s = View.plantStatus({ lineStatus = "full", airStatus = "nopower", icePerMinute = 3 })
+	check(s.light == "nopower", "R: no power comes before full on the plant (the fix is solar panels)")
+	s = View.plantStatus({ lineStatus = "off", airStatus = "nopower", icePerMinute = 0 })
+	check(s.light == "off", "R: no drills: the plant is off too")
+	s = View.plantStatus({ lineStatus = "full", airStatus = "run", icePerMinute = 3 })
+	check(s.light == "full", "R: a powered plant behind a full silo shows full")
+
+	-- Credits a minute: the server's number first, else the same rule as BaseService.
+	check(View.creditsPerMinute(MissionData, 7.5, 2, "water") == 7.5, "R: the server's machineCreditsPerMinute wins")
+	check(View.creditsPerMinute(MissionData, nil, 4, "water") == 4 * BASE.CREDITS_PER_SILO_ICE, "R: water rate")
+	local oxygen = View.creditsPerMinute(MissionData, nil, 4, "oxygen")
+	check(math.abs(oxygen - 4 * BASE.CREDITS_PER_SILO_ICE * (100 + BASE.OXYGEN_BONUS_PERCENT) / 100) < 1e-9, "R: oxygen rate")
+	check(oxygen > View.creditsPerMinute(MissionData, nil, 4, "water"), "R: air pays more than water")
+	check(View.creditsPerMinute(MissionData, nil, 0, "water") == 0, "R: no drills, no income")
+	check(View.creditsPerMinute(MissionData, nil, 3, "none") == 0, "R: no plant, no income")
+	-- Same rule as the server's BaseState field.
+	for _, levels in { { drill_1 = 1 }, { drill_1 = 2, drill_2 = 1, cargo_bot = 1, solar = 3 }, { drill_1 = 3, cargo_bot = 1, solar = 1 } } do
+		local perMinute = BaseBuild.icePerMinute(MissionData, levels)
+		local product = BaseBuild.plantProduct(MissionData, levels)
+		local server = perMinute * BASE.CREDITS_PER_SILO_ICE * (if product == "oxygen" then (100 + BASE.OXYGEN_BONUS_PERCENT) / 100 else 1)
+		check(math.abs(View.creditsPerMinute(MissionData, nil, perMinute, product) - server) < 1e-9, "R: client rate matches BaseService")
+	end
+	check(View.formatRate(2) == "2" and View.formatRate(2.5) == "2.5" and View.formatRate(3.75) == "3.8", "R: rate text")
+	check(View.formatRate(0) == "0" and View.formatRate(-1) == "0" and View.formatRate(0 / 0) == "0", "R: bad rates show 0")
+	check(View.formatRate(4.96) == "5", "R: rounding up to a whole number drops the decimal")
+
+	-- "+N" pops: only credits that went to this player.
+	check(View.popCredits({ kind = "delivery", credits = 6, mine = true }) == 6, "R: own delivery pops +6")
+	check(View.popCredits({ kind = "claim", credits = 3.7, mine = true }) == 3, "R: whole credits")
+	check(View.popCredits({ kind = "delivery", credits = 6, mine = false }) == nil, "R: a friend's delivery has no number")
+	check(View.popCredits({ kind = "delivery", credits = 6 }) == nil, "R: mine must be true")
+	check(View.popCredits({ kind = "delivery", credits = 0, mine = true }) == nil, "R: nothing for 0 credits")
+	check(View.popCredits({ kind = "away", ice = 5, mine = true }) == nil, "R: away is a card, not a pop")
+	check(View.popCredits({ kind = "full", mine = true }) == nil, "R: full is a cue, not a pop")
+	check(View.popCredits(nil) == nil and View.popCredits("x") == nil, "R: junk events are ignored")
+
+	-- "While you were away": the ice waits in the silo; the robot (if any) carries it.
+	check(View.awayCard(MissionData, BaseBuild, { kind = "away", ice = 0 }, {}) == nil, "R: no card for no ice")
+	check(View.awayCard(MissionData, BaseBuild, { kind = "delivery", ice = 5 }, {}) == nil, "R: only the away kind")
+	local card = View.awayCard(MissionData, BaseBuild, { kind = "away", ice = 12.9, capped = true }, { drill_1 = 1 })
+	check(card ~= nil and card.ice == 12 and not card.robot and card.capped, "R: card without a robot (whole ice)")
+	check(card ~= nil and card.credits == BaseBuild.productCredits(MissionData, 12, "water"), "R: sent by hand it is water")
+	card = View.awayCard(MissionData, BaseBuild, { kind = "away", ice = 20 }, { drill_1 = 1, cargo_bot = 1, solar = BASE.AIR_MAKER_SOLAR })
+	check(card ~= nil and card.robot and card.credits == BaseBuild.productCredits(MissionData, 20, "oxygen"), "R: the robot brings air")
+	card = View.awayCard(MissionData, BaseBuild, { kind = "away", ice = 20 }, { drill_1 = 1, cargo_bot = 1, solar = BASE.AIR_MAKER_SOLAR - 1 })
+	check(card ~= nil and card.robot and card.credits == BaseBuild.productCredits(MissionData, 20, "water"), "R: no power: the robot brings water")
+	check(card ~= nil and not card.capped, "R: capped only when the server says so")
+
+	-- C.A.R.L. sends the player to the silo only when it is theirs and has enough ice.
+	local need = MissionData.TYCOON_CLIENT.CARL_SILO_MIN_ICE
+	check(isWhole(need, 1), "R: CARL_SILO_MIN_ICE is a whole number")
+	check(View.siloWorthAVisit(MissionData, true, need), "R: own silo with enough ice")
+	check(View.siloWorthAVisit(MissionData, nil, need + 0.5), "R: an older server (no siloOwner) counts as the owner")
+	check(not View.siloWorthAVisit(MissionData, true, need - 0.01), "R: too little ice: the crater instead")
+	check(not View.siloWorthAVisit(MissionData, false, BASE.SILO_MAX), "R: never a friend's silo")
+	check(not View.siloWorthAVisit(MissionData, true, nil), "R: no silo ice")
+
+	-- Silo full: "upgrade the habitat" only when the next habitat level really holds more.
+	local maxByHab = BASE.SILO_MAX_BY_HABITAT
+	for hab = 1, #maxByHab do
+		local bigger = View.biggerSiloNext(MissionData, BaseBuild, { habitat = hab })
+		local expected = hab < #maxByHab and maxByHab[hab + 1] > maxByHab[hab]
+		check(bigger == expected, `R: habitat {hab}: upgrade hint only when the silo grows`)
+	end
+	check(not View.biggerSiloNext(MissionData, BaseBuild, nil) or maxByHab[2] > maxByHab[1], "R: no builds")
 end
 
 ----------------------------------------------------------------------------------------------------

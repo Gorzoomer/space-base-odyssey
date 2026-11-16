@@ -2,10 +2,41 @@
 -- Space Base Odyssey - end-of-mission report: mission result (success, or what was missing), the
 -- chapter's outro on success (the last chapter shows the partial ending and the secrets found),
 -- stars for story and free play, a day-by-day timeline of causes, and Continue / Try again.
+-- Stage 11 juice: the earned stars appear one by one, each with a pop and a rising note, then a
+-- completed mission gets confetti (Celebrate.luau). Each timeline day reads as cause -> effect: the
+-- event and why, an arrow, then small chips for what that day changed (air or food up or down,
+-- radiation dose up, science sent), worked out by Feel.dayEffects. Dose only ever points up: it
+-- never goes down. With "reduce motion" the stars still come one by one but do not pop.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Feel = require(Shared:WaitForChild("Feel"))
+local MissionData = require(Shared:WaitForChild("MissionData"))
 
 local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
+local Audio = require(script.Parent.Audio)
+
+-- Stage 11: celebrations and the reduce-motion check (pcall: a broken module never breaks the report).
+local celebrateModule: any = nil
+local cameraFxModule: any = nil
+pcall(function()
+	celebrateModule = require(script.Parent:WaitForChild("Celebrate", 5) :: any)
+end)
+pcall(function()
+	cameraFxModule = require(script.Parent:WaitForChild("CameraFx", 5) :: any)
+end)
+local function motionReduced(): boolean
+	local fx = cameraFxModule
+	if fx and type(fx.motionReduced) == "function" then
+		local ok, result = pcall(fx.motionReduced)
+		return ok and result == true
+	end
+	return false
+end
 
 local ROLE = Ui.ROLE
 local MAX_STARS = 3
@@ -13,6 +44,20 @@ local PRESS_COOLDOWN = 1
 local MAX_MISSING = 4
 local FINALE_MISSION = "c3_failure"
 local MIN_TIMELINE_ROWS = 4 -- a 1-day tutorial still gets a normal-height row
+local HEADER_HEIGHT = 0.07 -- the timeline's "what happened, what it changed" line
+-- Stage 11: the chips' icons and tints (shape and direction carry the meaning, colour only helps).
+local EFFECT_ICONS: { [string]: string } = {
+	air = Ui.ICONS.air,
+	food = Ui.ICONS.food,
+	dose = Ui.ICONS.dose,
+	science = Ui.ICONS.Science,
+}
+local EFFECT_TINTS: { [string]: Color3 } = {
+	air = ROLE.air,
+	food = ROLE.food,
+	dose = ROLE.dose,
+	science = ROLE.Science,
+}
 
 local Report = {}
 
@@ -68,6 +113,7 @@ function Report.new(root: Frame, addSourcesButton: (parent: Instance, props: Ui.
 		anchor = Vector2.new(0.5, 0),
 	})
 	local starIcons: { ImageLabel } = {}
+	local starScales: { UIScale } = {} -- Stage 11: each star pops in
 	for index = 1, MAX_STARS do
 		local star = Ui.icon(starRow, Ui.ICONS.star, {
 			name = `Star{index}`,
@@ -75,7 +121,10 @@ function Report.new(root: Frame, addSourcesButton: (parent: Instance, props: Ui.
 			position = UDim2.fromScale((index - 1) * 0.17, 0),
 			tint = ROLE.star,
 		})
+		local pop = Instance.new("UIScale")
+		pop.Parent = star
 		table.insert(starIcons, star)
+		table.insert(starScales, pop)
 	end
 	local starText = Ui.label(starRow, {
 		name = "Count",
@@ -94,6 +143,15 @@ function Report.new(root: Frame, addSourcesButton: (parent: Instance, props: Ui.
 		corner = 0.05,
 	})
 	Ui.padding(timeline, 0.02)
+	-- Stage 11: the header says how to read each row (cause, then what it changed).
+	local timelineHeader = Ui.label(timeline, {
+		name = "Header",
+		size = UDim2.fromScale(1, HEADER_HEIGHT),
+		alignX = Enum.TextXAlignment.Left,
+		textColor = ROLE.textDim,
+		maxText = 22,
+		order = 0,
+	})
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Vertical
 	layout.SortOrder = Enum.SortOrder.LayoutOrder
@@ -232,7 +290,10 @@ function Report.new(root: Frame, addSourcesButton: (parent: Instance, props: Ui.
 			return
 		end
 		local count = math.max(#snap.history, snap.totalDays or 1, MIN_TIMELINE_ROWS)
-		local rowHeight = 1 / count - 0.012
+		local rowHeight = (1 - HEADER_HEIGHT - 0.012) / count - 0.012
+		-- Stage 11: what each day changed, compared with the day before (day 1: the mission start).
+		local meters = MissionData.METERS
+		local effects = Feel.dayEffects(snap.history, { air = meters.START_AIR, food = meters.START_FOOD, dose = meters.START_DOSE })
 		for index, record in snap.history do
 			local row = Ui.frame(timeline, {
 				name = `Day{record.day}`,
@@ -260,14 +321,55 @@ function Report.new(root: Frame, addSourcesButton: (parent: Instance, props: Ui.
 				anchor = Vector2.new(0, 0.5),
 				tint = Ui.EVENT_COLORS[event] or ROLE.accent,
 			})
+			-- Stage 11: cause -> effect. The cause text, an arrow, then up to three chips (meter icon
+			-- plus an up or down arrow; lime = good for the crew, orange = a warning).
+			local dayEffects = effects[index] or {}
+			local hasEffects = #dayEffects > 0
 			Ui.body(row, {
 				name = "Cause",
 				text = Store.t(record.causeKey),
-				size = UDim2.fromScale(0.8, 0.84),
+				size = UDim2.fromScale(if hasEffects then 0.52 else 0.8, 0.84),
 				position = UDim2.fromScale(0.19, 0.5),
 				anchor = Vector2.new(0, 0.5),
 				maxText = 22,
 			})
+			if hasEffects then
+				Ui.icon(row, Ui.ICONS.pointer, {
+					name = "Leads",
+					size = UDim2.fromScale(0.045, 0.6),
+					position = UDim2.fromScale(0.715, 0.5),
+					anchor = Vector2.new(0, 0.5),
+					tint = ROLE.textDim,
+				})
+				for chipIndex, effect in dayEffects do
+					local tone = if effect.good then ROLE.good else ROLE.warning
+					local chip = Ui.frame(row, {
+						name = `Effect{chipIndex}`,
+						size = UDim2.fromScale(0.073, 0.78),
+						position = UDim2.fromScale(0.765 + (chipIndex - 1) * 0.077, 0.5),
+						anchor = Vector2.new(0, 0.5),
+						color = ROLE.background,
+						corner = 0.3,
+						stroke = 2,
+						strokeColor = tone,
+					})
+					Ui.icon(chip, EFFECT_ICONS[effect.meter] or Ui.ICONS.star, {
+						name = "Meter",
+						size = UDim2.fromScale(0.52, 0.74),
+						position = UDim2.fromScale(0.05, 0.5),
+						anchor = Vector2.new(0, 0.5),
+						tint = EFFECT_TINTS[effect.meter] or ROLE.text,
+					})
+					local direction = Ui.icon(chip, Ui.Icons.upgrade, {
+						name = "Direction",
+						size = UDim2.fromScale(0.4, 0.62),
+						position = UDim2.fromScale(0.97, 0.5),
+						anchor = Vector2.new(1, 0.5),
+						tint = tone,
+					})
+					direction.Rotation = if effect.dir < 0 then 180 else 0
+				end
+			end
 			table.insert(rows, row)
 		end
 	end
@@ -283,6 +385,83 @@ function Report.new(root: Frame, addSourcesButton: (parent: Instance, props: Ui.
 			end
 		end
 		return Store.t(key)
+	end
+
+	-- Stage 11 star reveal: nil = every earned star shows; a number = how many have appeared so far.
+	local shownStars: number? = nil
+	local revealToken = 0
+
+	local function earnedStars(): number
+		local snap = Store.getSnapshot()
+		return if snap then math.clamp(snap.stars, 0, MAX_STARS) else 0
+	end
+
+	local function paintStars()
+		local stars = earnedStars()
+		local visible = if shownStars ~= nil then math.min(shownStars :: number, stars) else stars
+		for index, star in starIcons do
+			local lit = index <= visible
+			Ui.setIcon(star, if lit then Ui.ICONS.star else Ui.ICONS.starEmpty, if lit then ROLE.star else ROLE.textDim)
+		end
+		starText.Text = Store.t("ui.stars", { n = visible })
+	end
+
+	local function missionSucceeded(): boolean
+		local snap = Store.getSnapshot()
+		local missionResult = Store.missionResult()
+		if missionResult then
+			return missionResult.success
+		end
+		return snap ~= nil and snap.outcome == "Completed"
+	end
+
+	-- The report just opened: earned stars appear one by one (pop + a rising note), then a completed
+	-- mission gets its confetti. A newer opening (or closing) stops an older reveal.
+	local function startReveal()
+		revealToken += 1
+		local token = revealToken
+		shownStars = 0
+		paintStars()
+		for _, pop in starScales do
+			pop.Scale = 1
+		end
+		local opened = os.clock()
+		task.spawn(function()
+			local stars = earnedStars()
+			local mission = Store.mission()
+			local scored = mission == nil or mission.kind ~= "Tutorial"
+			for index = 1, if scored then stars else 0 do
+				local waitFor = Feel.starTime(index) - (os.clock() - opened)
+				if waitFor > 0 then
+					task.wait(waitFor)
+				end
+				if token ~= revealToken then
+					return
+				end
+				shownStars = index
+				paintStars()
+				Audio.play("coin_single", { pitch = Feel.starPitch(index) })
+				local pop = starScales[index]
+				if pop and not motionReduced() then
+					pop.Scale = 0.3
+					TweenService:Create(pop, TweenInfo.new(Feel.STAR_POP_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+						Scale = 1,
+					}):Play()
+				end
+			end
+			local rest = Feel.revealSeconds(if scored then stars else 0) - (os.clock() - opened)
+			if rest > 0 then
+				task.wait(rest)
+			end
+			if token ~= revealToken then
+				return
+			end
+			shownStars = nil
+			paintStars()
+			if missionSucceeded() and celebrateModule and type(celebrateModule.play) == "function" then
+				pcall(celebrateModule.play, "mission")
+			end
+		end)
 	end
 
 	local function render()
@@ -312,12 +491,8 @@ function Report.new(root: Frame, addSourcesButton: (parent: Instance, props: Ui.
 		-- Stars only for story chapters and free play (tutorials teach, they are not scored).
 		local showStars = kind ~= "Tutorial"
 		starRow.Visible = showStars
-		local stars = math.clamp(snap.stars, 0, MAX_STARS)
-		for index, star in starIcons do
-			local earned = index <= stars
-			Ui.setIcon(star, if earned then Ui.ICONS.star else Ui.ICONS.starEmpty, if earned then ROLE.star else ROLE.textDim)
-		end
-		starText.Text = Store.t("ui.stars", { n = stars })
+		paintStars()
+		timelineHeader.Text = Store.t("ui.report.cause_effect")
 
 		-- Story card.
 		-- Failure list: why the crew came home early (if they did), then each unmet objective.
@@ -376,7 +551,14 @@ function Report.new(root: Frame, addSourcesButton: (parent: Instance, props: Ui.
 	end
 
 	local function setVisible(visible: boolean)
+		local opening = visible and not screen.Visible
 		screen.Visible = visible
+		if opening then
+			startReveal() -- Stage 11
+		elseif not visible then
+			revealToken += 1
+			shownStars = nil
+		end
 	end
 
 	render()

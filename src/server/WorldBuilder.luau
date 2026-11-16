@@ -261,6 +261,75 @@ local COLLECTIBLE_IDS = Secret.COLLECTIBLE_IDS
 -- Extra no-boulder circles around the new structures (Stage 6 and 7), filled by build.
 local extraKeepouts: { { x: number, z: number, r: number } } = {}
 
+-- Stage 11 world: nobody falls into the void or stays stuck in the ice crater. One table (this big
+-- module is close to Luau's local limit). The layout rules are pure, in src/shared/WorldSafety.luau
+-- (tests/feel.luau checks them).
+local S11World: any = {}
+S11World.rules = require(Shared:WaitForChild("WorldSafety"))
+
+-- Two thin cyan guide strips (cyan = guidance) along the edges of a crater ramp. `cf` and `size`
+-- are the wedge's: its slope rises from the front (-Z, low) to the back (+Z, rim height).
+function S11World.rampGuides(parent: Instance, cf: CFrame, size: Vector3)
+	local slope = math.atan2(size.Y, size.Z)
+	local length = math.sqrt(size.Y * size.Y + size.Z * size.Z)
+	local normal = Vector3.new(0, math.cos(slope), -math.sin(slope)) -- the slope's outward normal (local)
+	for _, side in { -1, 1 } do
+		local offset = Vector3.new(side * (size.X / 2 - 0.4), 0, 0) + normal * 0.12
+		part(parent, "RampGuide", Vector3.new(0.5, 0.2, length - 1), cf * CFrame.new(offset) * CFrame.Angles(-slope, 0, 0), {
+			color = MARKER_GUIDE,
+			material = Enum.Material.Neon,
+			collide = false,
+			shadow = false,
+		})
+	end
+end
+
+-- Two more gentle ramps out of the crater floor (WorldSafety.exitAngles keeps them clear of the
+-- drills, the cheese niche, the ice nodes and the lamps; the first faces the base as far as it can).
+function S11World.craterExits(base: Instance, rampAngle: number, drillAngle: number)
+	local rules = S11World.rules
+	local crater = base:FindFirstChild("Crater") or base
+	local inner = rules.EXIT.INNER
+	local width = rules.EXIT.WIDTH
+	local height = CRATER_RIM_Y - CRATER_FLOOR_Y
+	local length = CRATER_RADIUS - inner
+	for index, angle in rules.exitAngles(rampAngle, Six.nicheAngle(rampAngle), drillAngle) do
+		local dir = dirFromAngle(angle)
+		local pos = CRATER_CENTRE + dir * (inner + length / 2) + Vector3.new(0, CRATER_FLOOR_Y + height / 2, 0)
+		local cf = CFrame.lookAt(pos, pos - dir)
+		local size = Vector3.new(width, height, length)
+		wedge(crater, "ExitRamp" .. index, size, cf, { color = Color3.fromRGB(112, 110, 106), material = Enum.Material.Sand })
+		S11World.rampGuides(crater, cf, size)
+	end
+end
+
+-- Invisible walls just inside the ground's edge (past +-GROUND_HALF is the void), so walking or the
+-- moon buggy never falls off the world. Each has an orange warning band at its foot, hidden here:
+-- the client fades it in when its player comes close (src/client/MapEdge.luau).
+function S11World.mapEdge(base: Instance)
+	local rules = S11World.rules
+	local edge = rules.EDGE
+	local edgeFolder = folder(base, "MapEdge")
+	edgeFolder:SetAttribute("GroundHalf", GROUND_HALF)
+	for _, wall in rules.wallBoxes(GROUND_HALF) do
+		part(edgeFolder, "EdgeWall", Vector3.new(wall.sx, edge.WALL_HEIGHT, wall.sz), CFrame.new(wall.cx, edge.WALL_HEIGHT / 2 - 8, wall.cz), {
+			color = PALETTE.night,
+			transparency = 1,
+			shadow = false,
+		})
+		local alongZ = wall.sx < wall.sz
+		local inward = Vector3.new(if alongZ then -math.sign(wall.cx) else 0, 0, if alongZ then 0 else -math.sign(wall.cz))
+		local glow = part(
+			edgeFolder,
+			"EdgeGlow",
+			Vector3.new(if alongZ then 0.3 else wall.sx, edge.GLOW_HEIGHT, if alongZ then wall.sz else 0.3),
+			CFrame.new(Vector3.new(wall.cx, edge.GLOW_HEIGHT / 2, wall.cz) + inward * (edge.WALL_THICKNESS / 2 + 0.2)),
+			{ color = Theme.ROLE.warning, material = Enum.Material.Neon, transparency = 1, collide = false, shadow = false }
+		)
+		glow:SetAttribute("Side", wall.side)
+	end
+end
+
 ------------------------------------------------------------------------------------------------
 -- Ground, crater, ridge and decoration
 ------------------------------------------------------------------------------------------------
@@ -378,6 +447,7 @@ local function buildCrater(base: Instance, rng: Random): (Model, { { part: BaseP
 		color = Color3.fromRGB(112, 110, 106),
 		material = Enum.Material.Sand,
 	})
+	S11World.rampGuides(crater, CFrame.lookAt(rampPos, rampPos - rampDir), Vector3.new(12, rampHeight, rampLength)) -- Stage 11 world
 
 	-- Frost patches on the floor.
 	local frostAngles = { 40, 150, 230, 300 }
@@ -2036,6 +2106,9 @@ function WorldBuilder.build(data: any): World
 	-- Stage 11 tycoon: the silo, water plant and air maker stand between the hub and the crater
 	-- (Six.worksLayout), so the whole line, drills to habitat, can be seen.
 	local drillAngle = Six.chooseDrillAngle(rampAngle)
+	-- Stage 11 world: more ways out of the ice crater, and walls at the map edge.
+	S11World.craterExits(base, rampAngle, drillAngle)
+	S11World.mapEdge(base)
 	local works = Six.worksLayout(drillAngle)
 	local conveyorFoot = works.beltStart
 	local cargoPoints = works.route

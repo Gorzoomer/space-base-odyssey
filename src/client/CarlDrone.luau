@@ -58,6 +58,11 @@
 -- or casts shadows. Ground and walls are found with a few raycasts per frame that skip characters,
 -- C.A.R.L. itself, pets and parts that do not collide.
 -- Stage 10: CarlDrone.setCinematic(true) keeps both beams off while a cinematic camera plays.
+-- Stage 11 tycoon client: "the silo" in every rule above means the player's OWN silo holding at
+-- least MissionData.TYCOON_CLIENT.CARL_SILO_MIN_ICE ice (IceLineView.siloWorthAVisit), else the
+-- crater ice. The guidance beam never goes through a wall: a blocked way ends the beam at the
+-- nearest visible door marker on the way, or hides it, and a cyan target marker floats over the
+-- place (routeBeam). "Dust landed on a solar panel" (open-world dust) points at the dusty array.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local Players = game:GetService("Players")
@@ -74,6 +79,9 @@ local Audio = require(script.Parent.Audio) -- Stage 11 audio
 local Objectives = require(script.Parent.Objectives)
 local Theme = require(Shared:WaitForChild("Theme"))
 local Icons = require(Shared:WaitForChild("Icons"))
+-- Stage 11 tycoon client: whose silo it is, and when it is worth a walk.
+local IceLineView = require(Shared:WaitForChild("IceLineView"))
+local IncomePops = require(script.Parent.IncomePops)
 
 -- Suit air below the meters' yellow zone counts as low (same 0-100 scale as the HUD bar).
 local SUIT_LOW = MissionData.METERS.YELLOW_ZONE * MissionData.SUIT.MAX / 100
@@ -131,6 +139,16 @@ local BEAM_COLOR = ROLE.warning -- orange: the way to the shelter
 local GUIDE_COLOR = ROLE.accent -- cyan: C.A.R.L.'s guidance
 local PUFF_COLORS = { PALETTE.cream, ROLE.accent }
 local GUIDE_HIDE_DISTANCE = 8 -- studs: close enough, the task marker and prompt take over
+-- Stage 11: the guidance beam never goes through walls (see routeBeam in CarlDrone.start).
+local BEAM_END_SLACK = 3 -- studs: a hit this close to the target counts as reaching it
+local BEAM_CLEAR_CHECKS = 2 -- a blocked beam comes back after this many clear checks in a row
+local DOOR_SEARCH_SECONDS = 5
+local DOOR_TARGET_RANGE = 70 -- studs: a door this close to the target can lead into its building
+local CARL_MARKER_RADIUS = 10 -- studs: a task prompt this close shows its own marker (Markers.luau)
+local OPEN_GROUND_FOLDERS = { "Ground", "Crater", "Ridge" } -- open ground never blocks the beam
+local TARGET_MARKER_PIXELS = 46
+local TARGET_MARKER_LIFT = 3 -- studs above the target
+local TARGET_MARKER_BOUNCE = 0.6 -- studs (still when motion is reduced)
 
 -- Earth skin: the Blue Marble map in a turning disc over the dome.
 local EARTH_OCEAN = PALETTE.cyan:Lerp(PALETTE.night, 0.55) -- shows while the map image loads
@@ -213,6 +231,7 @@ local EXPLORE_KEY_PREFIX = "carl.explore."
 local EXPLORE_ALL_KEY = "carl.explore.all_sites" -- every site scanned: nowhere to go
 local BUILD_FIRST_PREFIX = "carl.build_first." -- "build the <id> at the glowing pad first"
 local DUST_KEY = "carl.dust"
+local DUST_ROAM_KEY = "carl.dust_roam" -- Stage 11: open-world dust on a panel between missions
 local MARKER_KEYS: { [string]: string } = {
 	["carl.leak"] = "Leak",
 	["carl.return_inside"] = "HabitatDoor",
@@ -805,7 +824,7 @@ local function onAssistantMessage(key: string)
 		setInstruction("poi")
 	elseif string.sub(key, 1, #BUILD_FIRST_PREFIX) == BUILD_FIRST_PREFIX then
 		setInstruction("build", nil, string.sub(key, #BUILD_FIRST_PREFIX + 1))
-	elseif key == DUST_KEY then
+	elseif key == DUST_KEY or key == DUST_ROAM_KEY then
 		setInstruction("dusty")
 	elseif MARKER_KEYS[key] then
 		setInstruction("marker", nil, MARKER_KEYS[key])
@@ -948,11 +967,18 @@ local function iceTarget(): Instance?
 	return Store.findMarker("IceSite") or nearestPromptPoint(DRILL_PROMPT_KEYS)
 end
 
--- Not enough credits: the silo when it has ice to claim, else the crater ice.
-local function earnTarget(): Instance?
+-- Stage 11 tycoon client: the silo is worth a walk only when it is this player's and holds at least
+-- MissionData.TYCOON_CLIENT.CARL_SILO_MIN_ICE ice (a guest cannot empty a friend's silo).
+local function siloWorthAVisit(): boolean
 	local state = baseState()
 	local siloIce = if state and type(state.siloIce) == "number" then state.siloIce else 0
-	if siloIce >= 1 and not carryingIce() then
+	return IceLineView.siloWorthAVisit(MissionData, IncomePops.isSiloOwner(), siloIce)
+end
+
+-- Not enough credits: the silo when it is the player's and has enough ice (Stage 11), else the
+-- crater ice.
+local function earnTarget(): Instance?
+	if siloWorthAVisit() and not carryingIce() then
 		local silo = siloPart()
 		if silo then
 			return silo
@@ -1015,9 +1041,8 @@ local function questStepTarget(step: Objectives.QuestStep): Instance?
 	elseif kind == "ice" then
 		return iceTarget()
 	elseif kind == "silo" then
-		local state = baseState()
-		local siloIce = if state and type(state.siloIce) == "number" then state.siloIce else 0
-		return if siloIce >= 1 then siloPart() else nil
+		-- Stage 11: only the player's own silo with enough ice (else the other rules lead on).
+		return if siloWorthAVisit() then siloPart() else nil
 	elseif kind == "clean" then
 		return dustyArrayTarget()
 	elseif kind == "meteor" then
@@ -1121,9 +1146,7 @@ local function baseModeTarget(): Instance?
 	if site then
 		return site
 	end
-	local state = baseState()
-	local siloIce = if state and type(state.siloIce) == "number" then state.siloIce else 0
-	if siloIce >= 1 then
+	if siloWorthAVisit() then -- Stage 11: the player's own silo with enough ice
 		local silo = siloPart()
 		if silo then
 			return silo
@@ -1388,6 +1411,42 @@ function CarlDrone.start()
 	guide.Segments = 1
 	guide.Enabled = false
 	guide.Parent = model
+	-- Stage 11: a small target marker over a place the beam cannot reach in a straight line (inside a
+	-- building). Local, always on top, cyan like the beam.
+	local targetMarker = Instance.new("BillboardGui")
+	targetMarker.Name = "CarlTargetMarker"
+	targetMarker.Size = UDim2.fromOffset(TARGET_MARKER_PIXELS, TARGET_MARKER_PIXELS)
+	targetMarker.StudsOffsetWorldSpace = Vector3.new(0, TARGET_MARKER_LIFT, 0)
+	targetMarker.AlwaysOnTop = true
+	targetMarker.LightInfluence = 0
+	targetMarker.MaxDistance = 600
+	targetMarker.ResetOnSpawn = false
+	targetMarker.Enabled = false
+	targetMarker.Parent = model
+	local markerBack = Instance.new("Frame")
+	markerBack.Name = "Back"
+	markerBack.Size = UDim2.fromScale(1, 1)
+	markerBack.BackgroundColor3 = ROLE.background
+	markerBack.BackgroundTransparency = 0.15
+	markerBack.BorderSizePixel = 0
+	markerBack.Parent = targetMarker
+	local markerCorner = Instance.new("UICorner")
+	markerCorner.CornerRadius = UDim.new(0.5, 0)
+	markerCorner.Parent = markerBack
+	local markerStroke = Instance.new("UIStroke")
+	markerStroke.Color = GUIDE_COLOR
+	markerStroke.Thickness = 2
+	markerStroke.Parent = markerBack
+	local markerIcon = Instance.new("ImageLabel")
+	markerIcon.Name = "Icon"
+	markerIcon.BackgroundTransparency = 1
+	markerIcon.Size = UDim2.fromScale(0.7, 0.7)
+	markerIcon.Position = UDim2.fromScale(0.5, 0.5)
+	markerIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+	markerIcon.Image = Icons.target
+	markerIcon.ImageColor3 = GUIDE_COLOR
+	markerIcon.ScaleType = Enum.ScaleType.Fit
+	markerIcon.Parent = markerBack
 
 	-- Thruster puffs: a small pool of fading balls (no textures, no physics).
 	local puffFolder = Instance.new("Folder")
@@ -1459,6 +1518,11 @@ function CarlDrone.start()
 	-- Guidance target, worked out every GUIDE_REFRESH_SECONDS (guideAt = when it last was).
 	local guideTarget: Instance? = nil
 	local guideAt = -math.huge
+	-- Stage 11: where the beam ends (routeBeam), whether the straight way is blocked, and whether a
+	-- task marker (Markers.luau) already shows the target.
+	local beamEnd: Instance? = nil
+	local beamRouted = false
+	local beamTaskMarker = false
 
 	-- Every ProximityPrompt in Workspace (task prompts, the crate depot, build pads).
 	local function watchPrompt(instance: Instance)
@@ -1539,6 +1603,140 @@ function CarlDrone.start()
 		local origin = Vector3.new(position.X, fromY, position.Z)
 		local hit = workspace:Raycast(origin, Vector3.new(0, -RAY_DOWN, 0), rayParams)
 		return if hit then hit.Position.Y else nil
+	end
+
+	-- Stage 11: the guidance beam never goes through a wall. Every GUIDE_REFRESH_SECONDS a ray from
+	-- the mast light to the target checks the way; the open ground (Base.Ground, the crater, the
+	-- ridge, Terrain) never blocks. A blocked beam goes to the nearest door marker the light can see
+	-- that is on the way (the airlock of the building the target is in); with none, the beam hides
+	-- and a small target marker floats over the place instead (unless a task marker already shows it:
+	-- Markers.luau marks enabled prompts near C.A.R.L.'s target). Hysteresis: a blocked beam only
+	-- comes back after BEAM_CLEAR_CHECKS clear checks in a row, so it does not flicker past posts.
+	local function isOpenGround(instance: Instance): boolean
+		if instance == workspace.Terrain then
+			return true
+		end
+		local base = workspace:FindFirstChild("Base")
+		if base == nil then
+			return false
+		end
+		for _, name in OPEN_GROUND_FOLDERS do
+			local holder = base:FindFirstChild(name)
+			if holder and instance:IsDescendantOf(holder) then
+				return true
+			end
+		end
+		return false
+	end
+
+	local function wallBetween(from: Vector3, to: Vector3, targetPart: Instance?): boolean
+		local offset = to - from
+		if offset.Magnitude < 0.5 then
+			return false
+		end
+		local hit = workspace:Raycast(from, offset, rayParams)
+		if hit == nil then
+			return false
+		end
+		local hitPart = hit.Instance
+		if targetPart and (hitPart == targetPart or hitPart:IsDescendantOf(targetPart)) then
+			return false
+		end
+		if (hit.Position - to).Magnitude <= BEAM_END_SLACK or isOpenGround(hitPart) then
+			return false
+		end
+		return true
+	end
+
+	-- Door markers (Workspace.Base.Markers, names ending in "Door"), looked up again now and then.
+	local doorCache: { BasePart } = {}
+	local doorsAt = -math.huge
+	local function doorMarkers(now: number): { BasePart }
+		if now - doorsAt < DOOR_SEARCH_SECONDS then
+			return doorCache
+		end
+		doorsAt = now
+		local found: { BasePart } = {}
+		local base = workspace:FindFirstChild("Base")
+		local markers = if base then base:FindFirstChild("Markers") else nil
+		if markers then
+			for _, item in markers:GetChildren() do
+				if item:IsA("BasePart") and string.sub(item.Name, -4) == "Door" then
+					table.insert(found, item)
+				end
+			end
+		end
+		doorCache = found
+		return found
+	end
+
+	-- An enabled task prompt within CARL_MARKER_RADIUS of `position` (Markers.luau then shows it).
+	local function taskMarkerNear(position: Vector3): boolean
+		for prompt in knownPrompts do
+			if prompt.Parent == nil or not prompt.Enabled or promptTextKey(prompt) == nil then
+				continue
+			end
+			local at = targetPosition(promptPoint(prompt))
+			if at and (at - position).Magnitude <= CARL_MARKER_RADIUS then
+				return true
+			end
+		end
+		return false
+	end
+
+	-- Where the beam should end for `target` seen from `from`: the target itself (clear way), a door
+	-- on the way, or nil (hide the beam). blocked = the straight way is blocked.
+	local beamBlocked = false
+	local clearChecks = 0
+	local routedTarget: Instance? = nil -- the hysteresis belongs to one target (reset on a new one)
+	local function routeBeam(target: Instance?, from: Vector3, now: number): (Instance?, boolean)
+		if target ~= routedTarget then
+			routedTarget = target
+			beamBlocked = false
+			clearChecks = 0
+		end
+		local position = targetPosition(target)
+		if target == nil or position == nil then
+			beamBlocked = false
+			clearChecks = 0
+			return nil, false
+		end
+		local holder: Instance? = if target:IsA("Attachment") then target.Parent else target
+		if wallBetween(from, position, holder) then
+			beamBlocked = true
+			clearChecks = 0
+		elseif beamBlocked then
+			clearChecks += 1
+			if clearChecks >= BEAM_CLEAR_CHECKS then
+				beamBlocked = false
+			end
+		end
+		if not beamBlocked then
+			return target, false
+		end
+		local toTarget = (position - from).Magnitude
+		local best: BasePart? = nil
+		local bestCost = math.huge
+		for _, door in doorMarkers(now) do
+			if door.Parent == nil then
+				continue
+			end
+			local doorToTarget = (door.Position - position).Magnitude
+			local fromToDoor = (door.Position - from).Magnitude
+			-- On the way (closer to the target than C.A.R.L. is), near the target's building, visible.
+			if doorToTarget >= toTarget or doorToTarget > DOOR_TARGET_RANGE or fromToDoor < GUIDE_HIDE_DISTANCE then
+				continue
+			end
+			if wallBetween(from, door.Position, door) then
+				continue
+			end
+			local cost = fromToDoor + doorToTarget
+			if cost < bestCost then
+				best = door
+				bestCost = cost
+			end
+		end
+		return best, true
 	end
 
 	-- Hop on the player's jump (each time the Humanoid enters Jumping) and on the double jump
@@ -1646,6 +1844,7 @@ function CarlDrone.start()
 		hop = nil
 		beam.Enabled = false
 		guide.Enabled = false
+		targetMarker.Enabled = false
 		currentGuide = nil
 	end
 
@@ -1702,6 +1901,10 @@ function CarlDrone.start()
 			guideAt = now
 			guideTarget = if guiding then nil else guidanceTarget()
 			currentGuide = guideTarget
+			-- Stage 11: where the beam may end (no walls in the way) and whether a marker is needed.
+			beamEnd, beamRouted = routeBeam(guideTarget, bulb.Position, now)
+			local endPosition = targetPosition(guideTarget)
+			beamTaskMarker = endPosition ~= nil and beamRouted and taskMarkerNear(endPosition)
 		end
 		local shownGuide: Instance? = nil
 		local candidate = guideTarget
@@ -1845,8 +2048,20 @@ function CarlDrone.start()
 		end
 		beam.Enabled = showBeam and not cinematic
 
-		-- Guidance beam: calmer pulse, fading toward the target.
-		local guideEnd = if shownGuide and door == nil then attachmentFor(shownGuide) else nil
+		-- Guidance beam: calmer pulse, fading toward the target. Stage 11: it ends where routeBeam says
+		-- (the target, or a door on the way); a blocked way shows the target marker as well.
+		local routedEnd = if shownGuide and door == nil and shownGuide == guideTarget then beamEnd else nil
+		local guideEnd = if routedEnd then attachmentFor(routedEnd) else nil
+		local showMarker = shownGuide ~= nil and door == nil and beamRouted and not beamTaskMarker and not cinematic
+		if showMarker then
+			targetMarker.Adornee = shownGuide
+			local lift = TARGET_MARKER_LIFT
+			if not IncomePops.reduceMotion() then
+				lift += math.abs(math.sin(now * 3)) * TARGET_MARKER_BOUNCE
+			end
+			targetMarker.StudsOffsetWorldSpace = Vector3.new(0, lift, 0)
+		end
+		targetMarker.Enabled = showMarker
 		local showGuide = guideEnd ~= nil
 		if guideEnd then
 			guide.Attachment1 = guideEnd

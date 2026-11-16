@@ -15,6 +15,7 @@ Roblox (Luau) game for NASA Space Apps 2026, challenge "Build a Junior Astronaut
   - `lune run tests/localization`: every key in en and es, at most 8 words.
   - `lune run tests/achievements`: learning achievements (ids, icons, texts, unlock rules, saves). Must pass.
   - `lune run tests/worlds`: private worlds (who may join a world, whose base it shows). Must pass.
+  - `lune run tests/daily`: daily supply capsule and Moon Logbook (fixed rewards, one capsule per UTC day, forgiving calendar, milestones, saves). Must pass.
 - Check that the project still builds with `rojo build default.project.json -o <temp>.rbxl`.
 
 ## Rules

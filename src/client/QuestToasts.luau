@@ -15,7 +15,7 @@
 --     steps that are already done are listed in the card with a tick ("Already done: ...").
 --   * a step of a quest that stays active got done: a smaller line "Done: <step>".
 -- One update queues: step lines, then completed quests, then new quests. One card shows at a time
--- (SHOW_SECONDS, sliding in from the right); the queue keeps QUEUE_CAP toasts and drops step lines
+-- (its reading time, sliding in from the right); the queue keeps QUEUE_CAP toasts and drops step lines
 -- first. The queue waits while any full-screen panel is open (HOLD_PANELS: start menu, mission
 -- select, Lab, settings, wardrobe...). Right after a save slot loads nothing toasts (the quest in progress is not new): after a
 -- short settle time one card shows "Your quest right now". The memory resets when the slot changes
@@ -24,6 +24,11 @@
 -- Stage 10 learning achievements: QuestToasts.achievement(id, xp) queues an "Achievement unlocked!"
 -- card (the achievement's icon and title, +XP; no coin row since achievements pay no credits).
 -- AchievementsPanel.luau calls it when the server says one just unlocked.
+-- Stage 11 readable UI (src/shared/Reading.luau): a card stays on screen by its word count (at least
+-- 4 s, also for step lines); a full queue drops step lines first, then "your quest" and "new quest"
+-- cards, then completed quests, and NEVER an "Achievement unlocked!" card (Reading.toastDropIndex). A
+-- completed MAIN quest gets a bigger celebratory card (wider, bigger title, gold border, a pop and
+-- stars flying out, the victory sting) that stays longer.
 -- Placement: right side, x 0.78-0.985, from y 0.28 down (at most y 0.47): under the top-right buttons
 -- and the wardrobe square (y <= 0.27 in every mode), right of the storm countdown (x <= 0.78) and the
 -- C.A.R.L. bubble (x 0.29-0.71), far from the left column (x < 0.21) and the bottom tool bar. Z index
@@ -41,6 +46,7 @@ local MissionData = require(Shared:WaitForChild("MissionData"))
 local Quests = require(Shared:WaitForChild("Quests"))
 local Achievements = require(Shared:WaitForChild("Achievements"))
 local Types = require(Shared:WaitForChild("Types"))
+local Reading = require(Shared:WaitForChild("Reading")) -- Stage 11 readable UI
 
 local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
@@ -62,9 +68,14 @@ local MAX_TICKS = 2 -- steps already done listed in a new-quest card
 local ICON_COLUMN = 0.2 -- share of the card width for the big icon
 local TEXT_X = 0.22
 local ZINDEX = 45
-local SHOW_SECONDS = 3.5
-local STEP_SECONDS = 2.5
-local HURRY_FACTOR = 0.7 -- shorter cards while two or more wait
+local MAIN_DONE_EXTRA_SECONDS = 2 -- Stage 11: the big main-quest card stays a little longer
+-- Stage 11: the big main-quest card (sizes multiply the normal ones; width is a fraction of the screen).
+local BIG_WIDTH = 0.235
+local BIG_FACTOR = 1.3 -- ends at y 0.44
+local BIG_FACTOR_TOUCH = 1.15 -- ends at y 0.425, above the touch Run button (y 0.43)
+local BIG_POP_SECONDS = 0.45
+local STAR_COUNT = 6
+local STAR_SECONDS = 0.9
 local SLIDE_SECONDS = 0.3
 local GAP_SECONDS = 0.15
 local QUEUE_CAP = 5
@@ -77,6 +88,8 @@ local BASE_STATE_WAIT_SECONDS = 60
 local HOLD_PANELS = {
 	"StartMenu", "MissionSelect", "Report", "PowerBoard", "Settings", "Sources", "Collection", "FindCard",
 	"BasePanel", "Wardrobe", "ExploreCard", "Achievements",
+	"CarlHistory", "GlossaryCard", -- Stage 11 readable UI
+	"AwayCard", "DailyCard", -- Stage 11 tycoon and daily cards (dimmed modals over the toast)
 }
 -- On touch-only screens the Run button starts at y 0.43 under the card: new-quest cards list no ticked
 -- steps there, so the tallest card (header, title, reward) ends at about y 0.40.
@@ -108,6 +121,9 @@ type StateSnap = {
 type Tick = { key: string, n: number }
 type Toast = {
 	kind: "quest" | "step",
+	-- Stage 11: what the card is, for the drop order (Reading.TOAST_RANK): "step", "current", "new",
+	-- "side_done", "main_done" or "achievement".
+	tag: string,
 	header: string, -- localization key ("" = none)
 	color: Color3,
 	questId: string?,
@@ -117,7 +133,7 @@ type Toast = {
 	iconColor: Color3,
 	reward: Reward?,
 	ticks: { Tick },
-	seconds: number,
+	seconds: number, -- Stage 11: extra seconds on top of the reading time (Reading.seconds)
 }
 
 local function numberOr(value: any, fallback: number): number
@@ -218,6 +234,8 @@ type Card = {
 	coinText: TextLabel,
 	xpText: TextLabel,
 	ticks: { { frame: Frame, text: TextLabel } },
+	scale: UIScale, -- Stage 11: the big card's pop
+	stars: { ImageLabel }, -- Stage 11: stars that fly out of the big card
 }
 
 local function buildCard(root: Frame): Card
@@ -242,7 +260,7 @@ local function buildCard(root: Frame): Card
 		size = UDim2.fromScale(0.75, 0.3),
 		position = UDim2.fromScale(TEXT_X, 0.1),
 		alignX = Enum.TextXAlignment.Left,
-		maxText = 22,
+		maxText = 30, -- the box height limits normal cards; the Stage 11 big card goes bigger
 		zindex = ZINDEX + 1,
 	})
 	Ui.oneLine(header)
@@ -253,7 +271,7 @@ local function buildCard(root: Frame): Card
 		alignX = Enum.TextXAlignment.Left,
 		textColor = ROLE.text,
 		font = Ui.BODY_FONT,
-		maxText = 28,
+		maxText = 36,
 		zindex = ZINDEX + 1,
 	})
 	Ui.oneLine(title)
@@ -318,7 +336,27 @@ local function buildCard(root: Frame): Card
 		table.insert(ticks, { frame = row, text = text })
 	end
 
+	-- Stage 11: pop and stars for the big main-quest card.
+	local scale = Instance.new("UIScale")
+	scale.Parent = frame
+	local stars: { ImageLabel } = {}
+	for index = 1, STAR_COUNT do
+		local star = Ui.icon(frame, Ui.ICONS.star, {
+			name = `Star{index}`,
+			size = UDim2.fromScale(0.1, 0.3),
+			position = UDim2.fromScale(0.5, 0.5),
+			anchor = Vector2.new(0.5, 0.5),
+			aspect = 1,
+			tint = ROLE.star,
+			zindex = ZINDEX + 2,
+			visible = false,
+		})
+		table.insert(stars, star)
+	end
+
 	return {
+		scale = scale,
+		stars = stars,
 		frame = frame,
 		stroke = frame:FindFirstChildOfClass("UIStroke"),
 		icon = icon,
@@ -331,14 +369,28 @@ local function buildCard(root: Frame): Card
 	}
 end
 
--- Fills the card for one toast and sizes it (children are fractions of the card height).
-local function layoutCard(card: Card, toast: Toast)
+-- Width of the card for a toast (Stage 11: the main-quest card is wider).
+local function cardWidth(toast: Toast): number
+	return if toast.tag == "main_done" then BIG_WIDTH else CARD_WIDTH
+end
+
+-- Fills the card for one toast and sizes it (children are fractions of the card height). Returns the
+-- words on the card (Stage 11: its reading time).
+local function layoutCard(card: Card, toast: Toast): string
 	local frame = card.frame
+	local big = toast.tag == "main_done" -- Stage 11
+	-- On touch-only screens the Run button starts at y 0.43: the big card grows less there (ends y 0.425).
+	local touchScreen = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+	local f = if big then (if touchScreen then BIG_FACTOR_TOUCH else BIG_FACTOR) else 1
 	if card.stroke then
 		card.stroke.Color = toast.color
+		card.stroke.Thickness = Ui.STROKE * (if big then 2 else 1)
 	end
 	card.icon.Image = toast.icon
 	card.icon.ImageColor3 = toast.iconColor
+	for _, star in card.stars do
+		star.Visible = false
+	end
 
 	if toast.kind == "step" then
 		local height = PAD * 2 + STEP_HEIGHT
@@ -356,29 +408,32 @@ local function layoutCard(card: Card, toast: Toast)
 		card.title.TextColor3 = ROLE.good
 		card.title.Size = UDim2.fromScale(0.75, STEP_HEIGHT / height)
 		card.title.Position = UDim2.fromScale(TEXT_X, PAD / height)
-		return
+		return card.title.Text
 	end
 
 	local touchOnly = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 	local tickCount = math.min(#toast.ticks, if touchOnly then MAX_TICKS_TOUCH else MAX_TICKS)
-	local rewardHeight = if toast.reward then REWARD_HEIGHT else 0
-	local height = PAD * 2 + HEADER_HEIGHT + TITLE_HEIGHT + rewardHeight + TICK_HEIGHT * tickCount
-	frame.Size = UDim2.fromScale(CARD_WIDTH, height)
+	local headerHeight = HEADER_HEIGHT * f
+	local titleHeight = TITLE_HEIGHT * f
+	local rewardHeight = if toast.reward then REWARD_HEIGHT * f else 0
+	local height = PAD * 2 + headerHeight + titleHeight + rewardHeight + TICK_HEIGHT * tickCount
+	frame.Size = UDim2.fromScale(cardWidth(toast), height)
 
-	local iconHeight = HEADER_HEIGHT + TITLE_HEIGHT
+	local iconHeight = headerHeight + titleHeight
 	card.icon.Size = UDim2.fromScale(ICON_COLUMN - 0.04, iconHeight / height)
 	card.icon.Position = UDim2.fromScale(0.03, PAD / height)
 
 	card.header.Visible = toast.header ~= ""
 	card.header.Text = if toast.header ~= "" then Store.t(toast.header) else ""
 	card.header.TextColor3 = toast.color
-	card.header.Size = UDim2.fromScale(0.75, HEADER_HEIGHT / height)
+	card.header.Size = UDim2.fromScale(0.75, headerHeight / height)
 	card.header.Position = UDim2.fromScale(TEXT_X, PAD / height)
 
 	card.title.Text = if toast.titleKey then Store.t(toast.titleKey) else ""
-	card.title.TextColor3 = ROLE.text
-	card.title.Size = UDim2.fromScale(0.75, TITLE_HEIGHT / height)
-	card.title.Position = UDim2.fromScale(TEXT_X, (PAD + HEADER_HEIGHT) / height)
+	card.title.TextColor3 = if big then ROLE.star else ROLE.text
+	card.title.Size = UDim2.fromScale(0.75, titleHeight / height)
+	card.title.Position = UDim2.fromScale(TEXT_X, (PAD + headerHeight) / height)
+	local words = `{card.header.Text} {card.title.Text}`
 
 	local reward = toast.reward
 	card.reward.Visible = reward ~= nil
@@ -397,7 +452,7 @@ local function layoutCard(card: Card, toast: Toast)
 			xpIcon.Position = UDim2.fromScale(if coins then TEXT_X + 0.39 else TEXT_X, 0.05)
 		end
 		card.xpText.Position = UDim2.fromScale(if coins then TEXT_X + 0.5 else TEXT_X + 0.11, 0.05)
-		card.reward.Size = UDim2.fromScale(1, REWARD_HEIGHT / height)
+		card.reward.Size = UDim2.fromScale(1, rewardHeight / height)
 		card.reward.Position = UDim2.fromScale(0, (PAD + iconHeight) / height)
 	end
 
@@ -410,7 +465,29 @@ local function layoutCard(card: Card, toast: Toast)
 			tick.text.Text = Store.t("ui.toast.step_already", { step = stepText })
 			tick.frame.Size = UDim2.fromScale(1, TICK_HEIGHT / height)
 			tick.frame.Position = UDim2.fromScale(0, (tickTop + TICK_HEIGHT * (index - 1)) / height)
+			words ..= " " .. tick.text.Text
 		end
+	end
+	return words
+end
+
+-- Stage 11: the big main-quest card pops in and throws stars around itself.
+local function celebrate(card: Card)
+	card.scale.Scale = 0.6
+	TweenService:Create(card.scale, TweenInfo.new(BIG_POP_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Scale = 1,
+	}):Play()
+	for index, star in card.stars do
+		local angle = (index - 1) / #card.stars * math.pi * 2 + 0.3
+		star.Visible = true
+		star.ImageTransparency = 0
+		star.Rotation = 0
+		star.Position = UDim2.fromScale(0.5, 0.5)
+		TweenService:Create(star, TweenInfo.new(STAR_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Position = UDim2.fromScale(0.5 + math.cos(angle) * 0.62, 0.5 + math.sin(angle) * 0.9),
+			ImageTransparency = 1,
+			Rotation = 90,
+		}):Play()
 	end
 end
 
@@ -427,7 +504,6 @@ function QuestToasts.start(root: Frame)
 	local player = Players.LocalPlayer
 	local card = buildCard(root)
 	local shownPosition = UDim2.fromScale(CARD_RIGHT, CARD_TOP)
-	local hiddenPosition = UDim2.fromScale(CARD_RIGHT + CARD_WIDTH + 0.03, CARD_TOP)
 
 	local queue: { Toast } = {}
 	local running = false
@@ -453,19 +529,34 @@ function QuestToasts.start(root: Frame)
 	end
 
 	local function show(toast: Toast, token: number)
-		layoutCard(card, toast)
+		local words = layoutCard(card, toast)
+		-- Stage 11: the big card is wider, so it slides from further out.
+		local hiddenPosition = UDim2.fromScale(CARD_RIGHT + cardWidth(toast) + 0.03, CARD_TOP)
 		card.frame.Position = hiddenPosition
 		card.frame.Visible = true
+		card.scale.Scale = 1
 		-- Stage 11 audio: achievement, quest complete, new quest, or a small pop for a step.
 		Audio.play(if toast.header == "ui.toast.achievement" then "achievement_unlock"
 			elseif toast.kind == "step" then "toast_pop"
 			elseif toast.reward ~= nil then "quest_complete"
 			elseif toast.header == "ui.toast.current" then "toast_pop"
 			else "quest_new")
+		if toast.tag == "main_done" then
+			Audio.sting("sting_victory") -- Stage 11: a main quest is a big moment
+			celebrate(card)
+		end
 		TweenService:Create(card.frame, TweenInfo.new(SLIDE_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 			Position = shownPosition,
 		}):Play()
-		local seconds = toast.seconds * (if #queue >= 2 then HURRY_FACTOR else 1)
+		-- Stage 11: reading time by word count (at least 4 s), a little shorter while two or more wait.
+		local seconds = Reading.seconds(words, { busy = #queue >= 2 }) + toast.seconds
+		local atSpeed: any = (Store :: any).messageSeconds -- the "Message time" setting, when present
+		if type(atSpeed) == "function" then
+			local ok, scaled = pcall(atSpeed, seconds)
+			if ok and type(scaled) == "number" and scaled >= seconds then
+				seconds = scaled
+			end
+		end
 		local elapsed = 0
 		while elapsed < seconds and token == generation do
 			local dt = task.wait(POLL_SECONDS)
@@ -519,15 +610,18 @@ function QuestToasts.start(root: Frame)
 		end)
 	end
 
+	-- Stage 11: a full queue drops by rank (step lines first); achievement cards are never dropped,
+	-- even if that leaves more than QUEUE_CAP cards waiting.
 	local function push(toast: Toast)
 		table.insert(queue, toast)
 		while #queue > QUEUE_CAP do
-			local dropAt = 1
-			for index, queued in queue do
-				if queued.kind == "step" then
-					dropAt = index
-					break
-				end
+			local tags: { string } = {}
+			for _, queued in queue do
+				table.insert(tags, queued.tag)
+			end
+			local dropAt = Reading.toastDropIndex(tags)
+			if dropAt == nil then
+				break
 			end
 			table.remove(queue, dropAt)
 		end
@@ -545,13 +639,16 @@ function QuestToasts.start(root: Frame)
 		return ticks
 	end
 
-	local function questToast(header: string, quest: QuestSnap, reward: Reward?, ticks: { Tick }): Toast
+	-- `tag`: Reading.TOAST_RANK name ("new", "current", "side_done", "main_done").
+	local function questToast(header: string, quest: QuestSnap, reward: Reward?, ticks: { Tick }, tag: string): Toast
 		local side = quest.kind == "side"
 		local done = reward ~= nil
-		local color = if done then ROLE.good elseif side then ROLE.reward else ROLE.star
+		local big = tag == "main_done"
+		local color = if big then ROLE.star elseif done then ROLE.good elseif side then ROLE.reward else ROLE.star
 		return {
 			kind = "quest",
-			header = header,
+			tag = tag,
+			header = if big then "ui.toast.main_done" else header,
 			color = color,
 			questId = quest.id,
 			titleKey = Quests.titleKey(quest.id),
@@ -560,7 +657,7 @@ function QuestToasts.start(root: Frame)
 			iconColor = if done then ROLE.star elseif side then ROLE.reward else ROLE.star,
 			reward = reward,
 			ticks = ticks,
-			seconds = SHOW_SECONDS,
+			seconds = if big then MAIN_DONE_EXTRA_SECONDS else 0,
 		}
 	end
 
@@ -589,7 +686,9 @@ function QuestToasts.start(root: Frame)
 			end
 		end
 		local header = if already then "ui.toast.quest_already" else "ui.toast.quest_done"
-		push(questToast(header, quest, paidReward(quest.reward), {}))
+		-- Stage 11: a main quest finished in front of the player gets the big card.
+		local tag = if quest.kind == "main" and not already then "main_done" else "side_done"
+		push(questToast(header, quest, paidReward(quest.reward), {}, tag))
 	end
 
 	local function opened(quest: QuestSnap)
@@ -598,7 +697,7 @@ function QuestToasts.start(root: Frame)
 		end
 		toastedNew[quest.id] = true
 		local header = if quest.kind == "side" then "ui.toast.side_new" else "ui.toast.quest_new"
-		push(questToast(header, quest, nil, doneTicks(quest)))
+		push(questToast(header, quest, nil, doneTicks(quest), "new"))
 	end
 
 	-- Steps that got done in a quest that is still active (same id before and after).
@@ -620,6 +719,7 @@ function QuestToasts.start(root: Frame)
 				if not merged then
 					push({
 						kind = "step",
+						tag = "step",
 						header = "",
 						color = ROLE.good,
 						questId = after.id,
@@ -629,7 +729,7 @@ function QuestToasts.start(root: Frame)
 						iconColor = ROLE.good,
 						reward = nil,
 						ticks = {},
-						seconds = STEP_SECONDS,
+						seconds = 0,
 					})
 				end
 			end
@@ -723,7 +823,7 @@ function QuestToasts.start(root: Frame)
 				quest = state.sides[state.sideOrder[1]]
 			end
 			if quest then
-				local toast = questToast("ui.toast.current", quest, nil, {})
+				local toast = questToast("ui.toast.current", quest, nil, {}, "current")
 				toast.color = ROLE.accent
 				push(toast)
 			end
@@ -774,6 +874,7 @@ function QuestToasts.start(root: Frame)
 		end
 		push({
 			kind = "quest",
+			tag = "achievement", -- Stage 11: never dropped from a full queue
 			header = "ui.toast.achievement",
 			color = ROLE.star,
 			questId = nil,
@@ -783,7 +884,7 @@ function QuestToasts.start(root: Frame)
 			iconColor = ROLE.star,
 			reward = { credits = 0, xp = math.max(0, math.floor(xp)) },
 			ticks = {},
-			seconds = SHOW_SECONDS,
+			seconds = 0,
 		})
 	end
 

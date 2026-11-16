@@ -306,6 +306,12 @@ export type PlayerSettings = {
 	effectsVolume: number, -- 0..1
 	funFacts: boolean, -- C.A.R.L. fun facts on
 	guidance: boolean, -- C.A.R.L. guidance beam on
+	-- Stage 11 menu: accessibility (attributes SBO_BigText, SBO_ReduceMotion, SBO_ColourHelper,
+	-- SBO_MessageSpeed). Optional so an older server's settings still type-check.
+	bigText: boolean?, -- bigger text (Ui text helpers)
+	reduceMotion: boolean?, -- no camera shake, no big tweens
+	colourHelper: boolean?, -- icons and patterns next to colour-only signals
+	messageSpeed: number?, -- ServerGuard.MESSAGE_SPEEDS: 1, 1.5 or 2 (C.A.R.L. bubbles stay longer)
 }
 
 -- Stage 10 fix: one open friends world on the "Join a friend" screen (src/shared/Worlds.luau View).
@@ -380,6 +386,53 @@ export type ExploreEvent = {
 	isNew: boolean, -- first time for this player (reward given)
 }
 
+-- Stage 11 daily: the supply capsule and the Moon Logbook for one player (Remotes.DAILY, sent when
+-- their slot loads, after every change and on RequestDaily). Rules in src/shared/Daily.luau.
+--   calendar: the 7 days of the shown week (state "done" | "today" | "later"); ready = today's
+--     capsule waits; factKey = the cargo fact on the card; nextIn = seconds to the next UTC day.
+--   landing: where the capsule lands (beside the arrival lander's parts depot).
+--   claimed / paid: the capsule just opened and what it paid (once, right after ClaimDaily).
+--   stripes / wear: owned suit stripes (Daily.STRIPES ids) and the ones worn ("none").
+--   logbook: found secrets, sites ({ id, found }), fresh craters scanned, unlocked achievements,
+--     fun facts heard, entries / total, milestones ({ id, entries, stripe, claimed, ready }) and
+--     `milestone` = the one just claimed (once).
+export type DailyReward = {
+	capsule: number,
+	day: number,
+	week: number,
+	kind: "credits" | "xp" | "stripe",
+	amount: number,
+	stripe: string?,
+	state: string?,
+}
+export type LogbookMilestone = { id: string, entries: number, stripe: string, claimed: boolean, ready: boolean }
+export type LogbookState = {
+	secrets: { string },
+	sites: { { id: string, found: boolean } },
+	meteors: number,
+	meteorPage: number,
+	achievements: { string },
+	facts: { string },
+	entries: number,
+	total: number,
+	milestones: { LogbookMilestone },
+	milestone: string?,
+}
+export type DailyState = {
+	ready: boolean,
+	opened: number,
+	week: number,
+	calendar: { DailyReward },
+	factKey: string,
+	nextIn: number,
+	landing: Vector3?,
+	claimed: DailyReward?,
+	paid: { credits: number, xp: number }?,
+	stripes: { string },
+	wear: string,
+	logbook: LogbookState,
+}
+
 -- Client -> server requests.
 export type Action =
 	{ type: "SetCells", system: SystemId, cells: number }
@@ -409,7 +462,8 @@ export type Action =
 	-- Stage 11: save this player's settings (any subset of PlayerSettings fields; bad fields are
 	-- ignored, volumes clamped to 0..1). ProgressService accepts it on the start menu and in play, at
 	-- most 5 a second, and keeps it in the meta record. SetLanguage also updates settings.language.
-	| { type: "SaveSettings", settings: { language: ("en" | "es")?, musicVolume: number?, effectsVolume: number?, funFacts: boolean?, guidance: boolean? } }
+	-- Stage 11 menu: also bigText, reduceMotion, colourHelper (booleans) and messageSpeed (1 | 1.5 | 2).
+	| { type: "SaveSettings", settings: { language: ("en" | "es")?, musicVolume: number?, effectsVolume: number?, funFacts: boolean?, guidance: boolean?, bigText: boolean?, reduceMotion: boolean?, colourHelper: boolean?, messageSpeed: number? } }
 	-- Stage 10 achievements: the Sources screen ("Real NASA data") was opened. AchievementService
 	-- accepts it only for a loaded slot, at most once every few seconds per player.
 	| { type: "OpenSources" }
@@ -417,6 +471,15 @@ export type Action =
 	-- 0 for "Not now". QuestService accepts only the question it offers right now, at most one answer
 	-- a second; right = small XP bonus, wrong = a hint and the question comes back later.
 	| { type: "AnswerQuiz", id: string, choice: number }
+	-- Stage 11 daily (DailyService validates every one: a loaded slot, rate limits, the server's own
+	-- day and logbook count). ClaimDaily opens today's supply capsule; RequestDaily asks for DailyState
+	-- again; ClaimLogbook claims a logbook milestone; WearStripes picks owned suit stripes ("none" =
+	-- off); HeardFact notes fun fact number `index` C.A.R.L. just shared (logbook facts page only).
+	| { type: "ClaimDaily" }
+	| { type: "RequestDaily" }
+	| { type: "ClaimLogbook", id: string }
+	| { type: "WearStripes", id: string }
+	| { type: "HeardFact", index: number }
 	-- Stage 6 (BaseService validates: level, credits, requirements, ownership, distance for prompts).
 	| { type: "Build", id: string } -- build or upgrade to the next level (also from the world prompt)
 	| { type: "LearnSkill", id: string }
@@ -456,6 +519,7 @@ local Remotes = table.freeze({
 	WORLDS = "Worlds", -- server -> one client: FriendWorlds (Stage 10 fix, the "Join a friend" list)
 	ACHIEVEMENTS = "Achievements", -- server -> one client: AchievementState (Stage 10 learning achievements)
 	LINE = "IceLine", -- server -> one client: LineEvent (Stage 11 tycoon, created by BaseService)
+	DAILY = "Daily", -- server -> one client: DailyState (Stage 11 daily, created by DailyService)
 })
 
 return table.freeze({

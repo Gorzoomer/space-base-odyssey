@@ -13,9 +13,9 @@
 -- sits at the bottom centre while the player walks around with tools.
 -- Stage 8: gear (Gear.luau: air boots and jetpack, keys B / J, the client-side gas tank) is loaded
 -- with pcall and feeds the HUD gas bar; auto-run (Sprint.luau, key X) stops while a panel is open.
--- Stage 9 (open world): the start menu (StartMenu.luau: Continue, New game, Load game with 3 save
--- slots, Settings, Credits) is the first screen; the player has no character until the server loads
--- a slot (player attribute SBO_SlotChosen). The mission select never opens by itself at the start any
+-- Stage 9 (open world): the start menu (StartMenu.luau: Continue, New game / My worlds with 3 save
+-- slots (Stage 11 menu: no "Load game"), Join a friend, Settings, Credits) is the first screen;
+-- the player has no character until the server loads a slot (player attribute SBO_SlotChosen). The mission select never opens by itself at the start any
 -- more: missions start from the habitat's mission console (prompt "MissionConsolePrompt") or the
 -- Missions top button, and main quests guide the player. After a report the player is back in the base.
 -- Stage 10: the Achievements panel (AchievementsPanel.luau, learning achievements) opens from the top
@@ -76,7 +76,10 @@ local MISSION_CONSOLE_PROMPT_NAME = "MissionConsolePrompt"
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
-Store.setLanguage(Localization.detect(player.LocaleId))
+-- Stage 11 menu: the saved language (trip prefs or the server's Language attribute) beats the
+-- device language; Store.loadSettings then follows the server's saved settings.
+Store.setLanguage(Store.savedLanguage() or Localization.detect(player.LocaleId))
+Store.loadSettings()
 
 local _gui, root = Ui.createRoot(playerGui)
 
@@ -110,6 +113,9 @@ end
 local MODAL_PANELS = {
 	"StartMenu", "MissionSelect", "Report", "PowerBoard", "Settings", "Sources", "Collection", "FindCard",
 	"BasePanel", "Wardrobe", "ExploreCard", "Achievements",
+	"CarlHistory", "GlossaryCard", -- Stage 11 readable UI (Messages.luau history, GlossaryCard.luau)
+	"AwayCard", -- Stage 11 tycoon client: "While you were away" (IncomePops.luau)
+	"DailyCard", -- Stage 11 daily: the supply capsule card (DailyCapsule.luau)
 }
 local function anyPanelOpen(): boolean
 	for _, name in MODAL_PANELS do
@@ -152,6 +158,53 @@ local gearDeps: Hud.GearDeps? = if gearModule
 	else nil
 
 local messages = Messages.new(root)
+-- Stage 11 menu: while the start menu hides the HUD (Store.isMenuOpen), C.A.R.L.'s lines wait and
+-- come after it closes (the last few, in order); fun facts are dropped, and isIdle says "busy" so
+-- FunFacts does not speak into the hidden bubble. Wrapped here, before any module keeps a reference.
+do
+	local HELD_MAX = 4
+	local rawShow, rawShowTip, rawIsIdle = messages.show, messages.showTip, messages.isIdle
+	local held: { { ref: Store.TextRef, tip: boolean, phase: string?, style: Messages.TipStyle? } } = {}
+	local function hold(entry: { ref: Store.TextRef, tip: boolean, phase: string?, style: Messages.TipStyle? })
+		table.insert(held, entry)
+		while #held > HELD_MAX do
+			table.remove(held, 1)
+		end
+	end
+	messages.show = function(ref: Store.TextRef)
+		if Store.isMenuOpen() then
+			hold({ ref = ref, tip = false })
+			return
+		end
+		rawShow(ref)
+	end
+	messages.showTip = function(ref: Store.TextRef, phase: string?, style: Messages.TipStyle?)
+		if Store.isMenuOpen() then
+			if style ~= "fact" then
+				hold({ ref = ref, tip = true, phase = phase, style = style })
+			end
+			return
+		end
+		rawShowTip(ref, phase, style)
+	end
+	messages.isIdle = function(): boolean
+		return not Store.isMenuOpen() and rawIsIdle()
+	end
+	Store.onMenuChanged(function(open: boolean)
+		if open then
+			return
+		end
+		local list = held
+		held = {}
+		for _, entry in list do
+			if entry.tip then
+				rawShowTip(entry.ref, entry.phase, entry.style)
+			else
+				rawShow(entry.ref)
+			end
+		end
+	end)
+end
 local sources = Sources.new(root)
 local collection = Collection.new(root, { showMessage = messages.show })
 
@@ -182,6 +235,25 @@ local hud = Hud.new(root, {
 local report = Report.new(root, sources.addButton)
 -- Settings button (top right) and panel: language, volumes, C.A.R.L. options, redeem code.
 local settings = Settings.new(root)
+-- Stage 11 fixes: a tap outside the Settings panel closes it, as in the Lab, Wardrobe and Achievements
+-- (an invisible backdrop button under the panel; skipped if Settings ever gets its own).
+do
+	local modal = root:FindFirstChild("Settings")
+	if modal and modal:IsA("GuiObject") and modal:FindFirstChild("Backdrop") == nil then
+		local backdrop = Instance.new("TextButton")
+		backdrop.Name = "Backdrop"
+		backdrop.Text = ""
+		backdrop.BackgroundTransparency = 1
+		backdrop.Size = UDim2.fromScale(1, 1)
+		backdrop.ZIndex = modal.ZIndex
+		backdrop.AutoButtonColor = false
+		backdrop.Selectable = false
+		backdrop.Parent = modal
+		backdrop.Activated:Connect(function()
+			settings.close()
+		end)
+	end
+end
 
 local basePanel = loadPanel("BasePanel", { showMessage = messages.show }) -- the Lab panel
 
@@ -331,7 +403,11 @@ do
 	end
 	-- Small cards that pop up while playing keep the hotbar: hiding it would put away the tool in
 	-- hand (the tablet right after a scan).
-	local KEEP_HOTBAR: { [string]: boolean } = { ExploreCard = true, FindCard = true }
+	local KEEP_HOTBAR: { [string]: boolean } = {
+		ExploreCard = true,
+		FindCard = true,
+		AwayCard = true, -- Stage 11 tycoon client
+	}
 	local function bigPanelOpen(): boolean
 		for _, name in MODAL_PANELS do
 			local panel = root:FindFirstChild(name)
@@ -341,8 +417,14 @@ do
 		end
 		return false
 	end
+	-- Stage 11 quests that teach: the "C.A.R.L. asks" card (QuizCard.luau) frees the mouse too (first
+	-- person or shift lock could not tap it), but keeps the tool bar and auto-run (it is not a panel).
+	local function quizCardShown(): boolean
+		local quizCard = root:FindFirstChild("QuizCard")
+		return quizCard ~= nil and quizCard:IsA("GuiObject") and quizCard.Visible
+	end
 	RunService.Heartbeat:Connect(function()
-		local open = anyPanelOpen()
+		local open = anyPanelOpen() or quizCardShown()
 		if unlock.Visible ~= open then
 			unlock.Visible = open
 		end
@@ -454,8 +536,14 @@ local function showPhase(phase: string)
 	if phase ~= "Briefing" then
 		collection.close()
 	end
-	if phase == "Shift" or phase == "Report" then
+	-- Stage 11 fixes: any phase away from Briefing closes the Lab, Wardrobe and Achievements (in a
+	-- friends world another player can start a mission while this one is in the Lab: the panel hid the
+	-- power board) and a scan card still open (it covered the shift clock until "Continue").
+	if phase ~= "Briefing" then
 		closePanels()
+		if exploreCard and exploreCard.isOpen() then
+			exploreCard.close()
+		end
 	end
 	applyView()
 end
@@ -581,7 +669,42 @@ do
 		warn(`[SpaceBaseOdyssey] QuestToasts unavailable: {result}`)
 	end
 end
-FunFacts.start({ showTip = messages.showTip, isIdle = messages.isIdle })
+-- Stage 11 quests that teach: the "C.A.R.L. asks" question card (src/client/QuizCard.luau; pcall:
+-- never breaks the client).
+do
+	local ok, result = pcall(function()
+		(require(Client:WaitForChild("QuizCard", 5) :: any) :: any).start(root)
+	end)
+	if not ok then
+		warn(`[SpaceBaseOdyssey] QuizCard unavailable: {result}`)
+	end
+end
+-- Stage 11 daily: the daily supply capsule (src/client/DailyCapsule.luau) and the fun facts heard for
+-- the Moon Logbook's facts page (pcall: never breaks the client; without it the tip is shown as before).
+local dailyCapsule: any = nil
+do
+	local ok, result = pcall(function(): any
+		local module: any = require(Client:WaitForChild("DailyCapsule", 5) :: any)
+		module.start(root, {
+			showMessage = messages.show,
+			openLogbook = collection.open,
+			panelOpen = anyPanelOpen,
+		})
+		return module
+	end)
+	if ok then
+		dailyCapsule = result
+	else
+		warn(`[SpaceBaseOdyssey] DailyCapsule unavailable: {result}`)
+	end
+end
+local function funFactTip(ref: any, phase: string?, style: any)
+	messages.showTip(ref, phase, style)
+	if dailyCapsule then
+		pcall(dailyCapsule.noteFunFact, ref)
+	end
+end
+FunFacts.start({ showTip = funFactTip, isIdle = messages.isIdle })
 Onboarding.start({
 	show = messages.show,
 	showTip = messages.showTip,
@@ -601,6 +724,60 @@ end
 pcall(function()
 	(require(Client:WaitForChild("ProductionLine", 5) :: any) :: any).start()
 end)
+-- Stage 11 tycoon client: "+N" pops, the "While you were away" card and the silo-full cue
+-- (src/client/IncomePops.luau; pcall: never breaks the client).
+do
+	local ok, result = pcall(function()
+		(require(Client:WaitForChild("IncomePops", 5) :: any) :: any).start(root, { showTip = messages.showTip })
+	end)
+	if not ok then
+		warn(`[SpaceBaseOdyssey] IncomePops failed to start: {result}`)
+	end
+end
+-- Stage 11 celebrate: confetti, a soft flash and titles for big moments (src/client/Celebrate.luau),
+-- the camera feel (src/client/CameraFx.luau: meteorite jolt, storm edge pulse) and the map-edge glow
+-- (src/client/MapEdge.luau). The BaseState listener below passes each state to Celebrate, and the
+-- Achievements remote's new unlocks get their burst here. pcall: none of it can break the client.
+local celebrateBaseState: (state: any) -> () = function() end
+do
+	local okFx, fxError = pcall(function()
+		(require(Client:WaitForChild("CameraFx", 5) :: any) :: any).start()
+	end)
+	if not okFx then
+		warn(`[SpaceBaseOdyssey] CameraFx unavailable: {fxError}`)
+	end
+	local okEdge, edgeError = pcall(function()
+		(require(Client:WaitForChild("MapEdge", 5) :: any) :: any).start({ showMessage = messages.show })
+	end)
+	if not okEdge then
+		warn(`[SpaceBaseOdyssey] MapEdge unavailable: {edgeError}`)
+	end
+	local okCelebrate, celebrate = pcall(function(): any
+		local module: any = require(Client:WaitForChild("Celebrate", 5) :: any)
+		module.start()
+		return module
+	end)
+	if okCelebrate and type(celebrate) == "table" then
+		celebrateBaseState = function(state: any)
+			celebrate.onBaseState(state)
+		end
+		task.spawn(function()
+			local folder = ReplicatedStorage:WaitForChild(Types.Remotes.FOLDER)
+			local name: string = (Types.Remotes :: any).ACHIEVEMENTS or "Achievements"
+			local remote = folder:WaitForChild(name, REMOTE_WAIT_SECONDS)
+			if remote == nil or not remote:IsA("RemoteEvent") then
+				return -- older server: no achievements
+			end
+			(remote :: RemoteEvent).OnClientEvent:Connect(function(payload: any)
+				if type(payload) == "table" and type(payload.new) == "string" and Store.isSlotChosen() then
+					celebrate.play("achievement")
+				end
+			end)
+		end)
+	else
+		warn(`[SpaceBaseOdyssey] Celebrate unavailable: {celebrate}`)
+	end
+end
 -- Stage 10: "Game saved" pill after each save (src/client/SaveIndicator.luau; pcall: never breaks the client).
 do
 	local ok, result = pcall(function()
@@ -766,6 +943,7 @@ task.spawn(function()
 	baseRemote.OnClientEvent:Connect(function(state: any)
 		if type(state) == "table" and type(state.credits) == "number" then
 			Store.setBase(state)
+			celebrateBaseState(state) -- Stage 11 celebrate
 		end
 	end)
 end)
@@ -802,7 +980,8 @@ task.spawn(function()
 	end)
 end)
 
-Store.send({ type = "SetLanguage", language = Store.getLanguage() })
+-- Stage 11 menu: no SetLanguage at start any more. It saved the device language over the player's
+-- saved choice on every join; the language is sent only when the player picks one in Settings.
 
 -- Stage 9 save slots: the start menu lists them. With an older server (no "Slots" remote) the menu
 -- closes so the player is never stuck on it. If the start menu module failed to load, the player

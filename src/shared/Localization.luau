@@ -2649,6 +2649,173 @@ for _, row in TYCOON_REWORDED do
 	ES[row[1]] = row[3]
 end
 
+-- Stage 11 tycoon client: the world signs over the silo and the water plant, the machine income
+-- under the wallet, the "While you were away" card and C.A.R.L.'s silo-full tip (IncomePops,
+-- ProductionLine, Hud). { key, English, Spanish }.
+local TYCOON_CLIENT_STRINGS: { { string } } = {
+	{ "ui.line.ice", "Ice {n}/{max}", "Hielo {n}/{max}" },
+	{ "ui.line.machines", "Machines: +{n} credits a minute", "Máquinas: +{n} créditos por minuto" },
+	{ "ui.line.friend_silo", "Your friend's silo", "Silo de tu amigo" },
+	{ "ui.line.away_worth", "Worth {n} credits", "Vale {n} créditos" },
+	{ "ui.line.away_robot", "The robot will bring it home.", "El robot lo llevará a casa." },
+	{ "ui.line.away_silo", "It waits for you in the silo.", "Te espera en el silo." },
+	{ "ui.line.collect", "Collect", "Recoger" },
+	{ "ui.line.ok", "Great!", "¡Genial!" },
+	{ "carl.line.silo_upgrade", "Silo full! Upgrade the habitat for more room.", "¡Silo lleno! Mejora el hábitat para más espacio." },
+}
+for _, row in TYCOON_CLIENT_STRINGS do
+	assert(EN[row[1]] == nil, "Stage 11 tycoon client key defined twice: " .. row[1])
+	table.insert(KEYS, row[1])
+	EN[row[1]] = row[2]
+	ES[row[1]] = row[3]
+end
+
+-- Stage 11 menu: the start menu without "Load game" (StartMenu.luau) and the Settings "Helpers"
+-- page (Settings.luau). { key, English, Spanish }.
+local STAGE11_MENU_STRINGS: { { string } } = {
+	{ "ui.menu_worlds", "My worlds", "Mis mundos" },
+	{ "ui.menu_continue_none", "No saved world yet", "Aún no hay un mundo guardado" },
+	{ "ui.menu_start_over", "Start over", "Empezar de nuevo" },
+	{ "ui.menu_choice_text", "Keep playing, or start this world again?", "¿Seguir jugando o empezar este mundo otra vez?" },
+	{ "ui.menu_wait_slow", "Still getting your base ready. Please wait.", "Tu base aún se prepara. Espera un poco." },
+	{ "ui.menu_back_lobby", "Back to the start", "Volver al inicio" },
+	{ "ui.settings_tab_game", "Game", "Juego" },
+	{ "ui.settings_tab_help", "Helpers", "Ayudas" },
+	{ "ui.help_text", "Text size", "Tamaño del texto" },
+	{ "ui.help_text_normal", "Normal", "Normal" },
+	{ "ui.help_text_big", "Big", "Grande" },
+	{ "ui.help_text_hint", "Big letters are easier to read.", "Las letras grandes se leen mejor." },
+	{ "ui.help_motion", "Less motion", "Menos movimiento" },
+	{ "ui.help_motion_hint", "No camera shaking. Calmer screens.", "Sin cámara que tiembla. Pantallas más tranquilas." },
+	{ "ui.help_speed", "Message time", "Tiempo de mensajes" },
+	{ "ui.help_speed_normal", "Normal", "Normal" },
+	{ "ui.help_speed_long", "Long", "Largo" },
+	{ "ui.help_speed_longer", "Longer", "Más largo" },
+	{ "ui.help_speed_hint", "C.A.R.L.'s messages stay longer on screen.", "Los mensajes de C.A.R.L. duran más." },
+	{ "ui.help_colour", "Colour helper", "Ayuda de colores" },
+	{ "ui.help_colour_hint", "Shows shapes too, not only colours.", "Muestra formas, no solo colores." },
+	{ "ui.help_sample", "Hello! This is how your text looks.", "¡Hola! Así se ve tu texto." },
+}
+for _, row in STAGE11_MENU_STRINGS do
+	assert(EN[row[1]] == nil, "Stage 11 menu key defined twice: " .. row[1])
+	table.insert(KEYS, row[1])
+	EN[row[1]] = row[2]
+	ES[row[1]] = row[3]
+end
+
+-- Stage 11 daily: the daily supply capsule card (DailyCapsule.luau), the suit stripes, the Moon
+-- Logbook (Collection.luau) and the cargo facts ("daily.fact.<n>", src/shared/Daily.luau: no
+-- numbers, only science DATA_SOURCES.md already backs). { key, English, Spanish }.
+local STAGE11_DAILY_STRINGS: { { string } } = {
+	{ "ui.daily.title", "Supply capsule", "Cápsula de suministros" },
+	{ "ui.daily.note", "A game gift, not a real NASA flight.", "Un regalo del juego, no un vuelo real." },
+	{ "ui.daily.week", "Week {n}", "Semana {n}" },
+	{ "ui.daily.day", "Day {n}", "Día {n}" },
+	{ "ui.daily.open", "Open capsule", "Abrir cápsula" },
+	{ "ui.daily.opened", "Opened! Come back for the next one.", "¡Abierta! Vuelve por la siguiente." },
+	{ "ui.daily.next_hours", "Next capsule in {n} hours", "Próxima cápsula en {n} horas" },
+	{ "ui.daily.next_minutes", "Next capsule in {n} minutes", "Próxima cápsula en {n} minutos" },
+	{ "ui.daily.forgiving", "Missed a day? Your calendar just waits.", "¿Faltaste un día? Tu calendario te espera." },
+	{ "ui.daily.fact_title", "Cargo fact", "Dato de la carga" },
+	{ "ui.daily.credits", "+{n} credits", "+{n} créditos" },
+	{ "ui.daily.xp", "+{n} XP", "+{n} XP" },
+	{ "ui.daily.stripes", "Suit stripes", "Franjas del traje" },
+	{ "ui.daily.got_credits", "You got {n} credits!", "¡Ganaste {n} créditos!" },
+	{ "ui.daily.got_xp", "You got {n} XP!", "¡Ganaste {n} XP!" },
+	{ "ui.daily.got_stripes", "New suit stripes: {name}!", "¡Franjas nuevas: {name}!" },
+	{ "ui.daily.logbook", "Logbook", "Bitácora" },
+	{ "prompt.daily_capsule", "Open the capsule", "Abrir la cápsula" },
+	{ "carl.daily.landed", "A supply capsule landed by the lander!", "¡Una cápsula llegó junto a la nave!" },
+	{ "stripe.sunrise.name", "Sunrise stripes", "Franjas de amanecer" },
+	{ "stripe.ice.name", "Ice blue stripes", "Franjas azul hielo" },
+	{ "stripe.garden.name", "Garden green stripes", "Franjas verde jardín" },
+	{ "stripe.star.name", "Gold star stripes", "Franjas de estrella dorada" },
+	{ "stripe.secret.name", "Secret pink stripes", "Franjas rosa secreto" },
+	{ "stripe.lunar.name", "Moon explorer stripes", "Franjas de explorador lunar" },
+	{ "ui.logbook.title", "Moon Logbook", "Bitácora lunar" },
+	{ "ui.logbook.entries", "{n} of {total} entries filled", "{n} de {total} registros llenos" },
+	{ "ui.logbook.tab_secrets", "Secrets", "Secretos" },
+	{ "ui.logbook.tab_sites", "Places", "Lugares" },
+	{ "ui.logbook.tab_rocks", "Space rocks", "Rocas espaciales" },
+	{ "ui.logbook.tab_achievements", "Achievements", "Logros" },
+	{ "ui.logbook.tab_facts", "Facts", "Datos" },
+	{ "ui.logbook.tab_stripes", "Stripes", "Franjas" },
+	{ "ui.logbook.locked", "Not found yet", "Aún no encontrado" },
+	{ "ui.logbook.site_hint", "Scan this place with the tablet", "Escanea este lugar con la tableta" },
+	{ "ui.logbook.rock", "Space rock {n}", "Roca espacial {n}" },
+	{ "ui.logbook.rock_hint", "Scan a fresh crater with the tablet", "Escanea un cráter nuevo con la tableta" },
+	{ "ui.logbook.facts_count", "{n} facts heard", "{n} datos escuchados" },
+	{ "ui.logbook.facts_none", "C.A.R.L. shares fun facts during missions", "C.A.R.L. cuenta datos curiosos en misiones" },
+	{ "ui.logbook.cargo", "Cargo fact {n}", "Dato de carga {n}" },
+	{ "ui.logbook.milestone", "Fill {n} entries", "Llena {n} registros" },
+	{ "ui.logbook.claim", "Claim", "Reclamar" },
+	{ "ui.logbook.claimed", "Claimed", "Reclamado" },
+	{ "ui.logbook.wear", "Wear", "Usar" },
+	{ "ui.logbook.wearing", "Wearing", "Puestas" },
+	{ "ui.logbook.no_stripes", "No stripes", "Sin franjas" },
+	{ "ui.logbook.how_daily", "Open daily supply capsules", "Abre las cápsulas diarias" },
+	{ "ui.logbook.how_logbook", "Fill the logbook", "Llena la bitácora" },
+	{ "ui.logbook.calendar", "Capsule calendar", "Calendario de cápsulas" },
+	{ "ui.logbook.capsules", "{n} capsules opened", "{n} cápsulas abiertas" },
+	{ "carl.logbook.ready", "Logbook reward ready! Open your logbook.", "¡Premio listo! Abre tu bitácora." },
+	{ "carl.logbook.milestone", "Logbook reward! New suit stripes.", "¡Premio de bitácora! Franjas nuevas." },
+	{ "daily.fact.1", "Every astronaut needs water, food and air daily.", "Cada astronauta necesita agua, comida y aire diario." },
+	{ "daily.fact.2", "Ice from dark craters can become water.", "El hielo de cráteres oscuros puede ser agua." },
+	{ "daily.fact.3", "Power plus water makes the air we breathe.", "Energía y agua hacen el aire que respiramos." },
+	{ "daily.fact.4", "The Space Station recycles almost all its water.", "La Estación Espacial recicla casi toda su agua." },
+	{ "daily.fact.5", "Plants need power and time to grow food.", "Las plantas necesitan energía y tiempo para crecer." },
+	{ "daily.fact.6", "Thick, heavy walls block storm particles.", "Muros gruesos y pesados frenan las partículas." },
+	{ "daily.fact.7", "Moon rocks hold oxygen locked inside them.", "Las rocas lunares guardan oxígeno atrapado adentro." },
+}
+for _, row in STAGE11_DAILY_STRINGS do
+	assert(EN[row[1]] == nil, "Stage 11 daily key defined twice: " .. row[1])
+	table.insert(KEYS, row[1])
+	EN[row[1]] = row[2]
+	ES[row[1]] = row[3]
+end
+-- Stage 11 daily: the Mission Select "Collection" button now opens the Moon Logbook.
+for _, row in { { "ui.collection_button", "Logbook", "Bitácora" } } do
+	assert(EN[row[1]] ~= nil, "Stage 11 daily rewords a missing key: " .. row[1])
+	EN[row[1]] = row[2]
+	ES[row[1]] = row[3]
+end
+
+-- Stage 11 readable UI: C.A.R.L.'s history list (Messages.luau), the big main-quest card
+-- (QuestToasts.luau), Achievements pages, the picture glossary card (GlossaryCard.luau) and extra
+-- word forms it also matches ("glossary.<id>.forms": comma-separated, never shown). { key, English, Spanish }.
+local STAGE11_READING_STRINGS: { { string } } = {
+	{ "ui.history.title", "What C.A.R.L. said", "Lo que dijo C.A.R.L." },
+	{ "ui.history.empty", "C.A.R.L. has not talked yet.", "C.A.R.L. todavía no ha hablado." },
+	{ "ui.toast.main_done", "Main quest complete! Great job!", "¡Aventura principal completa! ¡Muy bien!" },
+	{ "ui.ach_page", "Page {n} of {total}", "Página {n} de {total}" },
+	{ "ui.glossary.title", "What does it mean?", "¿Qué significa?" },
+	{ "ui.glossary.tap", "Tap a gold word to learn it", "Toca una palabra dorada para aprenderla" },
+	{ "glossary.parts_box.forms", "parts boxes", "cajas de piezas" },
+	{ "glossary.solar_panel.forms", "solar panels", "paneles solares, paneles" },
+	{ "glossary.ice_crater.forms", "ice craters", "cráteres de hielo" },
+	{ "glossary.solar_flare.forms", "flare, flares", "llamarada, llamaradas, llamaradas solares" },
+	{ "glossary.base_level.forms", "base levels", "niveles de base" },
+}
+for _, row in STAGE11_READING_STRINGS do
+	assert(EN[row[1]] == nil, "Stage 11 reading key defined twice: " .. row[1])
+	table.insert(KEYS, row[1])
+	EN[row[1]] = row[2]
+	ES[row[1]] = row[3]
+end
+
+-- Stage 11 juice and world safety: C.A.R.L. at the map edge (src/client/MapEdge.luau) and the report
+-- timeline's header (Report.luau: cause, then what it changed). { key, English, Spanish }.
+local STAGE11_FEEL_STRINGS: { { string } } = {
+	{ "carl.map_edge", "This is the map edge. Turn back!", "Aquí termina el mapa. ¡Da la vuelta!" },
+	{ "ui.report.cause_effect", "What happened, and what it changed", "Qué pasó y qué cambió" },
+}
+for _, row in STAGE11_FEEL_STRINGS do
+	assert(EN[row[1]] == nil, "Stage 11 feel key defined twice: " .. row[1])
+	table.insert(KEYS, row[1])
+	EN[row[1]] = row[2]
+	ES[row[1]] = row[3]
+end
+
 local STRINGS: { [Language]: { [string]: string } } = {
 	en = table.freeze(EN),
 	es = table.freeze(ES),

@@ -177,6 +177,18 @@ startStep("AchievementService", function()
 	end
 end)
 
+-- Stage 11 daily: the daily supply capsule and the Moon Logbook (optional; started inside pcall
+-- after ExploreService and AchievementService, whose results it counts).
+startStep("DailyService", function()
+	local module = optionalModule("DailyService")
+	if module then
+		module.start(world, BaseService, ProgressService, {
+			action = remotes.action,
+			message = remotes.message,
+		})
+	end
+end)
+
 -- When the Earth hides the Sun (an eclipse seen from the Moon), C.A.R.L. explains it.
 local onEclipse = (world :: any).onEclipse
 if type(onEclipse) == "function" then

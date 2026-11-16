@@ -10,6 +10,12 @@
 --     every step of the quest (they all count at once) with "x/y" progress; the current step is lit.
 --     A step that gets done pops its check; a finished quest flashes the panel lime before the next
 --     one slides in. Once every main quest is done and no quest is left, it shows Quests.FINALE_KEY.
+--   * Stage 11 readable UI: the number is shown once. Only COUNTED steps (the server's step.counted,
+--     else Quests.showsFraction; src/shared/Reading.luau stepShowsFraction) get "  x/y" and a thin
+--     progress bar under the text ("Bring ice home  0/4"); build and tool levels say "level 2" in the
+--     text and get no fraction. Glossary words (src/shared/Glossary.luau) in a step are painted gold
+--     and underlined with a small book icon at the row's end; tapping the row opens the picture card
+--     (GlossaryCard.luau).
 -- The quest arrives in the BaseState. Store.setBase may not keep that field, so this module also
 -- listens to the BaseState remote itself and keeps the latest quest (Objectives.currentQuest, also
 -- read by CarlDrone, Hud and Onboarding).
@@ -21,9 +27,21 @@ local TweenService = game:GetService("TweenService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Quests = require(Shared:WaitForChild("Quests"))
 local Types = require(Shared:WaitForChild("Types"))
+local Reading = require(Shared:WaitForChild("Reading")) -- Stage 11 readable UI
 
 local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
+
+-- Stage 11 glossary card (pcall: a broken card never breaks the tracker).
+local glossary: any = nil
+do
+	local ok, result = pcall(function(): any
+		return require(script.Parent:WaitForChild("GlossaryCard", 5) :: any)
+	end)
+	if ok and type(result) == "table" then
+		glossary = result
+	end
+end
 
 local ROLE = Ui.ROLE
 
@@ -46,6 +64,13 @@ local SLIDE_SECONDS = 0.35 -- the next quest slides in from the left
 -- Stage 10 (playtest): a ticked step or a new quest also thickens the border for a moment, so the
 -- eye goes to the tracker (QuestToasts.luau tells the same news on the right side).
 local PULSE_THICKNESS = 2.5 -- times the normal border thickness
+-- Stage 11 row layout (fractions of the row): text, then a thin bar for counted steps.
+local TEXT_X = 0.13
+local TEXT_WIDTH = 0.84
+local BOOK_WIDTH = 0.09 -- room for the glossary book icon at the row's end
+local BAR_Y = 0.84
+local BAR_HEIGHT = 0.13
+local BAR_SECONDS = 0.3
 
 local Objectives = {}
 
@@ -61,6 +86,7 @@ export type QuestStep = {
 	target: number,
 	done: boolean,
 	def: Quests.Step?,
+	counted: boolean?, -- Stage 11: the server says whether to show "x/y" (nil with an older server)
 }
 export type QuestView = {
 	id: string,
@@ -102,6 +128,7 @@ local function parseQuest(raw: any): QuestView?
 				target = target,
 				done = step.done == true,
 				def = stepDef,
+				counted = if type(step.counted) == "boolean" then step.counted else nil,
 			}
 		end
 	end
@@ -162,6 +189,12 @@ function Objectives.currentStep(quest: QuestView?): (QuestStep?, number?)
 	return nil, nil
 end
 
+-- Stage 11: true when the tracker shows "x/y" and a bar for this step (counted steps only).
+function Objectives.showsFraction(step: QuestStep): boolean
+	local def = step.def
+	return Reading.stepShowsFraction(step.counted, if def then Quests.showsFraction(def) else nil, step.target, step.done)
+end
+
 -- Called when a new quest state arrives (in its own thread).
 function Objectives.onQuestChanged(listener: () -> ())
 	table.insert(questListeners, listener)
@@ -206,10 +239,31 @@ type Row = {
 	scale: UIScale,
 	done: boolean,
 	id: string?,
+	-- Stage 11
+	bar: Frame,
+	fill: Frame,
+	fraction: number?,
+	book: ImageLabel,
+	hit: TextButton,
+	term: string?,
 }
+
+-- Rich text for a row: escaped, with glossary words painted gold. Returns the first word's id.
+local function rowText(text: string, withGlossary: boolean): (string, string?)
+	if withGlossary and glossary and type(glossary.markup) == "function" then
+		local ok, rich, termId = pcall(glossary.markup, text)
+		if ok and type(rich) == "string" then
+			return rich, if type(termId) == "string" then termId else nil
+		end
+	end
+	return Reading.escape(text), nil
+end
 
 function Objectives.new(root: Frame): ObjectivesView
 	listen()
+	if glossary and type(glossary.mount) == "function" then
+		pcall(glossary.mount, root)
+	end
 
 	-- Above the power board (10) and the HUD (5), below the C.A.R.L. bubble (50) and the panels (55+).
 	local panel = Ui.panel(root, {
@@ -308,14 +362,52 @@ function Objectives.new(root: Frame): ObjectivesView
 		scale.Parent = check
 		local text = Ui.body(frame, {
 			name = "Text",
-			size = UDim2.fromScale(0.84, 0.9),
-			position = UDim2.fromScale(0.13, 0.5),
+			size = UDim2.fromScale(TEXT_WIDTH, 0.9),
+			position = UDim2.fromScale(TEXT_X, 0.5),
 			anchor = Vector2.new(0, 0.5),
 			maxText = 20,
 			minText = 8,
 			zindex = 13,
 		})
-		table.insert(rows, {
+		text.RichText = true -- Stage 11: glossary words in gold (rowText escapes everything else)
+		-- Stage 11: progress bar of a counted step, under its text.
+		local bar = Ui.frame(frame, {
+			name = "Bar",
+			size = UDim2.fromScale(TEXT_WIDTH - 0.04, BAR_HEIGHT),
+			position = UDim2.fromScale(TEXT_X, BAR_Y),
+			color = ROLE.background,
+			corner = 0.5,
+			zindex = 13,
+			visible = false,
+		})
+		local fill = Ui.frame(bar, {
+			name = "Fill",
+			size = UDim2.fromScale(0, 1),
+			color = ROLE.accent,
+			corner = 0.5,
+			zindex = 14,
+		})
+		-- Stage 11: glossary book icon and the tap area that opens the picture card.
+		local book = Ui.icon(frame, Ui.ICONS.book, {
+			name = "Glossary",
+			size = UDim2.fromScale(BOOK_WIDTH - 0.01, 0.7),
+			position = UDim2.fromScale(0.99, 0.5),
+			anchor = Vector2.new(1, 0.5),
+			tint = ROLE.star,
+			zindex = 14,
+			visible = false,
+		})
+		local hit = Instance.new("TextButton")
+		hit.Name = "GlossaryTap"
+		hit.Text = ""
+		hit.BackgroundTransparency = 1
+		hit.BorderSizePixel = 0
+		hit.Size = UDim2.fromScale(1, 1)
+		hit.ZIndex = 15
+		hit.AutoButtonColor = false
+		hit.Visible = false
+		hit.Parent = frame
+		local row: Row = {
 			frame = frame,
 			ring = ring,
 			ringStroke = ring:FindFirstChildOfClass("UIStroke"),
@@ -325,7 +417,20 @@ function Objectives.new(root: Frame): ObjectivesView
 			scale = scale,
 			done = false,
 			id = nil,
-		})
+			bar = bar,
+			fill = fill,
+			fraction = nil,
+			book = book,
+			hit = hit,
+			term = nil,
+		}
+		hit.Activated:Connect(function()
+			local termId = row.term
+			if termId and glossary and type(glossary.open) == "function" then
+				pcall(glossary.open, termId)
+			end
+		end)
+		table.insert(rows, row)
 	end
 
 	local phase = "Briefing"
@@ -343,7 +448,8 @@ function Objectives.new(root: Frame): ObjectivesView
 	end
 
 	-- One checklist row: check (done), hammer (open build), else a ring. `lit` = the current step.
-	local function setRow(row: Row, id: string, done: boolean, isBuild: boolean, buildIcon: string?, text: string, lit: boolean)
+	-- Stage 11: `fraction` (0..1, nil = no bar) draws the progress bar; `term` = a glossary word id.
+	local function setRow(row: Row, id: string, done: boolean, isBuild: boolean, buildIcon: string?, text: string, lit: boolean, fraction: number?, term: string?)
 		-- A check that appears while the player watches gets a little pop.
 		if done and not row.done and row.id == id then
 			row.scale.Scale = 1.6
@@ -352,6 +458,7 @@ function Objectives.new(root: Frame): ObjectivesView
 			}):Play()
 			pulse(ROLE.good)
 		end
+		local sameRow = row.id == id
 		row.done = done
 		row.id = id
 		row.check.Visible = done
@@ -366,6 +473,29 @@ function Objectives.new(root: Frame): ObjectivesView
 		row.text.Text = text
 		row.text.TextColor3 = if done then ROLE.good elseif lit then ROLE.text else ROLE.textDim
 		row.text.TextTransparency = if done then 0.15 else 0
+		-- Stage 11: glossary word, progress bar.
+		row.term = term
+		row.book.Visible = term ~= nil
+		row.hit.Visible = term ~= nil
+		local width = TEXT_WIDTH - (if term then BOOK_WIDTH else 0)
+		local barShown = fraction ~= nil
+		row.text.Size = UDim2.fromScale(width, if barShown then 0.72 else 0.9)
+		row.text.Position = UDim2.fromScale(TEXT_X, if barShown then 0.4 else 0.5)
+		row.bar.Visible = barShown
+		row.bar.Size = UDim2.fromScale(width - 0.02, BAR_HEIGHT)
+		if fraction then
+			local goal = UDim2.fromScale(math.clamp(fraction, 0, 1), 1)
+			row.fill.BackgroundColor3 = if lit then ROLE.accent else ROLE.textDim
+			if sameRow and row.fraction ~= nil and row.fraction ~= fraction then
+				TweenService:Create(row.fill, TweenInfo.new(BAR_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+					Size = goal,
+				}):Play()
+			else
+				row.fill.Size = goal
+			end
+			row.fill.Visible = fraction > 0.001
+		end
+		row.fraction = fraction
 	end
 
 	-- Rows from index `from` on are hidden.
@@ -373,6 +503,8 @@ function Objectives.new(root: Frame): ObjectivesView
 		for index = from, #rows do
 			rows[index].frame.Visible = false
 			rows[index].id = nil
+			rows[index].term = nil
+			rows[index].fraction = nil
 		end
 	end
 
@@ -400,7 +532,9 @@ function Objectives.new(root: Frame): ObjectivesView
 			row.frame.Size = UDim2.fromScale(1, rowHeight / height)
 			row.frame.Position = UDim2.fromScale(0, (PAD + layout.header + rowHeight * (index - 1)) / height)
 			local isBuild = string.sub(objective.id, 1, 6) == "build_"
-			setRow(row, objective.id, objective.done == true, isBuild, BUILD_ICONS[objective.id], objectiveText(objective), true)
+			-- Missions keep their plain rows (no glossary taps while the clock runs).
+			local plain = rowText(objectiveText(objective), false)
+			setRow(row, objective.id, objective.done == true, isBuild, BUILD_ICONS[objective.id], plain, true, nil, nil)
 		end
 		hideRows(count + 1)
 		panel.Visible = true
@@ -466,14 +600,19 @@ function Objectives.new(root: Frame): ObjectivesView
 			row.frame.Visible = true
 			row.frame.Size = UDim2.fromScale(1, rowHeight / height)
 			row.frame.Position = UDim2.fromScale(0, (PAD + tagHeight + layout.header + rowHeight * (index - 1)) / height)
-			local text = Store.t(step.key, { n = step.target })
-			if step.target > 1 and not step.done then
-				text = `{text}  {step.progress}/{step.target}`
+			-- Stage 11: the number shows once. Counted steps: "Bring ice home  0/4" plus a bar; build
+			-- and tool levels keep "level {n}" in the text and get no fraction.
+			local plain = Store.t(step.key, { n = step.target })
+			local fraction: number? = nil
+			if Objectives.showsFraction(step) then
+				plain = `{plain}  {step.progress}/{step.target}`
+				fraction = step.progress / step.target
 			end
+			local rich, term = rowText(plain, not step.done)
 			local def = step.def
 			local isBuild = def ~= nil and def.type == "build"
 			local buildIcon = if isBuild and def and def.id == "habitat" then Ui.Icons.home else nil
-			setRow(row, `{(quest :: QuestView).id}:{index}`, step.done, isBuild, buildIcon, text, index == currentIndex)
+			setRow(row, `{(quest :: QuestView).id}:{index}`, step.done, isBuild, buildIcon, rich, index == currentIndex, fraction, term)
 		end
 		hideRows(count + 1)
 

@@ -857,6 +857,21 @@ for key, params in {
 	EXPECTED[key] = params
 end
 
+-- Stage 11 tycoon client: world signs, machine income, the "While you were away" card, silo tip.
+for key, params in {
+	["ui.line.ice"] = { "n", "max" },
+	["ui.line.machines"] = { "n" },
+	["ui.line.friend_silo"] = {},
+	["ui.line.away_worth"] = { "n" },
+	["ui.line.away_robot"] = {},
+	["ui.line.away_silo"] = {},
+	["ui.line.collect"] = {},
+	["ui.line.ok"] = {},
+	["carl.line.silo_upgrade"] = {},
+} :: { [string]: { string } } do
+	EXPECTED[key] = params
+end
+
 -- Stage 11 "quests that teach". Quest step placeholders follow the step type: COUNTED steps have
 -- no {n} (the tracker adds "0/4", so "Bring ice home: 4  0/4" cannot come back); build and tool
 -- levels keep {n} = the level. Every main quest has a praise line; C.A.R.L. asks questions, the
@@ -904,6 +919,122 @@ do
 	} :: { [string]: { string } } do
 		EXPECTED[key] = params
 	end
+end
+
+-- Stage 11 menu: the start menu without "Load game" and the Settings "Helpers" page.
+for key, params in {
+	["ui.menu_worlds"] = {},
+	["ui.menu_continue_none"] = {},
+	["ui.menu_start_over"] = {},
+	["ui.menu_choice_text"] = {},
+	["ui.menu_wait_slow"] = {},
+	["ui.menu_back_lobby"] = {},
+	["ui.settings_tab_game"] = {},
+	["ui.settings_tab_help"] = {},
+	["ui.help_text"] = {},
+	["ui.help_text_normal"] = {},
+	["ui.help_text_big"] = {},
+	["ui.help_text_hint"] = {},
+	["ui.help_motion"] = {},
+	["ui.help_motion_hint"] = {},
+	["ui.help_speed"] = {},
+	["ui.help_speed_normal"] = {},
+	["ui.help_speed_long"] = {},
+	["ui.help_speed_longer"] = {},
+	["ui.help_speed_hint"] = {},
+	["ui.help_colour"] = {},
+	["ui.help_colour_hint"] = {},
+	["ui.help_sample"] = {},
+} :: { [string]: { string } } do
+	EXPECTED[key] = params
+end
+
+-- Stage 11 daily: the supply capsule card, suit stripe names (one per Daily.STRIPES), the Moon
+-- Logbook and the cargo facts (one per Daily.CARGO_FACTS; tests/daily checks they quote no number).
+do
+	local Daily = require("../src/shared/Daily")
+	for _, stripe in Daily.STRIPES do
+		EXPECTED[Daily.stripeNameKey(stripe.id)] = {}
+	end
+	for _, key in Daily.CARGO_FACTS do
+		EXPECTED[key] = {}
+	end
+	for key, params in {
+		["ui.daily.title"] = {},
+		["ui.daily.note"] = {},
+		["ui.daily.week"] = { "n" },
+		["ui.daily.day"] = { "n" },
+		["ui.daily.open"] = {},
+		["ui.daily.opened"] = {},
+		["ui.daily.next_hours"] = { "n" },
+		["ui.daily.next_minutes"] = { "n" },
+		["ui.daily.forgiving"] = {},
+		["ui.daily.fact_title"] = {},
+		["ui.daily.credits"] = { "n" },
+		["ui.daily.xp"] = { "n" },
+		["ui.daily.stripes"] = {},
+		["ui.daily.got_credits"] = { "n" },
+		["ui.daily.got_xp"] = { "n" },
+		["ui.daily.got_stripes"] = { "name" },
+		["ui.daily.logbook"] = {},
+		["prompt.daily_capsule"] = {},
+		["carl.daily.landed"] = {},
+		["ui.logbook.title"] = {},
+		["ui.logbook.entries"] = { "n", "total" },
+		["ui.logbook.tab_secrets"] = {},
+		["ui.logbook.tab_sites"] = {},
+		["ui.logbook.tab_rocks"] = {},
+		["ui.logbook.tab_achievements"] = {},
+		["ui.logbook.tab_facts"] = {},
+		["ui.logbook.tab_stripes"] = {},
+		["ui.logbook.locked"] = {},
+		["ui.logbook.site_hint"] = {},
+		["ui.logbook.rock"] = { "n" },
+		["ui.logbook.rock_hint"] = {},
+		["ui.logbook.facts_count"] = { "n" },
+		["ui.logbook.facts_none"] = {},
+		["ui.logbook.cargo"] = { "n" },
+		["ui.logbook.milestone"] = { "n" },
+		["ui.logbook.claim"] = {},
+		["ui.logbook.claimed"] = {},
+		["ui.logbook.wear"] = {},
+		["ui.logbook.wearing"] = {},
+		["ui.logbook.no_stripes"] = {},
+		["ui.logbook.how_daily"] = {},
+		["ui.logbook.how_logbook"] = {},
+		["ui.logbook.calendar"] = {},
+		["ui.logbook.capsules"] = { "n" },
+		["carl.logbook.ready"] = {},
+		["carl.logbook.milestone"] = {},
+	} :: { [string]: { string } } do
+		EXPECTED[key] = params
+	end
+end
+
+-- Stage 11 readable UI: C.A.R.L.'s history, the big main-quest card, Achievements pages, the glossary
+-- card and the extra glossary word forms (tests/reading checks that every form is found in text).
+for key, params in {
+	["ui.history.title"] = {},
+	["ui.history.empty"] = {},
+	["ui.toast.main_done"] = {},
+	["ui.ach_page"] = { "n", "total" },
+	["ui.glossary.title"] = {},
+	["ui.glossary.tap"] = {},
+	["glossary.parts_box.forms"] = {},
+	["glossary.solar_panel.forms"] = {},
+	["glossary.ice_crater.forms"] = {},
+	["glossary.solar_flare.forms"] = {},
+	["glossary.base_level.forms"] = {},
+} :: { [string]: { string } } do
+	EXPECTED[key] = params
+end
+
+-- Stage 11 juice and world safety: C.A.R.L. at the map edge and the report timeline's header.
+for key, params in {
+	["carl.map_edge"] = {},
+	["ui.report.cause_effect"] = {},
+} :: { [string]: { string } } do
+	EXPECTED[key] = params
 end
 
 -- Fun facts: "funfact.01" .. "funfact.NN" with N = Localization.FUNFACT_COUNT, no placeholders.

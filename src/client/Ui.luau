@@ -11,6 +11,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Theme = require(Shared:WaitForChild("Theme"))
 local Icons = require(Shared:WaitForChild("Icons"))
 local Audio = require(script.Parent:WaitForChild("Audio")) -- Stage 11 audio
+local Store = require(script.Parent:WaitForChild("Store")) -- Stage 11 menu: Store.textScale (Store never requires Ui)
 
 local Ui = {}
 
@@ -170,6 +171,35 @@ function Ui.scale(): number
 	return currentScale
 end
 
+-- Stage 11 phones: text is never smaller than READABLE_TEXT_PIXELS real pixels (the old floor of
+-- 7-10 units became 4-5 pixels on a landscape phone). Touch-only devices also lay out for a smaller
+-- reference height, so the whole UI (text limits, strokes, touch targets) is about 1.3x bigger there.
+-- Every text minimum made here goes through readableMin; createRoot re-applies them on resize.
+local READABLE_TEXT_PIXELS = 11
+local TOUCH_REFERENCE_HEIGHT = 560
+local function readableFloor(): number
+	return math.ceil(READABLE_TEXT_PIXELS / math.max(currentScale, 0.01))
+end
+-- A text minimum raised to the readable floor (never above the label's own maximum).
+local function readableMin(minText: number, maxText: number): number
+	return math.min(maxText, math.max(minText, readableFloor()))
+end
+-- The floor is in root units, so it only applies inside the scaled root (createRoot sets it):
+-- world signs (BillboardGuis) and other ScreenGuis keep their own minimums.
+local floorRoot: Instance? = nil
+local function floorApplies(object: Instance): boolean
+	local scaledRoot = floorRoot
+	return scaledRoot ~= nil and object:IsDescendantOf(scaledRoot)
+end
+local function touchOnly(): boolean
+	local ok, result = pcall(function(): boolean
+		local input = game:GetService("UserInputService")
+		return input.TouchEnabled and not input.KeyboardEnabled and not input.GamepadEnabled
+	end)
+	return ok and result == true
+end
+local refreshTextFloor: () -> () = function() end -- set at the end of this module
+
 export type Props = {
 	name: string?,
 	size: UDim2?,
@@ -261,6 +291,54 @@ local function applyBase(object: GuiObject, props: Props)
 	end
 end
 
+-- Stage 11 menu: "Big text" (Settings, accessibility page). Store.textScale() multiplies the text
+-- size limits of every label made here and of every Ui.button (1 = normal); a change re-applies them.
+local textScale = 1
+-- `setMax` / `setMin` are the sizes this hook last wrote: a module that later sets its own sizes (Hud
+-- signs, the Achievements tiles) makes those its new base instead of being reset to Ui's.
+type TextBase = { max: number, min: number, setMax: number, setMin: number }
+local textBases: { [UITextSizeConstraint]: TextBase } = setmetatable({}, { __mode = "k" }) :: any
+local oneLineFits: { [TextLabel]: () -> () } = setmetatable({}, { __mode = "k" }) :: any -- Ui.oneLine labels
+local function scaledSizes(maxText: number, minText: number, floored: boolean): (number, number)
+	local maxSize = math.floor(maxText * textScale + 0.5)
+	local minSize = math.floor(minText * textScale + 0.5)
+	return maxSize, if floored then readableMin(minSize, maxSize) else math.min(minSize, maxSize) -- Stage 11 phones: readable floor
+end
+local function scaleConstraint(constraint: UITextSizeConstraint, base: TextBase)
+	if constraint.MaxTextSize ~= base.setMax then
+		base.max = constraint.MaxTextSize
+	end
+	if constraint.MinTextSize ~= base.setMin then
+		base.min = constraint.MinTextSize
+	end
+	local maxText, minText = scaledSizes(base.max, base.min, floorApplies(constraint))
+	constraint.MaxTextSize = maxText
+	constraint.MinTextSize = minText
+	base.setMax, base.setMin = constraint.MaxTextSize, constraint.MinTextSize
+end
+local function trackTextSize(constraint: UITextSizeConstraint)
+	local base: TextBase = {
+		max = constraint.MaxTextSize,
+		min = constraint.MinTextSize,
+		setMax = constraint.MaxTextSize,
+		setMin = constraint.MinTextSize,
+	}
+	textBases[constraint] = base
+	if textScale ~= 1 then
+		scaleConstraint(constraint, base)
+	end
+	-- Stage 11 phones: the label is parented right after this; then raise it to the readable floor.
+	task.defer(function()
+		if textBases[constraint] == base and readableFloor() > base.min and floorApplies(constraint) then
+			scaleConstraint(constraint, base)
+		end
+	end)
+end
+-- The current factor (Ui.oneLine and screens with their own text sizes can read it).
+function Ui.textScale(): number
+	return textScale
+end
+
 local function applyText(object: TextLabel | TextButton, props: Props)
 	local target: any = object
 	target.Font = props.font or Ui.FONT
@@ -276,6 +354,7 @@ local function applyText(object: TextLabel | TextButton, props: Props)
 	local constraint = Instance.new("UITextSizeConstraint")
 	constraint.MaxTextSize = props.maxText or 40
 	constraint.MinTextSize = props.minText or 10
+	trackTextSize(constraint) -- Stage 11 menu: "Big text" scales it
 	constraint.Parent = object
 end
 
@@ -370,7 +449,8 @@ local function layoutButton(button: TextButton)
 	local gap = if hasIcon and hasText then height * ICON_GAP else 0
 	local margin = math.min(height * BUTTON_MARGIN, width * 0.08)
 	local available = math.max(4, width - margin * 2 - iconSize - gap)
-	local textSize = math.clamp(math.floor(height * TEXT_HEIGHT), parts.minText, parts.maxText)
+	local maxText, minText = scaledSizes(parts.maxText, parts.minText, floorApplies(button)) -- Stage 11 menu: big text
+	local textSize = math.clamp(math.floor(height * TEXT_HEIGHT * textScale), minText, maxText)
 	local textWidth = 0
 	if hasText then
 		local ok, bounds = pcall(function(): Vector2
@@ -607,6 +687,13 @@ function Ui.createRoot(playerGui: Instance): (ScreenGui, Frame)
 	gui.Name = "SpaceBaseOdysseyUi"
 	gui.ResetOnSpawn = false
 	gui.IgnoreGuiInset = true
+	-- Stage 11 phones: keep the game UI out of the notch and rounded corners (DeviceSafeInsets). The
+	-- area under Roblox's top bar stays ours: the HUD already starts below GuiService.TopbarInset, so
+	-- CoreUISafeInsets would push it down twice. Full-screen layers (the cinematic fade, celebrations,
+	-- the storm edge pulse) are their own ScreenGuis with ScreenInsets None.
+	pcall(function()
+		gui.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets
+	end)
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	gui.DisplayOrder = 5
 
@@ -619,19 +706,31 @@ function Ui.createRoot(playerGui: Instance): (ScreenGui, Frame)
 	root.Size = UDim2.fromScale(1, 1)
 	local uiScale = Instance.new("UIScale")
 	uiScale.Parent = root
+	floorRoot = root -- Stage 11 phones: the readable text floor applies inside this root
 
 	local cameraConnection: RBXScriptConnection? = nil
 	local function resize()
 		local camera = workspace.CurrentCamera
 		local viewport = if camera then camera.ViewportSize else Vector2.new(1280, REFERENCE_HEIGHT)
+		-- Stage 11 phones: the safe area (the ScreenGui's own size) once it is known.
+		local area = gui.AbsoluteSize
+		if area.X > 0 and area.Y > 0 then
+			viewport = area
+		end
 		if viewport.Y <= 0 then
 			return
 		end
-		local scale = math.clamp(viewport.Y / REFERENCE_HEIGHT, MIN_SCALE, MAX_SCALE)
+		local reference = if touchOnly() then TOUCH_REFERENCE_HEIGHT else REFERENCE_HEIGHT -- Stage 11 phones
+		local scale = math.clamp(viewport.Y / reference, MIN_SCALE, MAX_SCALE)
+		local changed = scale ~= currentScale
 		currentScale = scale
 		uiScale.Scale = scale
 		root.Size = UDim2.fromOffset(viewport.X / scale, viewport.Y / scale)
+		if changed then
+			refreshTextFloor() -- Stage 11 phones: the readable floor follows the scale
+		end
 	end
+	gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(resize) -- Stage 11 phones
 	local function watchCamera()
 		if cameraConnection then
 			cameraConnection:Disconnect()
@@ -658,15 +757,26 @@ function Ui.oneLine(label: TextLabel)
 	label.TextWrapped = false
 	label.TextScaled = false
 	local constraint = label:FindFirstChildOfClass("UITextSizeConstraint")
-	local maxSize = if constraint then constraint.MaxTextSize else 40
+	-- Stage 11 menu: this label fits itself, so "Big text" only raises its top size (read per fit).
+	local base = if constraint then textBases[constraint] else nil
+	if constraint then
+		textBases[constraint] = nil
+	end
+	local baseMax = if base then base.max elseif constraint then constraint.MaxTextSize else 40
 	local minSize = 8
 	if constraint then
 		constraint.MinTextSize = math.min(constraint.MinTextSize, minSize)
 	end
 	local function fit()
-		local box = label.AbsoluteSize
+		-- Stage 11 phones: AbsoluteSize is in real pixels, TextSize in reference units (the root's
+		-- UIScale multiplies it), so measure the box in reference units, like layoutButton does.
+		local box = label.AbsoluteSize / math.max(currentScale, 0.01)
 		if box.X <= 0 or box.Y <= 0 then
 			return
+		end
+		local maxSize = math.floor(baseMax * textScale + 0.5)
+		if constraint and constraint.MaxTextSize ~= maxSize then
+			constraint.MaxTextSize = maxSize
 		end
 		local size = math.max(minSize, math.min(maxSize, math.floor(box.Y * 0.9)))
 		while size > minSize and TextService:GetTextSize(label.Text, size, label.Font, Vector2.new(100000, 100000)).X > box.X do
@@ -676,7 +786,45 @@ function Ui.oneLine(label: TextLabel)
 	end
 	label:GetPropertyChangedSignal("AbsoluteSize"):Connect(fit)
 	label:GetPropertyChangedSignal("Text"):Connect(fit)
+	oneLineFits[label] = fit -- Stage 11 menu
 	fit()
+end
+
+-- Stage 11 menu: follow the "Big text" setting (Store.textScale) for everything made with Ui.
+local function applyTextScale()
+	local wanted = Store.textScale()
+	if wanted == textScale then
+		return
+	end
+	textScale = wanted
+	for constraint, base in textBases do
+		scaleConstraint(constraint, base)
+	end
+	for button in buttonParts do
+		layoutButton(button)
+	end
+	for _, fit in oneLineFits do
+		fit()
+	end
+end
+Store.onChanged(function(kind: string)
+	if kind == "settings" then
+		applyTextScale()
+	end
+end)
+applyTextScale()
+
+-- Stage 11 phones: a new UI scale moves the readable floor; re-apply every text size made here.
+refreshTextFloor = function()
+	for constraint, base in textBases do
+		scaleConstraint(constraint, base)
+	end
+	for button in buttonParts do
+		layoutButton(button)
+	end
+	for _, fit in oneLineFits do
+		fit()
+	end
 end
 
 return table.freeze(Ui)

@@ -1,9 +1,12 @@
 --!strict
 -- Space Base Odyssey - start menu (Stage 9): the first screen, in the "Lunar Sunrise" identity: the
 -- game title over a live cinematic of the base (Stage 10), with:
---   * Continue   - loads the slot used last time (Store.continueSlot()),
---   * New game   - pick one of the 3 worlds; a world that is already used asks before it is wiped,
---   * Load game  - the 3 world cards: base level, player level, credits, last save, how it was played,
+--   * Continue   - loads the slot used last time (Store.continueSlot()); Stage 11 menu: a card under
+--                  it says what it loads (world, base level, player level, last save),
+--   * New game / My worlds (Stage 11 menu, team request: there is no "Load game" button any more, it
+--                  looked like uploading a file) - the 3 world cards. An empty card starts a new world;
+--                  a used card asks "Continue" or "Start over" (Start over asks once more, then the
+--                  world starts fresh). The button says "New game" until the player has a world,
 --   * Join a friend (Stage 10 fix) - the open worlds of the player's Roblox friends (name, base level,
 --                  players n of 4), then "Pick your explorer save": which of the player's own slots
 --                  comes along (an empty one starts a new explorer; nothing is ever wiped from here),
@@ -19,31 +22,44 @@
 -- the menu again: the server picks the slot there, so the screen only says "getting your base ready"
 -- (or why that world sent them back: SBO_WorldNotice). Back in the lobby, TeleportData { notice }
 -- (for example "your friend left") shows under the buttons.
--- Stage 10 (team request): the background is no longer drawn in 2D. Cinematic.luau plays the shots
--- of CinematicShots.MENU_ORDER (the Earth about to hide the Sun, a plant close-up, the greenhouse
--- tube, the ice drills in the crater, the antenna, the base from the air, the ship, a pull-back) on the
--- real 3D world, looping with black fades, from the moment the menu opens until it hides. The server
--- shows a finished "showcase" base while nobody has loaded a save (BaseService). A soft dark gradient
--- over the left part of the screen and a light vignette keep the title and buttons readable over any
--- shot. Because the menu no longer covers the screen, the rest of the game UI in the same root (HUD,
--- top bar, C.A.R.L.'s bubble, Settings button, cards) waits in a hidden holder frame ("GameLayer")
--- while the menu is open and goes back when it hides; moving them leaves every module's own Visible
--- values untouched. Without Cinematic (load failure) the screen falls back to a plain night colour.
+-- Stage 11 menu (audit fixes):
+--   * In a world server a slow load (WAIT_TIMEOUT) never leads back to the home buttons (the server
+--     there refuses every choice): the wait screen says "still getting your base ready" and offers
+--     "Back to the start", which teleports the player to the lobby (a public server of this place),
+--     while it keeps waiting for SBO_SlotChosen.
+--   * Every choice box puts the gamepad selection on its safe button and gives it back to the card.
+--   * Trips use a themed teleport screen (TeleportService:SetTeleportGui) with the same words as the
+--     wait screen; on arrival it stays a moment and fades out.
+--   * Store.setMenuOpen follows the hidden-HUD state, so C.A.R.L. holds his lines until the menu
+--     closes (Main.client).
+--   * Store.reduceMotion() stops the waiting rocket's wobble and the teleport screen's fade.
+-- Stage 10: the background is no longer drawn in 2D. Cinematic.luau plays the shots of
+-- CinematicShots.MENU_ORDER on the real 3D world, looping with black fades, from the moment the menu
+-- opens until it hides. The server shows a finished "showcase" base while nobody has loaded a save
+-- (BaseService). A soft dark gradient over the left part of the screen and a light vignette keep the
+-- title and buttons readable over any shot. Because the menu no longer covers the screen, the rest of
+-- the game UI in the same root (HUD, top bar, C.A.R.L.'s bubble, Settings button, cards) waits in a
+-- hidden holder frame ("GameLayer") while the menu is open and goes back when it hides; moving them
+-- leaves every module's own Visible values untouched. Without Cinematic (load failure) the screen
+-- falls back to a plain night colour.
 -- Layout (fractions of the screen; the root is 720 units tall and as wide as the device, so it fits a
--- phone in landscape): title x 0.06-0.56 y 0.07-0.25, buttons x 0.06-0.40 y 0.34-0.88, the dark
--- gradient x 0-0.62, sub-screens in one centred panel 0.86 x 0.82.
+-- phone in landscape): title x 0.06-0.56 y 0.07-0.25, buttons x 0.06-0.40 y 0.335-0.87 (Continue,
+-- its world card, My worlds, Join a friend, Settings + Credits), the dark gradient x 0-0.62,
+-- sub-screens in one centred panel 0.86 x 0.82.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TeleportService = game:GetService("TeleportService")
+local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Store = require(script.Parent.Store)
 local Ui = require(script.Parent.Ui)
+local Audio = require(script.Parent.Audio) -- Stage 11 menu: sounds for the choice box
 local Worlds = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Worlds"))
 
 type SlotInfo = Store.SlotInfo
@@ -59,6 +75,8 @@ local PRESS_COOLDOWN = 0.35 -- seconds between two taps (no double sends)
 local WAIT_TIMEOUT = 40 -- seconds without SBO_SlotChosen before the menu offers to go back
 local ANIMATION_STEP = 1 / 30
 local SHADE_WIDTH = 0.62 -- the dark gradient behind the title and buttons (fraction of the width)
+local ARRIVAL_SCREEN_SECONDS = 1.2 -- Stage 11 menu: the arriving teleport screen stays, then fades
+local ARRIVAL_FADE_SECONDS = 0.6
 -- Root children that stay while the menu is open (everything else waits in the GameLayer holder).
 local VEIL_KEEP: { [string]: boolean } = {
 	StartMenu = true,
@@ -83,7 +101,9 @@ export type StartMenuView = {
 }
 
 type ScreenName = "home" | "slots" | "mode" | "credits" | "wait" | "friends"
-type Flow = "new" | "load" | "join" -- join (Stage 10 fix): pick which own slot goes to a friend's world
+-- Stage 11 menu: "worlds" = the one world list (empty card: new world; used card: Continue or Start
+-- over). "join" (Stage 10 fix): pick which own slot goes to a friend's world.
+type Flow = "worlds" | "join"
 type WaitKind = "solo" | "friends" | "join"
 
 type FriendCard = {
@@ -191,6 +211,126 @@ local function noticeKey(reason: string?): string
 		return `ui.menu_notice_{reason}`
 	end
 	return "ui.menu_wait_fail"
+end
+
+-- The wait screen's words for a trip (also on the teleport screen).
+local function waitKey(kind: WaitKind): string
+	return if kind == "solo" then "ui.menu_wait_solo" elseif kind == "join" then "ui.menu_wait_join" else "ui.menu_wait"
+end
+
+-- Stage 11 menu: the "Lunar Sunrise" screen Roblox shows during a trip (TeleportService:SetTeleportGui):
+-- the title, the rocket badge and the wait screen's words, on night. Not parented: Roblox copies it.
+local function teleportScreen(textKey: string): ScreenGui
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "SBO_TeleportScreen"
+	gui.IgnoreGuiInset = true
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 100
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	local back = Ui.frame(gui, { name = "Back", color = ROLE.background, zindex = 1 })
+	Ui.label(back, {
+		name = "Title",
+		size = UDim2.fromScale(0.8, 0.12),
+		position = UDim2.fromScale(0.5, 0.2),
+		anchor = Vector2.new(0.5, 0.5),
+		textColor = ROLE.warning,
+		maxText = 72,
+		text = Store.t("ui.title"),
+		zindex = 2,
+	})
+	local badge = Ui.frame(back, {
+		name = "Badge",
+		size = UDim2.fromScale(0.22, 0.22),
+		position = UDim2.fromScale(0.5, 0.48),
+		anchor = Vector2.new(0.5, 0.5),
+		color = ROLE.panel,
+		corner = 0.5,
+		aspect = 1,
+		stroke = 4,
+		strokeColor = ROLE.warning,
+		zindex = 2,
+	})
+	Ui.icon(badge, ICONS.rocket, {
+		name = "Icon",
+		size = UDim2.fromScale(0.62, 0.62),
+		position = UDim2.fromScale(0.5, 0.5),
+		anchor = Vector2.new(0.5, 0.5),
+		tint = ROLE.warning,
+		zindex = 3,
+	})
+	Ui.label(back, {
+		name = "Text",
+		size = UDim2.fromScale(0.8, 0.08),
+		position = UDim2.fromScale(0.5, 0.72),
+		anchor = Vector2.new(0.5, 0.5),
+		textColor = ROLE.text,
+		maxText = 40,
+		text = Store.t(textKey),
+		zindex = 2,
+	})
+	Ui.frame(back, {
+		name = "Line",
+		size = UDim2.fromScale(0.16, 0.008),
+		position = UDim2.fromScale(0.5, 0.79),
+		anchor = Vector2.new(0.5, 0.5),
+		color = ROLE.accent,
+		corner = 0.5,
+		zindex = 2,
+	})
+	return gui
+end
+
+local function useTeleportScreen(textKey: string)
+	if RunService:IsStudio() then
+		return -- Studio never teleports
+	end
+	local ok, err = pcall(function()
+		TeleportService:SetTeleportGui(teleportScreen(textKey))
+	end)
+	if not ok then
+		warn(`[SpaceBaseOdyssey] teleport screen unavailable: {err}`)
+	end
+end
+
+-- The trip's screen, shown again for a moment after arriving, then faded out (Store.reduceMotion:
+-- removed without a fade).
+local function showArrivalScreen(player: Player)
+	local ok, gui = pcall(function(): any
+		return TeleportService:GetArrivingTeleportGui()
+	end)
+	if not ok or gui == nil or not gui:IsA("ScreenGui") then
+		return
+	end
+	local playerGui = player:FindFirstChildOfClass("PlayerGui")
+	if playerGui == nil then
+		gui:Destroy()
+		return
+	end
+	gui.Parent = playerGui
+	task.delay(ARRIVAL_SCREEN_SECONDS, function()
+		if gui.Parent == nil then
+			return
+		end
+		if Store.reduceMotion() then
+			gui:Destroy()
+			return
+		end
+		local info = TweenInfo.new(ARRIVAL_FADE_SECONDS)
+		for _, item in gui:GetDescendants() do
+			if item:IsA("TextLabel") then
+				TweenService:Create(item, info, { TextTransparency = 1 }):Play()
+			elseif item:IsA("ImageLabel") then
+				TweenService:Create(item, info, { ImageTransparency = 1, BackgroundTransparency = 1 }):Play()
+			elseif item:IsA("Frame") then
+				TweenService:Create(item, info, { BackgroundTransparency = 1 }):Play()
+			elseif item:IsA("UIStroke") then
+				TweenService:Create(item, info, { Transparency = 1 }):Play()
+			end
+		end
+		task.delay(ARRIVAL_FADE_SECONDS, function()
+			gui:Destroy()
+		end)
+	end)
 end
 
 function StartMenu.new(root: Frame, deps: Deps): StartMenuView
@@ -301,6 +441,8 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			end
 			holder:Destroy()
 		end
+		-- Stage 11 menu: the HUD is hidden exactly while the veil is on (C.A.R.L. waits meanwhile).
+		Store.setMenuOpen(gameLayer ~= nil)
 	end
 
 	-- Home: title and the menu buttons -------------------------------------------------------------
@@ -336,12 +478,19 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 	local column = Ui.frame(home, {
 		name = "Buttons",
 		size = UDim2.fromScale(0.34, 0.54),
-		position = UDim2.fromScale(0.06, 0.345),
+		position = UDim2.fromScale(0.06, 0.335),
 		zindex = Z + 6,
 	})
-	-- Stage 10 fix: five rows (Join a friend is new): Continue, New, Load, Join, Settings + Credits.
-	local ROW = 0.165
-	local ROW_STEP = 0.209
+	-- Stage 11 menu: Continue with its world card under it, then My worlds, Join a friend and
+	-- Settings + Credits, all full width (column fractions; every button is ROW tall).
+	local ROW = 0.155
+	local CONTINUE_Y = 0
+	local INFO_Y = 0.17
+	local INFO_HEIGHT = 0.16
+	-- The card hangs under Continue (small gap); the three rows below share one even gap.
+	local WORLDS_Y = 0.395
+	local JOIN_Y = 0.62
+	local LAST_Y = 0.845 -- Settings + Credits (ends at the column's bottom)
 
 	local lastPress = 0
 	local function pressAllowed(): boolean
@@ -360,8 +509,8 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 
 	local continueButton = Ui.button(column, {
 		name = "Continue",
-		size = UDim2.fromScale(0.7, ROW),
-		position = UDim2.fromScale(0, 0),
+		size = UDim2.fromScale(1, ROW),
+		position = UDim2.fromScale(0, CONTINUE_Y),
 		icon = ICONS.play,
 		maxText = 34,
 		zindex = Z + 7,
@@ -371,69 +520,67 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			openMode(slot, false, "home")
 		end
 	end)
-	-- Which world Continue loads (night card beside the button).
-	local continueTag = Ui.panel(column, {
-		name = "ContinueWorld",
-		size = UDim2.fromScale(0.27, ROW),
-		position = UDim2.fromScale(0.73, 0),
+	-- Stage 11 menu: what Continue loads (night card under the button): world and how it was played,
+	-- base level, player level, last save. Without a world it says so.
+	local continueInfo = Ui.panel(column, {
+		name = "ContinueInfo",
+		size = UDim2.fromScale(1, INFO_HEIGHT),
+		position = UDim2.fromScale(0, INFO_Y),
 		color = ROLE.background,
+		transparency = 0.15,
 		strokeColor = ROLE.good,
+		corner = 0.25,
 		zindex = Z + 7,
 	})
-	local continueTagIcon = Ui.icon(continueTag, ICONS.home, {
-		name = "Icon",
-		size = UDim2.fromScale(0.3, 0.5),
-		position = UDim2.fromScale(0.06, 0.5),
-		anchor = Vector2.new(0, 0.5),
-		tint = ROLE.good,
-		zindex = Z + 8,
-	})
-	local continueTagText = Ui.label(continueTag, {
-		name = "World",
-		size = UDim2.fromScale(0.6, 0.6),
-		position = UDim2.fromScale(0.36, 0.5),
-		anchor = Vector2.new(0, 0.5),
-		textColor = ROLE.good,
-		maxText = 24,
+	local function infoRow(name: string, x: number, y: number, icon: string, tint: Color3): Ui.IconText
+		return Ui.iconText(continueInfo, {
+			name = name,
+			size = UDim2.fromScale(0.46, 0.4),
+			position = UDim2.fromScale(x, y),
+			icon = icon,
+			tint = tint,
+			textColor = ROLE.text,
+			font = Ui.BODY_FONT,
+			maxText = 20,
+			zindex = Z + 8,
+		})
+	end
+	local infoWorld = infoRow("World", 0.03, 0.07, ICONS.helmet, ROLE.good)
+	local infoBase = infoRow("Base", 0.52, 0.07, ICONS.home, ROLE.good)
+	local infoLevel = infoRow("Level", 0.03, 0.53, ICONS.xp, ROLE.reward)
+	local infoSaved = infoRow("Saved", 0.52, 0.53, ICONS.clock, ROLE.textDim)
+	local infoNone = Ui.body(continueInfo, {
+		name = "None",
+		size = UDim2.fromScale(0.9, 0.6),
+		position = UDim2.fromScale(0.5, 0.5),
+		anchor = Vector2.new(0.5, 0.5),
+		alignX = Enum.TextXAlignment.Center,
+		textColor = ROLE.textDim,
+		maxText = 20,
 		zindex = Z + 8,
 	})
 
-	local newButton = Ui.button(column, {
-		name = "NewGame",
+	local worldsButton = Ui.button(column, {
+		name = "Worlds",
 		size = UDim2.fromScale(1, ROW),
-		position = UDim2.fromScale(0, ROW_STEP),
+		position = UDim2.fromScale(0, WORLDS_Y),
 		color = ROLE.secondaryButton,
 		strokeColor = ROLE.accent,
-		icon = ICONS.rocket,
+		icon = ICONS.planet,
 		tint = ROLE.accent,
 		maxText = 34,
 		zindex = Z + 7,
 	}, function()
 		if Store.getSlots() and pressAllowed() then
-			openSlots("new")
+			openSlots("worlds")
 		end
 	end)
-	local newStroke = newButton:FindFirstChildOfClass("UIStroke") :: UIStroke
-	local loadButton = Ui.button(column, {
-		name = "LoadGame",
-		size = UDim2.fromScale(1, ROW),
-		position = UDim2.fromScale(0, ROW_STEP * 2),
-		color = ROLE.secondaryButton,
-		strokeColor = ROLE.accent,
-		icon = ICONS.data,
-		tint = ROLE.accent,
-		maxText = 34,
-		zindex = Z + 7,
-	}, function()
-		if Store.getSlots() and pressAllowed() then
-			openSlots("load")
-		end
-	end)
+	local worldsStroke = worldsButton:FindFirstChildOfClass("UIStroke") :: UIStroke
 	local openFriends: () -> ()
 	local joinButton = Ui.button(column, {
 		name = "JoinFriend",
 		size = UDim2.fromScale(1, ROW),
-		position = UDim2.fromScale(0, ROW_STEP * 3),
+		position = UDim2.fromScale(0, JOIN_Y),
 		color = ROLE.secondaryButton,
 		strokeColor = ROLE.good,
 		icon = ICONS.language,
@@ -449,7 +596,7 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 	local settingsButton = Ui.button(column, {
 		name = "Settings",
 		size = UDim2.fromScale(0.485, ROW),
-		position = UDim2.fromScale(0, ROW_STEP * 4),
+		position = UDim2.fromScale(0, LAST_Y),
 		color = ROLE.secondaryButton,
 		strokeColor = ROLE.stroke,
 		icon = ICONS.repair,
@@ -464,7 +611,7 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 	local creditsButton = Ui.button(column, {
 		name = "Credits",
 		size = UDim2.fromScale(0.485, ROW),
-		position = UDim2.fromScale(0.515, ROW_STEP * 4),
+		position = UDim2.fromScale(0.515, LAST_Y),
 		color = ROLE.secondaryButton,
 		strokeColor = ROLE.stroke,
 		icon = ICONS.star,
@@ -557,12 +704,23 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		})
 	end
 
+	-- Gamepad: put the selection on a button (only while this screen shows).
+	local function selectFirst(button: GuiObject?)
+		if button and UserInputService.GamepadEnabled and screen.Visible then
+			pcall(function()
+				GuiService.SelectedObject = button
+			end)
+		end
+	end
+
 	-- Slots: three world cards -------------------------------------------------------------------
 
 	local slotsView = content("Slots")
-	local flow: Flow = "load"
-	local confirmSlot: number? = nil
+	local flow: Flow = "worlds"
+	local pickedSlot: number? = nil -- the used world the choice box (and the wipe confirm) is about
+	local choiceBox: Frame -- "Continue" or "Start over" (built below)
 	local confirm: Frame -- the "start this world again?" box (built below)
+	local openChoice: (slot: number) -> ()
 
 	local CARD_WIDTH = 0.31
 	local CARD_GAP = 0.035
@@ -578,17 +736,15 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			zindex = Z + 12,
 		}, function()
 			local info = Store.slotInfo(slot)
-			if info == nil or confirm.Visible or not pressAllowed() then
+			if info == nil or choiceBox.Visible or confirm.Visible or not pressAllowed() then
 				return
 			end
 			if flow == "join" then
 				sendJoin(slot) -- Stage 10 fix: this slot's explorer goes to the friend's world
-			elseif flow == "new" and info.used then
-				confirmSlot = slot
-				confirm.Visible = true
+			elseif info.used then
+				openChoice(slot) -- Stage 11 menu: Continue or Start over
 			else
-				-- New game in an empty world, or Load: an empty world simply starts fresh.
-				openMode(slot, flow == "new" or not info.used, "slots")
+				openMode(slot, true, "slots") -- an empty world starts fresh
 			end
 		end)
 		local stroke = button:FindFirstChildOfClass("UIStroke") :: UIStroke
@@ -691,48 +847,139 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		zindex = Z + 12,
 	})
 
-	-- Confirm a wipe: covers the cards, asks once, "No" is the safe default on the left.
-	confirm = Ui.modal(slotsView, "Confirm", Z + 20)
-	confirm.Size = UDim2.fromScale(1.02, 1.05)
-	confirm.Position = UDim2.fromScale(-0.01, -0.02)
-	local confirmBox = Ui.panel(confirm, {
-		name = "Box",
-		size = UDim2.fromScale(0.62, 0.74),
-		position = UDim2.fromScale(0.5, 0.5),
-		anchor = Vector2.new(0.5, 0.5),
-		color = ROLE.panelRaised,
-		corner = 0.08,
-		stroke = 4,
-		strokeColor = ROLE.warning,
-		zindex = Z + 21,
-	})
-	confirmBox.Active = true
-	Ui.icon(confirmBox, ICONS.alert, {
-		name = "Icon",
-		size = UDim2.fromScale(0.2, 0.2),
-		position = UDim2.fromScale(0.5, 0.06),
-		anchor = Vector2.new(0.5, 0),
-		tint = ROLE.warning,
-		zindex = Z + 22,
-	})
-	local confirmTitle = Ui.label(confirmBox, {
-		name = "Title",
-		size = UDim2.fromScale(0.9, 0.16),
-		position = UDim2.fromScale(0.5, 0.29),
-		anchor = Vector2.new(0.5, 0),
-		textColor = ROLE.warning,
-		maxText = 36,
-		zindex = Z + 22,
-	})
-	local confirmText = Ui.body(confirmBox, {
-		name = "Text",
-		size = UDim2.fromScale(0.86, 0.16),
-		position = UDim2.fromScale(0.5, 0.47),
-		anchor = Vector2.new(0.5, 0),
-		alignX = Enum.TextXAlignment.Center,
+	-- A box over the cards (the choice box and the wipe confirm share this look).
+	local function coverBox(name: string, strokeColor: Color3, icon: string): (Frame, Frame, TextLabel, TextLabel)
+		local cover = Ui.modal(slotsView, name, Z + 20)
+		cover.Size = UDim2.fromScale(1.02, 1.05)
+		cover.Position = UDim2.fromScale(-0.01, -0.02)
+		local box = Ui.panel(cover, {
+			name = "Box",
+			size = UDim2.fromScale(0.62, 0.74),
+			position = UDim2.fromScale(0.5, 0.5),
+			anchor = Vector2.new(0.5, 0.5),
+			color = ROLE.panelRaised,
+			corner = 0.08,
+			stroke = 4,
+			strokeColor = strokeColor,
+			zindex = Z + 21,
+		})
+		box.Active = true
+		Ui.icon(box, icon, {
+			name = "Icon",
+			size = UDim2.fromScale(0.2, 0.2),
+			position = UDim2.fromScale(0.5, 0.06),
+			anchor = Vector2.new(0.5, 0),
+			tint = strokeColor,
+			zindex = Z + 22,
+		})
+		local boxTitle = Ui.label(box, {
+			name = "Title",
+			size = UDim2.fromScale(0.9, 0.16),
+			position = UDim2.fromScale(0.5, 0.29),
+			anchor = Vector2.new(0.5, 0),
+			textColor = strokeColor,
+			maxText = 36,
+			zindex = Z + 22,
+		})
+		local boxText = Ui.body(box, {
+			name = "Text",
+			size = UDim2.fromScale(0.86, 0.16),
+			position = UDim2.fromScale(0.5, 0.47),
+			anchor = Vector2.new(0.5, 0),
+			alignX = Enum.TextXAlignment.Center,
+			maxText = 26,
+			zindex = Z + 22,
+		})
+		return cover, box, boxTitle, boxText
+	end
+
+	-- Gamepad: while a box covers the cards, the selection cannot move onto them (called right after
+	-- every change of the boxes' Visible, before the selection moves).
+	local function syncCardSelection()
+		local covered = (choiceBox ~= nil and choiceBox.Visible) or (confirm ~= nil and confirm.Visible)
+		for _, card in slotCards do
+			card.button.Selectable = not covered
+		end
+	end
+
+	-- Gamepad: give the selection back to the card the boxes were about.
+	local function selectPickedCard()
+		syncCardSelection()
+		local slot = pickedSlot
+		local card = if slot then slotCards[slot] else nil
+		selectFirst(if card then card.button else slotCards[1].button)
+	end
+
+	-- Stage 11 menu: a used world asks "Continue" (primary) or "Start over" (danger, asks again).
+	local choiceBoxFrame, choiceInner, choiceTitle, choiceText = coverBox("Choice", ROLE.accent, ICONS.planet)
+	choiceBox = choiceBoxFrame
+	local function closeChoice()
+		choiceBox.Visible = false
+		selectPickedCard()
+		pickedSlot = nil
+	end
+	local choiceContinue = Ui.button(choiceInner, {
+		name = "Continue",
+		size = UDim2.fromScale(0.43, 0.2),
+		position = UDim2.fromScale(0.05, 0.72),
+		icon = ICONS.play,
 		maxText = 26,
 		zindex = Z + 22,
-	})
+	}, function()
+		local slot = pickedSlot
+		if slot and pressAllowed() then
+			choiceBox.Visible = false
+			pickedSlot = nil
+			openMode(slot, false, "slots")
+		end
+	end)
+	local choiceRestart = Ui.button(choiceInner, {
+		name = "StartOver",
+		size = UDim2.fromScale(0.43, 0.2),
+		position = UDim2.fromScale(0.52, 0.72),
+		color = ROLE.dangerButton,
+		icon = ICONS.restart,
+		maxText = 26,
+		zindex = Z + 22,
+	}, function()
+		if pickedSlot and pressAllowed() then
+			choiceBox.Visible = false
+			confirm.Visible = true
+			syncCardSelection()
+			selectFirst(confirm:FindFirstChild("No", true) :: GuiObject?)
+		end
+	end)
+	-- A small close button in the box's corner (gamepad B closes it too).
+	Ui.button(choiceInner, {
+		name = "Close",
+		size = UDim2.fromScale(0.12, 0.14),
+		position = UDim2.fromScale(0.97, 0.04),
+		anchor = Vector2.new(1, 0),
+		color = ROLE.secondaryButton,
+		icon = ICONS.close,
+		tint = ROLE.text,
+		aspect = 1,
+		zindex = Z + 23,
+	}, closeChoice)
+
+	local function fillChoice(slot: number)
+		local info = Store.slotInfo(slot)
+		choiceTitle.Text = Store.t("ui.menu_world", { n = slot })
+		choiceText.Text = if info
+			then `{Store.t("ui.base_level", { n = info.habitat })}  -  {Store.t("ui.level", { n = info.level })}\n{Store.t("ui.menu_choice_text")}`
+			else Store.t("ui.menu_choice_text")
+	end
+	openChoice = function(slot: number)
+		pickedSlot = slot
+		fillChoice(slot)
+		choiceBox.Visible = true
+		syncCardSelection()
+		selectFirst(choiceContinue)
+	end
+
+	-- Confirm a wipe: covers the cards, asks once, "No" is the safe default on the left.
+	local confirmFrame, confirmBox, confirmTitle, confirmText = coverBox("Confirm", ROLE.warning, ICONS.alert)
+	confirm = confirmFrame
 	local confirmNo = Ui.button(confirmBox, {
 		name = "No",
 		size = UDim2.fromScale(0.43, 0.2),
@@ -744,8 +991,14 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		maxText = 26,
 		zindex = Z + 22,
 	}, function()
+		-- Back to the choice for that world (nothing was wiped).
 		confirm.Visible = false
-		confirmSlot = nil
+		local slot = pickedSlot
+		if slot then
+			openChoice(slot)
+		else
+			selectPickedCard()
+		end
 	end)
 	local confirmYes = Ui.button(confirmBox, {
 		name = "Yes",
@@ -756,10 +1009,11 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		maxText = 26,
 		zindex = Z + 22,
 	}, function()
-		local slot = confirmSlot
+		local slot = pickedSlot
 		if slot and pressAllowed() then
 			confirm.Visible = false
-			confirmSlot = nil
+			pickedSlot = nil
+			Audio.play("toast_pop") -- Stage 11 menu: a fresh start (Ui.button already clicked)
 			openMode(slot, true, "slots")
 		end
 	end)
@@ -891,10 +1145,34 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 	local waitReason: string? = nil -- Stage 10 fix: why the trip failed (SBO_TripFailedReason)
 	local waitNotice: string? = nil -- Stage 10 fix: why this world sends the player back (SBO_WorldNotice)
 	local lobbyNotice: string? = nil -- Stage 10 fix: why a world sent the player back here (TeleportData)
+	-- Stage 11 menu: this player arrived in their world server (the server picks the slot here, so
+	-- the home buttons would do nothing): a slow load offers the way back to the lobby instead.
+	local inWorldServer = false
+	local leavingToLobby = false
 	local waitToken = 0
+
+	-- Stage 11 menu: back to the lobby (a public server of this place) from a world that is slow to load.
+	local function leaveToLobby()
+		if leavingToLobby then
+			return
+		end
+		leavingToLobby = true
+		useTeleportScreen("ui.menu_loading")
+		local ok, err = pcall(function()
+			TeleportService:Teleport(game.PlaceId, player)
+		end)
+		if not ok then
+			warn(`[SpaceBaseOdyssey] back to the lobby failed: {err}`)
+			leavingToLobby = false
+			waitReason = nil
+			waitText.Text = Store.t("ui.menu_wait_fail")
+			waitText.TextColor3 = ROLE.warning
+		end
+	end
+
 	local waitBack = Ui.button(waitView, {
 		name = "Back",
-		size = UDim2.fromScale(0.3, 0.13),
+		size = UDim2.fromScale(0.36, 0.13),
 		position = UDim2.fromScale(0.5, 0.78),
 		anchor = Vector2.new(0.5, 0),
 		color = ROLE.secondaryButton,
@@ -905,8 +1183,19 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		zindex = Z + 12,
 		visible = false,
 	}, function()
-		if pressAllowed() then
+		if not pressAllowed() then
+			return
+		end
+		if inWorldServer then
+			leaveToLobby()
+		else
 			showScreen("home")
+		end
+	end)
+	-- Teleport failures are rare: leave the wait screen able to try again.
+	TeleportService.TeleportInitFailed:Connect(function(who: Player)
+		if who == player and leavingToLobby then
+			leavingToLobby = false
 		end
 	end)
 
@@ -939,10 +1228,10 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 	local FRIEND_CARD_HEIGHT = 0.38
 	local friendCards: { FriendCard } = {}
 	for index = 1, Worlds.LIST_LIMIT do
-		local column = (index - 1) % FRIEND_COLUMNS
+		local friendColumn = (index - 1) % FRIEND_COLUMNS
 		local row = math.floor((index - 1) / FRIEND_COLUMNS)
 		local x = (1 - FRIEND_CARD_WIDTH * FRIEND_COLUMNS - CARD_GAP * (FRIEND_COLUMNS - 1)) / 2
-			+ (FRIEND_CARD_WIDTH + CARD_GAP) * column
+			+ (FRIEND_CARD_WIDTH + CARD_GAP) * friendColumn
 		local button = Ui.button(friendsView, {
 			name = `Friend{index}`,
 			size = UDim2.fromScale(FRIEND_CARD_WIDTH, FRIEND_CARD_HEIGHT),
@@ -1083,39 +1372,64 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 
 	local current: ScreenName = "home"
 
+	local function anyWorldUsed(): boolean
+		local meta = Store.getSlots()
+		if meta == nil then
+			return false
+		end
+		for _, info in meta.slots do
+			if info.used then
+				return true
+			end
+		end
+		return false
+	end
+
 	local function renderHome()
 		title.Text = Store.t("ui.title")
 		pitch.Text = Store.t("ui.pitch")
 		footer.Text = Store.t("ui.menu_credits_event")
 		local meta = Store.getSlots()
 		local slot = Store.continueSlot()
+		local ready = meta ~= nil
+		-- Stage 11 menu: "New game" until the player has a world, then "My worlds".
+		local hasWorld = anyWorldUsed()
 		Ui.setButton(continueButton, Store.t("ui.continue"))
-		Ui.setButton(newButton, Store.t("ui.menu_new_game"))
-		Ui.setButton(loadButton, Store.t("ui.menu_load_game"))
+		Ui.setButton(worldsButton, Store.t(if hasWorld then "ui.menu_worlds" else "ui.menu_new_game"), if hasWorld then ICONS.planet else ICONS.rocket)
 		Ui.setButton(joinButton, Store.t("ui.menu_join_friend"))
 		Ui.setButton(settingsButton, Store.t("ui.settings"))
 		Ui.setButton(creditsButton, Store.t("ui.menu_credits"))
 		Ui.setButtonLook(continueButton, slot ~= nil, ROLE.primaryButton)
-		continueTag.Visible = slot ~= nil
-		if slot then
-			local info = Store.slotInfo(slot)
-			local mode: SlotMode = if info then info.mode else "solo"
-			continueTagText.Text = Store.t("ui.menu_world", { n = slot })
-			Ui.setIcon(continueTagIcon, modeIcon(mode), ROLE.good)
+		-- What Continue loads.
+		local info = if slot then Store.slotInfo(slot) else nil
+		continueInfo.Visible = ready
+		local showInfo = slot ~= nil and info ~= nil
+		for _, row in { infoWorld, infoBase, infoLevel, infoSaved } do
+			row.frame.Visible = showInfo
+		end
+		infoNone.Visible = not showInfo
+		infoNone.Text = Store.t("ui.menu_continue_none")
+		local infoStroke = continueInfo:FindFirstChildOfClass("UIStroke")
+		if infoStroke then
+			infoStroke.Color = if showInfo then ROLE.good else ROLE.stroke
+		end
+		if slot and info then
+			infoWorld.set(modeIcon(info.mode), Store.t("ui.menu_world", { n = slot }), modeColor(info.mode))
+			infoBase.label.Text = Store.t("ui.base_level", { n = info.habitat })
+			infoLevel.label.Text = Store.t("ui.level", { n = info.level })
+			infoSaved.label.Text = savedText(info.savedAt)
+			infoSaved.frame.Visible = info.savedAt ~= nil
 		end
 		-- A new player has nothing to continue: New game is the big green button. Both stay grey
 		-- until the slot list arrives.
-		local ready = meta ~= nil
-		local newPrimary = ready and slot == nil
-		Ui.setButtonLook(newButton, ready, if newPrimary then ROLE.primaryButton else ROLE.secondaryButton)
-		Ui.setButtonLook(loadButton, ready, ROLE.secondaryButton)
+		local worldsPrimary = ready and slot == nil
+		Ui.setButtonLook(worldsButton, ready, if worldsPrimary then ROLE.primaryButton else ROLE.secondaryButton)
 		Ui.setButtonLook(joinButton, ready, ROLE.secondaryButton)
 		if ready then
-			tintIcon(newButton, if newPrimary then ROLE.primaryButtonText else ROLE.accent)
-			tintIcon(loadButton, ROLE.accent)
+			tintIcon(worldsButton, if worldsPrimary then ROLE.primaryButtonText else ROLE.accent)
 			tintIcon(joinButton, ROLE.good)
 		end
-		newStroke.Color = if newPrimary then ROLE.stroke else ROLE.accent
+		worldsStroke.Color = if worldsPrimary then ROLE.stroke else ROLE.accent
 		joinStroke.Color = ROLE.good
 		-- Stage 10: once the list is here, say that the game saves by itself (playtest feedback).
 		-- Not when saves could not be read (meta.offline): then nothing is saved this visit.
@@ -1149,7 +1463,7 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 				card.rows[5].label.Text = savedText(info.savedAt)
 				card.rows[5].frame.Visible = info.savedAt ~= nil
 			else
-				Ui.setIcon(card.badgeIcon, if flow == "new" then ICONS.rocket else ICONS.build, ROLE.textDim)
+				Ui.setIcon(card.badgeIcon, if flow == "join" then ICONS.helmet else ICONS.rocket, ROLE.textDim)
 				card.badgeIcon.ImageTransparency = 0.3
 				local badgeStroke = card.badge:FindFirstChildOfClass("UIStroke")
 				if badgeStroke then
@@ -1167,16 +1481,18 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			local isLast = meta ~= nil and meta.last == slot and used
 			card.lastPill.Visible = isLast
 			card.lastPill.Text = Store.t("ui.menu_last_time")
-			-- New game over a used world is a warning (orange); every other choice is a go (cyan / lime).
-			card.stroke.Color = if flow == "new" and used
-				then ROLE.warning
-				elseif isLast then ROLE.good
-				elseif used then ROLE.accent
-				else ROLE.stroke
+			-- Stage 11 menu: a used world is a go (cyan, lime for the last one); the warning colour
+			-- belongs to the "Start over" box only.
+			card.stroke.Color = if isLast then ROLE.good elseif used then ROLE.accent else ROLE.stroke
 			card.stroke.Thickness = if isLast then Ui.STROKE + 2 else Ui.STROKE
 			card.button.BackgroundColor3 = if used then ROLE.panelRaised else ROLE.panel
 		end
 		slotsSaveNote.Text = if meta and meta.offline then "" else Store.t("ui.save_auto")
+		Ui.setButton(choiceContinue, Store.t("ui.continue"))
+		Ui.setButton(choiceRestart, Store.t("ui.menu_start_over"))
+		if choiceBox.Visible and pickedSlot then
+			fillChoice(pickedSlot) -- language change: refresh the box texts
+		end
 		confirmTitle.Text = Store.t("ui.menu_wipe_title")
 		confirmText.Text = Store.t("ui.menu_wipe_text")
 		Ui.setButton(confirmNo, Store.t("ui.menu_wipe_no"))
@@ -1201,18 +1517,19 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			-- Stage 10 fix: this world is not for this player; the server sends them back to the menu.
 			waitText.Text = Store.t(noticeKey(waitNotice))
 			waitText.TextColor3 = ROLE.warning
+		elseif waitFailed and inWorldServer then
+			-- Stage 11 menu: still loading in the world server; the player may go back to the lobby.
+			waitText.Text = Store.t("ui.menu_wait_slow")
+			waitText.TextColor3 = ROLE.text
 		elseif waitFailed then
 			waitText.Text = Store.t(noticeKey(waitReason))
 			waitText.TextColor3 = ROLE.warning
 		else
-			waitText.Text = Store.t(if waitKind == "solo"
-				then "ui.menu_wait_solo"
-				elseif waitKind == "join" then "ui.menu_wait_join"
-				else "ui.menu_wait")
+			waitText.Text = Store.t(waitKey(waitKind))
 			waitText.TextColor3 = ROLE.text
 		end
 		waitBack.Visible = waitFailed and waitNotice == nil
-		Ui.setButton(waitBack, Store.t("ui.menu_back"))
+		Ui.setButton(waitBack, Store.t(if inWorldServer then "ui.menu_back_lobby" else "ui.menu_back"))
 	end
 
 	-- Stage 10 fix: the "Join a friend" list.
@@ -1261,11 +1578,8 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		Ui.setButton(backButton, Store.t("ui.menu_back"))
 		backButton.Visible = current ~= "wait"
 		if current == "slots" then
-			panelTitle.Text = Store.t(if flow == "new"
-				then "ui.menu_pick_new"
-				elseif flow == "join" then "ui.menu_pick_join"
-				else "ui.menu_pick_load")
-			Ui.setIcon(panelIcon, if flow == "new" then ICONS.rocket elseif flow == "join" then ICONS.helmet else ICONS.data, ROLE.accent)
+			panelTitle.Text = Store.t(if flow == "join" then "ui.menu_pick_join" else "ui.menu_pick_load")
+			Ui.setIcon(panelIcon, if flow == "join" then ICONS.helmet else ICONS.planet, ROLE.accent)
 		elseif current == "friends" then
 			panelTitle.Text = Store.t("ui.menu_friends_title")
 			Ui.setIcon(panelIcon, ICONS.language, ROLE.good)
@@ -1291,21 +1605,19 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		renderPanel()
 	end
 
-	-- Gamepad: put the selection on the screen's main button.
-	local function selectFirst(button: GuiObject?)
-		if button and UserInputService.GamepadEnabled and screen.Visible then
-			pcall(function()
-				GuiService.SelectedObject = button
-			end)
-		end
-	end
-
 	showScreen = function(name: ScreenName)
+		-- Stage 11 menu: a player in their world server stays on the wait screen (the server there
+		-- refuses every other choice).
+		if inWorldServer and name ~= "wait" then
+			name = "wait"
+		end
 		current = name
 		if name ~= "slots" then
+			choiceBox.Visible = false
 			confirm.Visible = false
-			confirmSlot = nil
+			pickedSlot = nil
 		end
+		syncCardSelection() -- Stage 11 menu (review): the cards are selectable again
 		if name ~= "wait" then
 			waitToken += 1 -- a pending timeout no longer applies
 			waitFailed = false
@@ -1322,7 +1634,7 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		end
 		render()
 		if name == "home" then
-			selectFirst(if Store.continueSlot() then continueButton else newButton)
+			selectFirst(if Store.continueSlot() then continueButton else worldsButton)
 		elseif name == "slots" then
 			selectFirst(slotCards[1].button)
 		elseif name == "mode" then
@@ -1331,6 +1643,8 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			selectFirst(backButton)
 		elseif name == "friends" then
 			selectFirst(if friendCards[1].button.Visible then friendCards[1].button else friendsRefresh)
+		elseif name == "wait" and waitBack.Visible then
+			selectFirst(waitBack)
 		end
 	end
 
@@ -1366,9 +1680,11 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 
 	sendChoice = function(mode: SlotMode)
 		deps.closeSettings()
-		Store.chooseSlot(chosenSlot, mode, chosenFresh)
 		-- Stage 10 fix: outside Studio both modes fly to the player's own world server.
-		startWait(if mode == "solo" and not RunService:IsStudio() then "solo" else "friends")
+		local kind: WaitKind = if mode == "solo" and not RunService:IsStudio() then "solo" else "friends"
+		useTeleportScreen(waitKey(kind)) -- Stage 11 menu: before the server starts the trip
+		Store.chooseSlot(chosenSlot, mode, chosenFresh)
+		startWait(kind)
 	end
 
 	-- Stage 10 fix: Join a friend, then this slot: the server checks the friendship and the room.
@@ -1379,6 +1695,7 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		end
 		deps.closeSettings()
 		chosenSlot = slot
+		useTeleportScreen(waitKey("join")) -- Stage 11 menu
 		Store.joinWorld(owner, slot)
 		startWait("join")
 	end
@@ -1418,7 +1735,8 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		end
 	end)
 
-	-- Animation: the waiting rocket (the background is the cinematic now).
+	-- Animation: the waiting rocket (the background is the cinematic now). Stage 11 menu: it keeps
+	-- moving while a world server is still loading, and stands still with Store.reduceMotion().
 	local animation: RBXScriptConnection? = nil
 	local sinceFrame = 0
 	local function animate(deltaTime: number)
@@ -1428,9 +1746,13 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		end
 		sinceFrame = 0
 		local now = os.clock()
-		if waitView.Visible and not waitFailed then
+		local moving = waitView.Visible and (not waitFailed or inWorldServer) and not Store.reduceMotion()
+		if moving then
 			waitIcon.Rotation = 12 * math.sin(now * 3)
 			waitBadge.Position = UDim2.fromScale(0.5, 0.12 - 0.015 * math.sin(now * 2))
+		elseif waitIcon.Rotation ~= 0 then
+			waitIcon.Rotation = 0
+			waitBadge.Position = UDim2.fromScale(0.5, 0.12)
 		end
 	end
 
@@ -1478,14 +1800,23 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		end
 	end
 
-	-- Gamepad B goes back one screen.
+	-- Gamepad B goes back one screen (Stage 11 menu: closes a box first and gives the selection back).
 	UserInputService.InputBegan:Connect(function(input: InputObject, _processed: boolean)
 		if not screen.Visible or input.KeyCode ~= Enum.KeyCode.ButtonB then
 			return
 		end
 		if confirm.Visible then
 			confirm.Visible = false
-			confirmSlot = nil
+			local slot = pickedSlot
+			if slot then
+				openChoice(slot)
+			else
+				selectPickedCard()
+			end
+		elseif choiceBox.Visible then
+			closeChoice()
+		elseif inWorldServer then
+			return -- the world server's wait screen has its own button
 		elseif current ~= "home" and backButton.Visible then
 			showScreen(backTarget)
 		elseif current == "wait" and waitFailed then
@@ -1506,6 +1837,8 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			task.wait(30)
 			if screen.Visible and current == "slots" then
 				renderSlots()
+			elseif screen.Visible and current == "home" then
+				renderHome()
 			end
 		end
 	end)
@@ -1518,10 +1851,12 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 		if teleportedSlot then
 			-- Arrived in a world server: the server picks that slot by itself (or, if this world is not
 			-- for this player, says why before it sends them back; the attribute may already be set).
+			inWorldServer = true
 			chosenSlot = teleportedSlot
 			local worldNotice = player:GetAttribute("SBO_WorldNotice")
 			waitNotice = if type(worldNotice) == "string" then worldNotice else nil
 			startWait(teleportedKind or "friends")
+			showArrivalScreen(player) -- Stage 11 menu: the trip's screen fades into the wait screen
 		else
 			lobbyNotice = notice -- back in the lobby: say why (for example "your friend left")
 			showScreen("home")

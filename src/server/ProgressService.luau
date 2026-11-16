@@ -132,6 +132,7 @@ local Types = require(Shared:WaitForChild("Types"))
 local Worlds = require(Shared:WaitForChild("Worlds"))
 local Achievements = require(Shared:WaitForChild("Achievements"))
 local ServerGuard = require(Shared:WaitForChild("ServerGuard")) -- Stage 11
+local Daily = require(Shared:WaitForChild("Daily")) -- Stage 11 daily: base.daily record rules
 
 local Codes = require(script.Parent:WaitForChild("Codes"))
 
@@ -194,6 +195,9 @@ export type BaseRecord = {
 	-- Stage 11 tycoon: the ice in this player's silo when they last played as the world owner, and
 	-- os.time() of that write (BaseService adds what the drills dug while they were away). nil = none.
 	silo: { ice: number, at: number }?,
+	-- Stage 11 daily: supply capsules opened, suit stripes and the Moon Logbook (src/shared/Daily.luau
+	-- Record; DailyService writes it). nil = never written; saves only grow (Daily.mergeRecord).
+	daily: Daily.Record?,
 }
 
 -- What the start menu shows about this player's slots (meta key), plus account-wide cosmetics.
@@ -843,6 +847,7 @@ local function sanitizeBase(value: any, habitatTree: boolean?): BaseRecord
 		quest = sanitizeQuest(value.quest),
 		achievements = Achievements.sanitizeRecord(value.achievements),
 		silo = BaseBuild.sanitizeSiloSave(MissionData, value.silo, os.time()), -- Stage 11 tycoon
+		daily = if value.daily ~= nil then Daily.sanitizeRecord(value.daily) else nil, -- Stage 11 daily
 	}
 end
 
@@ -869,6 +874,7 @@ local function cloneBase(base: BaseRecord): BaseRecord
 		quest = sanitizeQuest(base.quest),
 		achievements = Achievements.sanitizeRecord(base.achievements),
 		silo = if base.silo then table.clone(base.silo) else nil, -- Stage 11 tycoon
+		daily = if base.daily then Daily.cloneRecord(base.daily) else nil, -- Stage 11 daily
 	}
 end
 
@@ -897,6 +903,10 @@ local function mergeBase(stored: any, current: BaseRecord, reset: boolean, habit
 		-- Stage 11 tycoon: a silo this server never wrote (a guest in a friend's world) stays as stored.
 		if merged.silo == nil then
 			merged.silo = old.silo
+		end
+		-- Stage 11 daily: capsules, stripes and logbook entries never go back.
+		if old.daily ~= nil or merged.daily ~= nil then
+			merged.daily = Daily.mergeRecord(old.daily, merged.daily)
 		end
 	end
 	return merged
@@ -1096,6 +1106,11 @@ local SETTING_ATTRIBUTES: { [string]: string } = {
 	effectsVolume = "SBO_EffectsVolume",
 	funFacts = "SBO_FunFacts",
 	guidance = "SBO_Guidance",
+	-- Stage 11 menu: accessibility settings (same names as the client Store's SETTING_ATTRIBUTES).
+	bigText = "SBO_BigText",
+	reduceMotion = "SBO_ReduceMotion",
+	colourHelper = "SBO_ColourHelper",
+	messageSpeed = "SBO_MessageSpeed",
 }
 
 -- Mirrors the settings as player attributes (the client Store reads the same names). The language
@@ -2937,6 +2952,7 @@ function ProgressService.resetBase(player: Player): boolean
 	fresh.pets = record.base.pets
 	fresh.equipped = record.base.equipped
 	fresh.achievements = Achievements.cloneRecord(record.base.achievements) -- what was learned stays
+	fresh.daily = record.base.daily -- Stage 11 daily: capsules, stripes and the logbook stay too
 	record.base = fresh
 	record.baseReset = true
 	requestSave(player, record)

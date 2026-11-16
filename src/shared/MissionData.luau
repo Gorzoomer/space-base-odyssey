@@ -418,4 +418,43 @@ MissionData.QUESTS = table.freeze({
 	BREAK_AFTER_MINUTES = 45,
 })
 
+-- Stage 11 tycoon client (GAME; src/shared/IceLineView.luau). C.A.R.L. only sends the player to the
+-- silo when it is theirs and holds at least CARL_SILO_MIN_ICE ice (the cargo robot's smallest load,
+-- BASE.CARGO_MIN_LOAD): a walk for one or two credits is worse than drilling crater ice.
+MissionData.TYCOON_CLIENT = table.freeze({
+	CARL_SILO_MIN_ICE = 5,
+})
+
+-- Stage 11 daily (GAME; src/shared/Daily.luau, DailyService, tests/daily). Once per real (UTC) day a
+-- supply capsule can be opened. Its reward is fixed and shown in advance on a 7-day calendar (no
+-- randomness): CALENDAR[day] for day 1..7 of the current week. Missing a day never resets anything,
+-- the calendar just waits. Day 7 gives the suit stripes WEEK_STRIPES[week] (a look only); once those
+-- are owned, day 7 pays STRIPE_DONE_CREDITS. A whole week pays 45 credits and 60 XP, no more than
+-- three fresh-crater scans (BASE.REWARDS.meteor_scanned), so playing always earns more than waiting.
+MissionData.DAILY = table.freeze({
+	CALENDAR = table.freeze({
+		table.freeze({ kind = "credits", amount = 10 }),
+		table.freeze({ kind = "xp", amount = 15 }),
+		table.freeze({ kind = "credits", amount = 15 }),
+		table.freeze({ kind = "xp", amount = 20 }),
+		table.freeze({ kind = "credits", amount = 20 }),
+		table.freeze({ kind = "xp", amount = 25 }),
+		table.freeze({ kind = "stripe", amount = 0 }),
+	}),
+	WEEK_STRIPES = table.freeze({ "sunrise", "ice", "garden" }),
+	STRIPE_DONE_CREDITS = 30,
+})
+
+-- Stage 11 Moon Logbook (GAME; src/shared/Daily.luau, Collection.luau). Entries are the secrets, the
+-- exploration sites, the first METEOR_PAGE fresh craters scanned and the learning achievements.
+-- Filling MILESTONE_ENTRIES[id] entries unlocks that milestone's suit stripes (a look only).
+MissionData.LOGBOOK = table.freeze({
+	METEOR_PAGE = 5,
+	MILESTONE_ENTRIES = table.freeze({
+		first_page = 5,
+		half_book = 12,
+		moon_expert = 20,
+	}),
+})
+
 return table.freeze(MissionData)

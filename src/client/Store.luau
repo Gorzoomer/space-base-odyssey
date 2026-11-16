@@ -8,6 +8,10 @@
 -- action, and the player's active quest (BaseState.quest, read with Store.quest()).
 -- Stage 10 fix (private worlds): the "Join a friend" list (Remotes.WORLDS, Store.friendWorlds) and the
 -- ListFriendWorlds / JoinWorld actions.
+-- Stage 11 menu: settings saved on the server (SaveSettings, see "Local settings"), the accessibility
+-- helpers other modules read (Store.textScale, Store.reduceMotion, Store.colourHelper,
+-- Store.messageSeconds) and the start-menu-open flag (Store.isMenuOpen / Store.onMenuChanged: C.A.R.L.
+-- holds his lines while the menu hides the HUD).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -17,6 +21,7 @@ local Localization = require(Shared:WaitForChild("Localization"))
 local MissionData = require(Shared:WaitForChild("MissionData"))
 local Types = require(Shared:WaitForChild("Types"))
 local Worlds = require(Shared:WaitForChild("Worlds"))
+local ServerGuard = require(Shared:WaitForChild("ServerGuard")) -- Stage 11 menu: settings rules
 
 export type Snapshot = Types.Snapshot
 export type PlayerStats = Types.PlayerStats
@@ -93,21 +98,41 @@ Store.COLLECTIBLE_ICONS = table.freeze({
 	mars_potato = "potato",
 } :: { [string]: string })
 
--- Local player settings (Settings panel). Kept on this client and mirrored as attributes of the
--- local player (Store.SETTING_ATTRIBUTES) so other client scripts can read them.
-export type SettingName = "musicVolume" | "effectsVolume" | "funFacts" | "guidance"
+-- Player settings (Settings panel). Kept on this client; Stage 11 menu: saved on the server with the
+-- SaveSettings action (debounced) and read back from the slot list (SlotsMeta.settings), the trip's
+-- TeleportData.prefs and the player attributes the server sets (Store.SETTING_ATTRIBUTES, "Language"),
+-- so they survive teleports and rejoins. The client never writes these attributes itself.
+-- Stage 11 menu: bigText, reduceMotion, colourHelper and messageSpeed are the accessibility page.
+export type SettingName =
+	"musicVolume"
+	| "effectsVolume"
+	| "funFacts"
+	| "guidance"
+	| "bigText"
+	| "reduceMotion"
+	| "colourHelper"
+	| "messageSpeed"
 Store.SETTING_ATTRIBUTES = table.freeze({
 	musicVolume = "SBO_MusicVolume",
 	effectsVolume = "SBO_EffectsVolume",
 	funFacts = "SBO_FunFacts",
 	guidance = "SBO_Guidance",
+	bigText = "SBO_BigText", -- Stage 11 menu
+	reduceMotion = "SBO_ReduceMotion",
+	colourHelper = "SBO_ColourHelper",
+	messageSpeed = "SBO_MessageSpeed",
 } :: { [string]: string })
--- UI defaults (not gameplay numbers): volumes 0..1, C.A.R.L. features on.
+-- UI defaults (not gameplay numbers), the same as ServerGuard's: volumes 0..1, C.A.R.L. features
+-- on, accessibility off, messages at normal speed.
 local settings: { [string]: number | boolean } = {
 	musicVolume = 0.6,
 	effectsVolume = 0.8,
 	funFacts = true,
 	guidance = true,
+	bigText = false,
+	reduceMotion = false,
+	colourHelper = false,
+	messageSpeed = 1,
 }
 
 local snapshot: Snapshot? = nil
@@ -575,6 +600,10 @@ function Store.setSlots(value: any)
 	end
 	-- Stage 10: offline is kept so the start menu never says "saves by itself" when it cannot.
 	slotsMeta = { slots = slots, last = last, offline = if value.offline == true then true else nil }
+	-- Stage 11 menu: the player's saved settings travel with the slot list.
+	if type(value.settings) == "table" then
+		Store.applyServerSettings(value.settings)
+	end
 	emit("slots")
 end
 
@@ -719,33 +748,276 @@ function Store.settingNumber(name: SettingName): number
 	return if type(value) == "number" then value else 0
 end
 
+-- Stage 11 menu: saving on the server -----------------------------------------------------------
+-- A change is sent SAVE_DEBOUNCE seconds after the last one (a slider drag sends once; the server
+-- takes at most 5 a second). For LOCAL_WINS_SECONDS after a change the server's older copy (an
+-- attribute, the slot list) cannot undo it; after that, a field the server still has wrong is sent
+-- again (at most SAVE_RETRIES times).
+local SAVE_DEBOUNCE = 0.6
+local LOCAL_WINS_SECONDS = 6
+local SAVE_RETRIES = 2
+local LANGUAGE_ATTRIBUTE = "Language"
+local pendingSave: { [string]: any } = {} -- fields waiting for the debounce
+local changedAt: { [string]: number } = {} -- os.clock() of the last local change per field ("language" too)
+local saveToken = 0
+local syncStarted = false
+
+local function serverValue(name: string): any
+	local player = game:GetService("Players").LocalPlayer
+	if player == nil then
+		return nil
+	end
+	if name == "language" then
+		return player:GetAttribute(LANGUAGE_ATTRIBUTE)
+	end
+	local attribute = Store.SETTING_ATTRIBUTES[name]
+	return if attribute then player:GetAttribute(attribute) else nil
+end
+
+local function localValue(name: string): any
+	return if name == "language" then language else settings[name]
+end
+
+-- Equal, or numbers within the server's rounding (volumes are kept in steps of 0.01).
+local function sameValue(a: any, b: any): boolean
+	if type(a) == "number" and type(b) == "number" then
+		return math.abs(a - b) < 0.005
+	end
+	return a == b
+end
+
+local flushSave: (attempt: number) -> ()
+flushSave = function(attempt: number)
+	if next(pendingSave) == nil then
+		return
+	end
+	if actionRemote == nil then
+		task.delay(1, flushSave, attempt) -- the remote is not there yet
+		return
+	end
+	local patch = pendingSave
+	pendingSave = {}
+	local action: any = { type = "SaveSettings", settings = patch }
+	Store.send(action)
+	-- Check later that the server took it (its attributes follow); resend what it still has wrong.
+	task.delay(LOCAL_WINS_SECONDS * 0.5, function()
+		if attempt >= SAVE_RETRIES then
+			return
+		end
+		local again = false
+		for name in patch do
+			local server = serverValue(name)
+			-- nil = an older server without settings: nothing to retry.
+			if server ~= nil and not sameValue(server, localValue(name)) and pendingSave[name] == nil then
+				pendingSave[name] = localValue(name)
+				again = true
+			end
+		end
+		if again then
+			flushSave(attempt + 1)
+		end
+	end)
+end
+
+local function queueSave(name: string, value: any)
+	changedAt[name] = os.clock()
+	pendingSave[name] = value
+	saveToken += 1
+	local token = saveToken
+	task.delay(SAVE_DEBOUNCE, function()
+		if token == saveToken then
+			flushSave(0)
+		end
+	end)
+end
+
+-- A local change: shown at once and saved on the server (debounced).
 function Store.setSetting(name: SettingName, value: number | boolean)
 	if settings[name] == value then
 		return
 	end
 	settings[name] = value
-	local attribute = Store.SETTING_ATTRIBUTES[name]
-	local player = game:GetService("Players").LocalPlayer
-	if attribute and player then
-		player:SetAttribute(attribute, value)
-	end
+	queueSave(name, value)
 	emit("settings")
 end
 
--- Read settings back from the local player's attributes (they survive a client script restart).
+-- Stage 11 menu: the player picked a language in Settings. Shown at once; SetLanguage saves it on
+-- the server (MissionService and ProgressService both read it).
+function Store.chooseLanguage(value: Language)
+	if value ~= "en" and value ~= "es" then
+		return
+	end
+	changedAt.language = os.clock()
+	if language ~= value then
+		Store.setLanguage(value)
+	end
+	Store.send({ type = "SetLanguage", language = value })
+end
+
+local function recentlyChanged(name: string): boolean
+	local at = changedAt[name]
+	return pendingSave[name] ~= nil or (at ~= nil and os.clock() - at < LOCAL_WINS_SECONDS)
+end
+
+-- Settings the server sent (SlotsMeta.settings, TeleportData.prefs or the attributes): a field
+-- replaces the local value unless the player changed it in the last few seconds. Bad values are
+-- ignored (the same ServerGuard rules as the server).
+function Store.applyServerSettings(raw: any)
+	if type(raw) ~= "table" then
+		return
+	end
+	-- Only the fields the server actually sent (a missing field must not reset a local choice).
+	local present: { [string]: boolean } = {}
+	for _, name in ServerGuard.SETTING_NAMES do
+		if raw[name] ~= nil then
+			present[name] = true
+		end
+	end
+	local clean: any = ServerGuard.applySettings(ServerGuard.defaultSettings(), raw)
+	local changed = false
+	for name in Store.SETTING_ATTRIBUTES do
+		if present[name] and not recentlyChanged(name) then
+			local value = clean[name]
+			if type(value) == type(settings[name]) and not sameValue(settings[name], value) then
+				settings[name] = value
+				changed = true
+			end
+		end
+	end
+	local saved = clean.language
+	if present.language and saved ~= nil and saved ~= language and not recentlyChanged("language") then
+		Store.setLanguage(saved)
+	end
+	if changed then
+		emit("settings")
+	end
+end
+
+-- The language this player saved, if the trip or the server already says (nil = never chosen:
+-- Main.client then follows the device language).
+function Store.savedLanguage(): Language?
+	local ok, data = pcall(function(): any
+		return game:GetService("TeleportService"):GetLocalPlayerTeleportData()
+	end)
+	local prefs = if ok and type(data) == "table" then data.prefs else nil
+	if type(prefs) == "table" and (prefs.language == "en" or prefs.language == "es") then
+		return prefs.language
+	end
+	local attribute = serverValue("language")
+	if attribute == "en" or attribute == "es" then
+		return attribute
+	end
+	return nil
+end
+
+local function readAttributes()
+	local raw: { [string]: any } = {}
+	for name in Store.SETTING_ATTRIBUTES do
+		local value = serverValue(name)
+		if value ~= nil then
+			raw[name] = value
+		end
+	end
+	local saved = serverValue("language")
+	if saved ~= nil then
+		raw.language = saved
+	end
+	Store.applyServerSettings(raw)
+end
+
+-- Read the saved settings (trip prefs, then the server's attributes) and follow later changes.
+-- Safe to call more than once.
 function Store.loadSettings()
+	if syncStarted then
+		return
+	end
+	syncStarted = true
 	local player = game:GetService("Players").LocalPlayer
 	if not player then
 		return
 	end
-	for name, attribute in Store.SETTING_ATTRIBUTES do
-		local value = player:GetAttribute(attribute)
-		if type(value) == type(settings[name]) then
-			settings[name] = value
-		else
-			player:SetAttribute(attribute, settings[name])
-		end
+	local ok, data = pcall(function(): any
+		return game:GetService("TeleportService"):GetLocalPlayerTeleportData()
+	end)
+	if ok and type(data) == "table" and type(data.prefs) == "table" then
+		Store.applyServerSettings(data.prefs)
 	end
+	readAttributes()
+	for _, attribute in Store.SETTING_ATTRIBUTES do
+		player:GetAttributeChangedSignal(attribute):Connect(readAttributes)
+	end
+	player:GetAttributeChangedSignal(LANGUAGE_ATTRIBUTE):Connect(readAttributes)
+end
+
+-- Stage 11 menu: accessibility helpers for other modules ------------------------------------------
+
+Store.BIG_TEXT_SCALE = 1.25 -- UI choice: text size with "Big text" on
+Store.MESSAGE_SPEEDS = ServerGuard.MESSAGE_SPEEDS -- the "Message time" choices (1 = normal)
+
+-- Text size factor for Ui's text helpers (1 = normal).
+function Store.textScale(): number
+	return if settings.bigText == true then Store.BIG_TEXT_SCALE else 1
+end
+
+-- True: no camera shake and no big tweens (small fades are fine).
+function Store.reduceMotion(): boolean
+	return settings.reduceMotion == true
+end
+
+-- True: add icons or patterns wherever a signal is only a colour.
+function Store.colourHelper(): boolean
+	return settings.colourHelper == true
+end
+
+-- How many times longer C.A.R.L.'s bubbles stay (1, 1.5 or 2).
+function Store.messageFactor(): number
+	local value = settings.messageSpeed
+	return if type(value) == "number" and value >= 1 then value else 1
+end
+
+-- The shortest time a C.A.R.L. line stays (Reading.MIN_SECONDS; read once, 4 if that module is missing).
+local readingMinimum = 4
+do
+	local ok, minimum = pcall(function(): any
+		local module = Shared:FindFirstChild("Reading")
+		return if module and module:IsA("ModuleScript") then (require :: any)(module).MIN_SECONDS else nil
+	end)
+	if ok and type(minimum) == "number" and minimum > 0 then
+		readingMinimum = minimum
+	end
+end
+
+-- Message time. With `seconds`: that time at the chosen speed. Without (Messages.luau calls it so):
+-- the shortest time a line stays at the chosen speed, or nil at normal speed (no change).
+function Store.messageSeconds(seconds: number?): number?
+	local factor = Store.messageFactor()
+	if seconds ~= nil then
+		return seconds * factor
+	end
+	return if factor > 1 then readingMinimum * factor else nil
+end
+
+-- Stage 11 menu: the start menu is open (it hides the HUD; C.A.R.L. waits) -------------------------
+
+local menuOpen = false
+local menuListeners: { (open: boolean) -> () } = {}
+
+function Store.isMenuOpen(): boolean
+	return menuOpen
+end
+
+function Store.setMenuOpen(open: boolean)
+	if menuOpen == open then
+		return
+	end
+	menuOpen = open
+	for _, listener in menuListeners do
+		task.spawn(listener, open)
+	end
+end
+
+function Store.onMenuChanged(listener: (open: boolean) -> ())
+	table.insert(menuListeners, listener)
 end
 
 -- Water and data waiting (Stage 5 Snapshot fields; 0 with an older server).
