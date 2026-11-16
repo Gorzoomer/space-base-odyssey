@@ -16,8 +16,8 @@
 --     at once) the least useful one skips the screen and goes straight to the history.
 --   * history: a small replay button beside the bubble opens "What C.A.R.L. said" (modal
 --     "CarlHistory") with the last HISTORY_SIZE lines, newest first, in the current language.
---   * while the Lab (BasePanel) or the Wardrobe is open, the bubble moves to the bottom centre and
---     rises above those panels (z RAISED_Z), so the server's answer to a Lab or Wardrobe button
+--   * while the Lab (BasePanel) or the Wardrobe is open, the bubble moves to the top centre (over the
+--     panel's header, never over its card buttons, which sit at the bottom) and rises above those panels (z RAISED_Z), so the server's answer to a Lab or Wardrobe button
 --     ("not enough credits", "bought!") is seen.
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
 
@@ -44,6 +44,8 @@ local Z = 50
 local RAISED_Z = 59 -- above the Lab and Wardrobe (53) and the cards (56-58), under StartMenu (61) and Settings (62)
 local HISTORY_Z = 60
 local RAISE_PANELS = { "BasePanel", "Wardrobe" }
+-- Dimming modals drawn over the bubble: its clock pauses while one is open (see held()).
+local HOLD_PANELS = { "DailyCard", "AwayCard", "GlossaryCard", "Achievements", "Collection", "CarlHistory" }
 local PANEL_CHECK_SECONDS = 0.2
 
 local Messages = {}
@@ -79,15 +81,16 @@ export type MessagesView = {
 --   right buttons (Earth link, Wardrobe) start at x 0.74 or later. The bottom centre belongs to the
 --   tool bar and the field pills.
 -- * Base mode ("base"): top centre too, under the "Build your base" hint pill (y 0.115-0.175).
--- * Stage 11, Lab or Wardrobe open: bottom centre over the panel's bottom edge (the tool bar is hidden
---   while they are open), above the panel.
+-- * Stage 11, Lab or Wardrobe open: top centre over the panel's header row, above the panel. Not at
+--   the bottom: the Lab cards' Learn / Buy buttons sit there (about y 0.835-0.91 on 16:9), and the
+--   stats row with the points pill (panel y 0.145+) stays visible under the bubble.
 -- Stage 10 table (fractions of the screen; the name tag rises about 0.012 above the bubble's top):
 --   mode              x            y
 --   select, none      0.02-0.26    0.835-0.945
 --   board             0.32-0.58    0.835-0.95
 --   shift, roam       0.33-0.67    0.115-0.21
 --   base              0.33-0.67    0.19-0.285
---   Lab / Wardrobe    0.30-0.70    0.845-0.945
+--   Lab / Wardrobe    0.30-0.70    0.03-0.13
 -- The Stage 11 replay button sits right of the bubble (about x +0.006 to +0.045), except on the power
 -- board, where the Start button is too close (it is hidden there).
 local MENU_POSITION = UDim2.fromScale(0.02, 0.835)
@@ -97,7 +100,7 @@ local PLANNING_SIZE = UDim2.fromScale(0.26, 0.115)
 local PLAY_POSITION = UDim2.fromScale(0.33, 0.115)
 local PLAY_SIZE = UDim2.fromScale(0.34, 0.095)
 local BASE_POSITION = UDim2.fromScale(0.33, 0.19)
-local PANEL_POSITION = UDim2.fromScale(0.3, 0.845)
+local PANEL_POSITION = UDim2.fromScale(0.3, 0.03)
 local PANEL_SIZE = UDim2.fromScale(0.4, 0.1)
 local TEXT_MAX = 20 -- biggest text size: two lines of 8 words still fit the small play bubble
 local HISTORY_GAP = 0.006 -- bubble's right edge to the replay button
@@ -348,9 +351,21 @@ function Messages.new(root: Frame): MessagesView
 
 	-- Stage 11: the start menu covers the game UI (StartMenu.luau moves it into a hidden holder), so
 	-- nothing starts and no clock runs while it is open.
+	-- Stage 11 fix: the same for the dimming cards that cover the bubble (the daily capsule card opens
+	-- by itself right after landing): the line waits under them instead of timing out unseen.
 	local function held(): boolean
 		local menu = root:FindFirstChild("StartMenu")
-		return menu ~= nil and menu:IsA("GuiObject") and menu.Visible
+		if menu ~= nil and menu:IsA("GuiObject") and menu.Visible then
+			return true
+		end
+		local layer = root:FindFirstChild("GameLayer")
+		for _, name in HOLD_PANELS do
+			local panel = root:FindFirstChild(name) or (if layer then layer:FindFirstChild(name) else nil)
+			if panel and panel:IsA("GuiObject") and panel.Visible then
+				return true
+			end
+		end
+		return false
 	end
 
 	local function durationFor(ref: TextRef, isFact: boolean, busy: boolean): number

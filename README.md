@@ -46,8 +46,14 @@ Every number and its source is listed in [DATA_SOURCES.md](DATA_SOURCES.md).
 | Double jump (air boots) | Space twice | Jump button twice |
 | Fly up (jetpack) | Hold Space in the air | Hold the jump button |
 | Auto-run | X (X or WASD to stop) | Auto-run button |
-| Base, wardrobe, missions | Buttons at the top right | Same |
-| Language | EN/ES button | EN/ES button |
+| Drive / get out of a vehicle | WASD / Space | Thumbstick / jump |
+| Read C.A.R.L.'s lines again | Replay button by the bubble | Same |
+| Answer C.A.R.L.'s question, learn a gold word | Click it | Tap it |
+| Settings, missions, wardrobe, achievements | Buttons at the top right | Same |
+| Moon Logbook | "Logbook" on the mission screen | Same |
+| Language, volume, Helpers (big text, less motion, message time) | Settings | Settings |
+
+There are no debug keys for players: the team's test keys work only in Roblox Studio.
 
 ## Status
 
@@ -61,12 +67,14 @@ Every number and its source is listed in [DATA_SOURCES.md](DATA_SOURCES.md).
 - [x] Stage 7: start in the lander, building in steps, tools, lab, garage with drivable rovers, landing pad and ship, exploration sites, meteorites
 - [x] Stage 8: pressurized modules, air boots and jetpack with a gas tank, new skills, auto-run
 - [x] Stage 9: start menu with three save slots, open world with main quests, habitat base levels 1-5, paced economy
-- [x] Stage 10: playtest polish: smaller text boxes, always-on vitals panel, quest notices, visible saving, walkable tubes
+- [x] Stage 10: playtest polish: smaller text boxes, always-on vitals panel, quest notices, visible saving, walkable tubes; then private worlds (up to 4 friends), calmer storm drills with live radiation, learning achievements, cinematic start menu
+- [x] Stage 10 release: published to the live experience (16 November 2026)
+- [x] Stage 11: overnight overhaul (16 November 2026, version 0.11.0): sound and music with an honest helmet rule, an ice line tycoon you can watch (drills, belt, silo, water plant, cargo robot, "while you were away"), a safer server with save locks, quests that teach (C.A.R.L.'s picture questions, a picture glossary), a start menu without "Load game", saved settings and a Helpers page, a daily supply capsule and the Moon Logbook, celebrations, a safer map, debug keys only in Studio
 - [ ] Playtests with people outside the team
-- [ ] Public release
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the full development log.
 All the project documentation in one place: [DOCUMENTATION.md](DOCUMENTATION.md) (English) and [DOCUMENTACION.md](DOCUMENTACION.md) (Spanish).
+For teachers: [docs-public/EDUCATOR_GUIDE.md](docs-public/EDUCATOR_GUIDE.md) (English) and [docs-public/GUIA_DOCENTE.md](docs-public/GUIA_DOCENTE.md) (Spanish), three 20-minute lesson plans.
 
 ## Running it locally
 
@@ -75,7 +83,7 @@ All the project documentation in one place: [DOCUMENTATION.md](DOCUMENTATION.md)
 3. Run `rojo serve` in this folder and press **Connect** in the Rojo plugin.
 4. Press **Play**.
 
-Tests: `lune run tests/balance` and `lune run tests/localization` ([Lune](https://github.com/lune-org/lune) 0.11).
+Tests ([Lune](https://github.com/lune-org/lune) 0.11): `lune run tests/<name>` for `balance`, `missions`, `base`, `economy`, `cinematic`, `worlds`, `achievements`, `daily`, `feel`, `reading` and `localization`.
 
 ## Repository layout
 
@@ -84,9 +92,10 @@ Tests: `lune run tests/balance` and `lune run tests/localization` ([Lune](https:
 | `src/shared` | Mission rules, data, network contract, text (synced to `ReplicatedStorage.Shared`) |
 | `src/server` | World builder, mission and crew services, live NASA data (synced to `ServerScriptService.Server`) |
 | `src/client` | Interface and guidance (synced to `StarterPlayer.StarterPlayerScripts.Client`) |
-| `tests` | Balance and localization tests |
+| `tests` | Eleven Lune test suites (rules, economy, worlds, achievements, daily capsule, text) |
+| `docs-public` | Educator pack in English and Spanish |
 | `DATA_SOURCES.md` | Every real-world number with its source |
-| `THIRD_PARTY_NOTICES.md` | Licences of third-party assets (Tabler Icons) |
+| `THIRD_PARTY_NOTICES.md` | Licences of third-party assets (Tabler Icons, NASA Blue Marble, CC0 sounds) |
 | `DEVELOPMENT.md` | Development log: decisions, tests, use of AI |
 | `SUBMISSION.md` | Drafts of the Space Apps project page |
 

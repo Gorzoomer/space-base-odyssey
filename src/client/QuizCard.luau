@@ -14,7 +14,8 @@
 -- It never blocks play: it is not a modal (the world keeps working behind it), it hides while a panel
 -- or a mission is up and comes back after, and the kid can always close it.
 -- Placement: centre of the screen, under the C.A.R.L. bubble (y 0.19-0.285 in base mode) and above
--- the bottom pills; taller on small (touch) screens so each answer is a big target. Z index 46: over
+-- the bottom pills; taller on small (touch) screens so each answer is a big target, but there it always
+-- ends above Roblox's tool bar and the visible bottom pills (low air stays readable). Z index 46: over
 -- the HUD and the quest toasts' layer, under the C.A.R.L. bubble (50) and every panel (53+).
 -- Main.client starts it with QuizCard.start(root) (pcall: a broken card never breaks the client).
 -- SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team.
@@ -38,8 +39,12 @@ local Z = 46
 local CARD_ASPECT = 1.45 -- width / height
 local CARD_HEIGHT = 0.44
 local CARD_Y = 0.52 -- centre
-local CARD_HEIGHT_SMALL = 0.6 -- small screens (root UIScale under SMALL_SCALE): bigger buttons
-local CARD_Y_SMALL = 0.59
+local CARD_HEIGHT_SMALL = 0.6 -- small screens (root UIScale under SMALL_SCALE): bigger buttons, at most
+local SMALL_TOP = 0.295 -- small screens: the card starts under the base-mode bubble (y 0.19-0.285)
+local SMALL_MIN_HEIGHT = 0.3
+local SMALL_GAP = 0.012
+local HOTBAR_RESERVE_PIXELS = 84 -- Roblox's tool bar plus a gap (Hud.luau HOTBAR_PIXELS + HOTBAR_GAP_PIXELS)
+local BOTTOM_PILLS = { "LowAir", "GearGas", "AutoRun", "CarryingCrate", "CarryingIce" } -- Hud.luau, in HudField
 local SMALL_SCALE = 0.75
 local MAX_ANSWERS = 3
 local ANSWER_TOP = 0.34 -- fractions of the card
@@ -337,13 +342,46 @@ function QuizCard.start(root: Frame)
 		return Ui.scale() < SMALL_SCALE
 	end
 
+	-- Stage 11 fix: on small screens the card ends above Roblox's tool bar (it stays shown with the
+	-- card, so "Not now" must not sit under it) and above the HUD's bottom pills ("Low air! Go
+	-- inside", gas, carried ice or parts), which must stay readable while the question waits.
+	local function smallBottom(): number
+		local camera = workspace.CurrentCamera
+		local height = if camera then camera.ViewportSize.Y else 0
+		if height <= 0 then
+			height = 720
+		end
+		local bottom = 1 - HOTBAR_RESERVE_PIXELS / height
+		local field = root:FindFirstChild("HudField")
+		local rootHeight = root.AbsoluteSize.Y
+		if field and field:IsA("GuiObject") and field.Visible and rootHeight > 0 then
+			for _, name in BOTTOM_PILLS do
+				local pill = field:FindFirstChild(name)
+				if pill and pill:IsA("GuiObject") and pill.Visible then
+					bottom = math.min(bottom, (pill.AbsolutePosition.Y - root.AbsolutePosition.Y) / rootHeight)
+				end
+			end
+		end
+		return bottom - SMALL_GAP
+	end
+
 	local function placeCard()
+		local size: UDim2
+		local position: UDim2
 		if small() then
-			card.Size = UDim2.fromScale(0.7, CARD_HEIGHT_SMALL)
-			card.Position = UDim2.fromScale(0.5, CARD_Y_SMALL)
+			-- From under the C.A.R.L. bubble down to smallBottom(), at most CARD_HEIGHT_SMALL tall.
+			local cardHeight = math.clamp(smallBottom() - SMALL_TOP, SMALL_MIN_HEIGHT, CARD_HEIGHT_SMALL)
+			size = UDim2.fromScale(0.7, cardHeight)
+			position = UDim2.fromScale(0.5, SMALL_TOP + cardHeight / 2)
 		else
-			card.Size = UDim2.fromScale(0.5, CARD_HEIGHT)
-			card.Position = UDim2.fromScale(0.5, CARD_Y)
+			size = UDim2.fromScale(0.5, CARD_HEIGHT)
+			position = UDim2.fromScale(0.5, CARD_Y)
+		end
+		if card.Size ~= size then
+			card.Size = size
+		end
+		if card.Position ~= position then
+			card.Position = position
 		end
 	end
 
@@ -544,8 +582,8 @@ function QuizCard.start(root: Frame)
 				popIn()
 				Audio.play("quest_new")
 			end
+			placeCard() -- also while shown: a bottom pill (low air) may appear meanwhile
 			if not card.Visible then
-				placeCard()
 				card.Visible = true
 			end
 		elseif card.Visible and waiting == nil then

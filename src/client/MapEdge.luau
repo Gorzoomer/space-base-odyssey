@@ -35,19 +35,18 @@ function MapEdge.start(deps: Deps?)
 	local player = Players.LocalPlayer
 	local lastWarnAt = -math.huge
 	local glows: { BasePart } = {}
-	local watchedFolder: Instance? = nil
 
+	-- The place streams: the MapEdge folder arrives at join, but its walls and glows (about 600
+	-- studs out) stream in and out later. So the glow list is rebuilt from the folder's children
+	-- on every check (only a handful of parts), never kept from the first look.
 	local function findGlows(): Instance?
 		local base = workspace:FindFirstChild("Base")
 		local edgeFolder = if base then base:FindFirstChild("MapEdge") else nil
-		if edgeFolder ~= watchedFolder then
-			watchedFolder = edgeFolder
-			table.clear(glows)
-			if edgeFolder then
-				for _, child in edgeFolder:GetChildren() do
-					if child:IsA("BasePart") and child.Name == "EdgeGlow" then
-						table.insert(glows, child)
-					end
+		table.clear(glows)
+		if edgeFolder then
+			for _, child in edgeFolder:GetChildren() do
+				if child:IsA("BasePart") and child.Name == "EdgeGlow" then
+					table.insert(glows, child)
 				end
 			end
 		end

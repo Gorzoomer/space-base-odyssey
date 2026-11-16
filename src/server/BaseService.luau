@@ -2424,6 +2424,34 @@ function BaseService.start(worldRefs: any, remoteEvents: Remotes, progressServic
 		refreshToolsAll()
 		scheduleSendAll()
 	end)
+	-- Stage 11 fix: a player leaves with builds they paid for still unfinished. The credits go back
+	-- into their base before ProgressService's final save (a refund kept only in this server's memory
+	-- is lost when it closes, as a world server does when its owner leaves), and those builds stop.
+	progressService.onLeaving(function(player: Player)
+		local dropped = false
+		for id, job in jobs do
+			if job.payerId == player.UserId then
+				jobs[id] = nil
+				dropped = true
+				if job.cost > 0 then
+					progressService.updateBase(player, function(saved: BaseRecord)
+						saved.credits += job.cost
+					end)
+				end
+				worldCall("setBuildLevel", id, applied[id] or 0, false) -- drop the step view
+			end
+		end
+		local refund = tycoon.pendingRefund[player.UserId]
+		if refund and refund > 0 and progressService.updateBase(player, function(saved: BaseRecord)
+			saved.credits += refund
+		end) then
+			tycoon.pendingRefund[player.UserId] = nil
+		end
+		if dropped then
+			recompute(false)
+			scheduleSendAll()
+		end
+	end)
 	progressService.onCollectible(onCollectible)
 	progressService.onCosmetic(onCosmetic)
 	Players.PlayerAdded:Connect(addPlayer)

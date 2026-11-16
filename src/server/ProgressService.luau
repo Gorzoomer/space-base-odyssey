@@ -367,6 +367,7 @@ local closing = false
 local currentOwner: Player? = nil -- the owner, while present with a loaded slot
 local loadOrder: { Player } = {} -- local: players in the order their slots loaded
 local ownerListeners: { () -> () } = {}
+local leavingListeners: { (player: Player) -> () } = {} -- run before a leaving player's final save
 local worldStore: any = nil -- MemoryStoreHashMap (or a sorted map)
 local worldStoreTried = false
 local registryRunning = false
@@ -1501,7 +1502,13 @@ local function refreshOwner()
 		worldOwnerId = if owner then owner.UserId else nil
 	end
 	for player, record in records do
-		record.guest = record.loaded and owner ~= nil and player ~= owner
+		if role == "world" then
+			-- A world server belongs to worldOwnerId for its whole life: a guest stays a guest when the
+			-- owner leaves (or before their slot loads), so the host's base never counts as theirs.
+			record.guest = record.loaded and worldOwnerId ~= nil and player.UserId ~= worldOwnerId
+		else
+			record.guest = record.loaded and owner ~= nil and player ~= owner
+		end
 		setAttribute(player, "SBO_Guest", record.guest)
 	end
 	workspace:SetAttribute("SBO_WorldOwner", worldOwnerId)
@@ -2233,6 +2240,14 @@ local function removePlayer(player: Player)
 	local record = records[player]
 	if record == nil then
 		return
+	end
+	-- Stage 11 fix: listeners may still change this player's base (BaseService refunds builds they
+	-- paid for and that cannot finish without them), so it runs before the record goes and is saved.
+	for _, listener in leavingListeners do
+		local ok, err = pcall(listener, player)
+		if not ok then
+			warn(`[SpaceBaseOdyssey] leaving listener failed: {err}`)
+		end
 	end
 	records[player] = nil
 	for _, connection in record.connections do
@@ -2967,6 +2982,12 @@ end
 -- Called (with the player) when a player's chosen slot finished loading.
 function ProgressService.onLoaded(listener: (player: Player) -> ())
 	table.insert(loadedListeners, listener)
+end
+
+-- Stage 11 fix: called (synchronously, with the player) when a player leaves, before their record is
+-- dropped and finally saved, so updateBase still works for them. Listeners must not yield.
+function ProgressService.onLeaving(listener: (player: Player) -> ())
+	table.insert(leavingListeners, listener)
 end
 
 -- Called the first time a player picks up a collectible (isNew is then always true; repeat pickups

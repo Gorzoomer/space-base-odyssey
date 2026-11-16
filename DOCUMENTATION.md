@@ -28,14 +28,19 @@ NASA Space Apps Challenge 2026, challenge "Build a Junior Astronaut Mission Trai
   - [2.10 Gear](#210-gear)
   - [2.11 Skills](#211-skills)
   - [2.12 Credits, XP, levels and pacing](#212-credits-xp-levels-and-pacing)
-  - [2.13 Silo, drills and cargo robot](#213-silo-drills-and-cargo-robot)
+  - [2.13 The ice line: drills, silo, water plant and cargo robot](#213-the-ice-line-drills-silo-water-plant-and-cargo-robot)
   - [2.14 Vehicles and the garage](#214-vehicles-and-the-garage)
   - [2.15 Pets and wardrobe](#215-pets-and-wardrobe)
   - [2.16 Exploring the Moon](#216-exploring-the-moon)
   - [2.17 Secrets, collectibles and codes](#217-secrets-collectibles-and-codes)
   - [2.18 Pressurized modules and walkable tubes](#218-pressurized-modules-and-walkable-tubes)
-  - [2.19 Controls](#219-controls)
-  - [2.20 Team debug keys](#220-team-debug-keys)
+  - [2.19 The daily supply capsule](#219-the-daily-supply-capsule)
+  - [2.20 The Moon Logbook](#220-the-moon-logbook)
+  - [2.21 C.A.R.L. asks, and the picture glossary](#221-carl-asks-and-the-picture-glossary)
+  - [2.22 Celebrations](#222-celebrations)
+  - [2.23 Sound and music](#223-sound-and-music)
+  - [2.24 Settings and Helpers](#224-settings-and-helpers)
+  - [2.25 Controls](#225-controls)
 - [3. Science and NASA data](#3-science-and-nasa-data)
   - [3.1 Learning goals](#31-learning-goals)
   - [3.2 Science rules the game keeps](#32-science-rules-the-game-keeps)
@@ -44,6 +49,7 @@ NASA Space Apps Challenge 2026, challenge "Build a Junior Astronaut Mission Trai
   - [3.5 REAL and GAME numbers](#35-real-and-game-numbers)
   - [3.6 Space agency partner data and other references](#36-space-agency-partner-data-and-other-references)
   - [3.7 Real-world references behind sites, vehicles and gear](#37-real-world-references-behind-sites-vehicles-and-gear)
+  - [3.8 Science in the Stage 11 features](#38-science-in-the-stage-11-features)
 - [4. Technical design](#4-technical-design)
   - [4.1 Tools](#41-tools)
   - [4.2 Repository layout](#42-repository-layout)
@@ -53,10 +59,11 @@ NASA Space Apps Challenge 2026, challenge "Build a Junior Astronaut Mission Trai
   - [4.6 Remotes and actions](#46-remotes-and-actions)
   - [4.7 The save system](#47-the-save-system)
   - [4.8 The world built by code](#48-the-world-built-by-code)
-  - [4.9 Testing](#49-testing)
-  - [4.10 Performance and safety notes](#410-performance-and-safety-notes)
-  - [4.11 Accessibility](#411-accessibility)
-  - [4.12 Known technical limitations](#412-known-technical-limitations)
+  - [4.9 Audio pipeline](#49-audio-pipeline)
+  - [4.10 Testing](#410-testing)
+  - [4.11 Performance and safety notes](#411-performance-and-safety-notes)
+  - [4.12 Accessibility](#412-accessibility)
+  - [4.13 Known technical limitations](#413-known-technical-limitations)
 - [5. Development log](#5-development-log)
   - [5.1 Team and roles](#51-team-and-roles)
   - [5.2 Timeline](#52-timeline)
@@ -106,7 +113,7 @@ The warning times, the shift length and the 0 to 100 meters are game values chos
 
 ### High-level project summary
 
-Space Base Odyssey is a cooperative Roblox game where kids aged 7 to 12 start in the small lander that brought them to the Moon's south pole and grow a base from nothing. They carry parts crates from the lander and assemble each building step by step with a wrench: the habitat, solar panels, a greenhouse, an antenna, a regolith storm shelter, and later a lab, ice drills, a garage with a moon buggy and an ice hauler, a landing pad and a ship for the next mission, to Mars. An open world guided by 21 main quests and 9 side quests teaches one system at a time, and the habitat grows through five base levels, from landing camp to spaceport. Crews also play seven-day missions where every morning they share limited power between life support, food and science. Solar storms replay real flares from NASA's DONKI database, labelled with their real date, including real false alarms where a huge flare brought no particle storm. Every real-world number is cited, and nobody ever gets hurt: a mission that goes wrong ends early, safely, with a report that explains why.
+Space Base Odyssey is a cooperative Roblox game where kids aged 7 to 12 start in the small lander that brought them to the Moon's south pole and grow a base from nothing. They carry parts boxes from the lander and assemble each building step by step with a wrench: the habitat, solar panels, a greenhouse, an antenna, a regolith storm shelter, and later a lab, ice drills, a garage with a moon buggy and an ice hauler, a landing pad and a ship for the next mission, to Mars. An ice line they can watch turns crater ice into water and air. An open world guided by 22 main quests and 9 side quests teaches one system at a time, and the habitat grows through five base levels, from landing camp to spaceport. Crews also play seven-day missions where every morning they share limited power between life support, food and science. Solar storms replay real flares from NASA's DONKI database, labelled with their real date, including real false alarms where a huge flare brought no particle storm. Every real-world number is cited, and nobody ever gets hurt: a mission that goes wrong ends early, safely, with a report that explains why.
 
 ### Benefits for kids
 
@@ -129,11 +136,12 @@ The roles are split this way: one member works in Roblox Studio with an AI codin
 
 ### Current status
 
-- **Stage 10 is done.** It added playtest polish: smaller text boxes, an always-on vitals panel, quest notices, visible saving and walkable tubes. Two follow-up fixes aligned greenhouse dome A with the hub tube.
-- **Playable in Roblox Studio.** It runs from the repository with Rojo (`rojo serve`, then Play), with HTTP requests allowed for live NASA data.
-- **Not published yet.** The place has not been published to Roblox, so saves in a Studio test live only in memory ("Saved for this test only"). Real saves use Roblox DataStores once the game is published.
+- **Stage 11 is done (build `0.11.0-stage11`).** An overnight overhaul on 16 November 2026: sound and music with an honest helmet rule, an ice line tycoon you can watch (drills, belt, silo, water plant, cargo robot), a safer server with save locks, quests that teach (a reward in the first minute, C.A.R.L.'s picture questions, a picture glossary), a new start menu without "Load game", settings that follow the player and a Helpers page, a daily supply capsule and the Moon Logbook, celebrations, and a safer map. A Studio smoke test passed: start menu without Load game, the world list, the lander spawn, the quest tracker, the daily capsule card, the ice line, and no console errors.
+- **Published.** The Stage 10 release (private worlds, the storm and radiation fixes, the learning achievements) was published to the live experience on 16 November 2026, with a server size of 4. Stage 11 reaches the live game when the team publishes it. Saves in the live game use Roblox DataStores.
+- **Playable in Roblox Studio.** It runs from the repository with Rojo (`rojo serve`, then Play), with HTTP requests allowed for live NASA data. In an unpublished Studio place, saves live only in memory ("Saved for this test only").
 - **Age-check limitation.** New Roblox experiences only open to age-checked accounts aged 16 or older until they pass Roblox's evaluation for all ages. Until then, kids in the target range cannot play the public version. Judges can watch the playthrough video or run the game in Roblox Studio.
-- **Still to do:** playtests with people outside the team, a phone layout check on a real device, and the public release.
+- **For teachers.** A short educator pack with three 20-minute lesson plans is in `docs-public/EDUCATOR_GUIDE.md` (English) and `docs-public/GUIA_DOCENTE.md` (Spanish).
+- **Still to do:** playtests with people outside the team and a phone layout check on a real device.
 - **Still to add before submitting:** the 30-second demo video link (public, no sign-in, no minors, no NASA logos), the full playthrough video link, 4 to 6 screenshots for the project page, and the frozen `game.rbxl` place file at the repository root (it is not committed yet; the working place files in `place/` are git-ignored). The demo video must also be checked for AI-generated images, video or voices: any that are added need a visible watermark.
 
 ### Links
@@ -144,104 +152,129 @@ The roles are split this way: one member works in Roblox Studio with an AI codin
 
 ### Evidence for judges
 
-Automated tests run outside Roblox with Lune, because the mission rules live in a pure module with no Roblox code. All of them pass at the time of writing.
+Automated tests run outside Roblox with Lune, because the game rules live in pure modules with no Roblox code. All eleven suites pass at the time of writing (16 November 2026, build `0.11.0-stage11`).
 
 | What is checked | Command | Result |
 | :--- | :--- | :--- |
-| Mission balance: a crew that never reacts still reaches at least day 5, no fixed power plan earns 3 stars, a crew that reacts to events can, cutting the greenhouse shows up later as less food | `lune run tests/balance` | 671 passed, 0 failed |
-| Training missions and story chapters | `lune run tests/missions` | 693 passed, 0 failed |
-| Build-and-grow rules: build steps, base levels, skills, pets, drills, gear, quests | `lune run tests/base` | 1686 passed, 0 failed |
-| Economy pacing, with a simulated typical kid | `lune run tests/economy` | 221 passed, 0 failed |
-| Every text key exists in English and Spanish, at most 8 words | `lune run tests/localization` | 36091 passed, 0 failed |
+| Mission balance: a crew that never reacts still reaches at least day 5, no fixed power plan earns 3 stars, a crew that reacts to events can, cutting the greenhouse shows up later as less food, storm dose rises live and never goes down | `lune run tests/balance` | 716 passed, 0 failed |
+| Training missions and story chapters, ice limits against every legal speed, hauler payments, the open-world dust timer | `lune run tests/missions` | 729 passed, 0 failed |
+| Build-and-grow rules: build steps, base levels, skills, pets, drills, gear, quests, the ice line, its signs and saves | `lune run tests/base` | 2201 passed, 0 failed |
+| Economy pacing with a simulated typical kid; machines earn 30 to 50% of what playing earns | `lune run tests/economy` | 234 passed, 0 failed |
+| The start menu's camera shots | `lune run tests/cinematic` | 189 passed, 0 failed |
+| Private worlds (who may join, whose base), the session lock, saved settings | `lune run tests/worlds` | 116 passed, 0 failed |
+| Learning achievements, C.A.R.L.'s question bank and the picture glossary | `lune run tests/achievements` | 758 passed, 0 failed |
+| The daily supply capsule and the Moon Logbook | `lune run tests/daily` | 222 passed, 0 failed |
+| Celebrations, camera shake, report chips, crater exits and the map edge | `lune run tests/feel` | 323 passed, 0 failed |
+| Reading times and C.A.R.L.'s message queue | `lune run tests/reading` | 102 passed, 0 failed |
+| Every text key exists in English and Spanish, at most 8 words | `lune run tests/localization` | 51496 passed, 0 failed |
 
-Playtests in Roblox Studio covered every stage: a full 7-day mission reaching the report with no script errors, the live DONKI query (13 flares returned in the Stage 2 test, with the fetch time shown), the 45-second storm warning with the antenna linked and the flare labelled as a replay with its real date, and the Stage 10 features (vitals panel, quest cards, saving, walkable tubes). Seven rounds of team playtest feedback, and what each changed, are recorded in `DEVELOPMENT.md`.
+Playtests in Roblox Studio covered every stage: a full 7-day mission reaching the report with no script errors, the live DONKI query (13 flares returned in the Stage 2 test, with the fetch time shown), the 45-second storm warning with the antenna linked and the flare labelled as a replay with its real date, the Stage 10 features (vitals panel, quest cards, saving, walkable tubes, private worlds, live radiation during a storm) and the Stage 11 smoke test (start menu, world list, lander spawn, quest tracker, daily capsule card, ice line, no console errors). Seven rounds of team playtest feedback, a live-game report from friends and what each changed are recorded in `DEVELOPMENT.md`.
 
 ## 2. How to play
 
-This section follows a player through the current game (Stage 10), from the start menu to the Mars ship. Every number comes from `src/shared/MissionData.luau` (GAME tuning values unless marked REAL) or from the quest list in `src/shared/Quests.luau`. Player-facing names are the English texts from `src/shared/Localization.luau`.
+This section follows a player through the current game (Stage 11, build `0.11.0-stage11`), from the start menu to the Mars ship. Every number comes from `src/shared/MissionData.luau` (GAME tuning values unless marked REAL) or from the quest list in `src/shared/Quests.luau`. Player-facing names are the English texts from `src/shared/Localization.luau`.
 
 ### 2.1 The start menu
 
-The first screen shows a starfield, the turning Earth (NASA Blue Marble map) and a sunrise glow on the Moon's horizon. The player has no character until a world is loaded. The buttons are:
+The first screen plays live camera shots of the base behind the title and buttons. The player has no character until a world is loaded. There is no "Load game" button any more: the team found that it looked like uploading a file. The buttons are:
 
 | Button | What it does |
 | :--- | :--- |
-| Continue | Loads the world played last time. |
-| New game | Pick one of 3 worlds. A world already in use asks first: "Start this world again?" |
-| Load game | Shows the 3 world cards: base level, player level, credits, when it was last saved and how it was played. |
-| Settings | Opens the Settings panel (language, volumes, C.A.R.L. options, codes, "Save now"). |
-| Credits | The team, the event, the data and picture credits and the AI disclosure, all as text. |
+| Continue | Loads the world played last time. A card under it says what it loads: the world and how it was played, the base level, the player level and when it was last saved. Without a world it says "No saved world yet". |
+| New game | Opens the list of the player's 3 worlds. Once the player has a world, this button reads **My worlds**. |
+| Join a friend | Lists the player's Roblox friends who host an open friends world: name, base level and "n of 4 players". |
+| Settings | Opens the Settings panel with its Game and Helpers pages (section 2.24). |
+| Credits | The team, the event, the data, picture and sound credits and the AI disclosure, all as text. |
 
-After picking a world, the player chooses how to play:
+**The world list.** An empty card starts a new world. A used card opens a box with **Continue** and **Start over**. Start over asks once more ("Start this world again?", "Your base in this world will be gone."), and the safe default, "No, keep it", goes back to the box. Only Start over replaces a world. Continue never wipes one.
 
-- **Just me** (solo): "Your own Moon, just for you". In the published game the player moves to a reserved server of their own.
-- **With friends**: "Friends can join your Moon base". The world loads in the current server, and friends join with Roblox's Join button. Structures are shared: each one stands at the highest level any player present has built. Credits, XP, skills, gear and pets belong to each player.
+**How to play.** After picking a world, the player chooses:
+
+- **Just me**: "Your own Moon, just for you". Only the owner may stay in that world.
+- **With friends**: "You and up to 3 friends". The owner and up to 3 Roblox friends, 4 players at most. A friend picks the world under Join a friend, then chooses which of their own saves comes along ("Pick your explorer save"). An empty save starts a new explorer, and nothing is ever wiped from that screen.
+
+Every world runs in its own reserved server, and the public server is only a lobby for the start menu. The base (builds, builds in progress and the silo) always belongs to the world's owner. Guests keep their own credits, XP, level, skills, gear, tools, pets, wardrobe, quests, collectibles and missions in their own save, and a guest's own base never changes in a friend's world. When the owner leaves, every guest's save is kept and they go back to the menu: "Your friend left, so their base closed."
+
+**The trip.** A themed teleport screen ("Flying to your own Moon...") fades into the wait screen on arrival. If the base takes long to load, after 40 seconds the wait screen says "Still getting your base ready. Please wait." and offers "Back to the start", while it keeps waiting. Every box moves the gamepad selection to its safe button.
 
 **Saving is automatic and free.** Saves use Roblox DataStores, which have no cost. The start menu and Settings say "Your game saves by itself". A small "Game saved" pill appears after an autosave (at most once every 30 seconds) and after a manual save. Settings also has a **Save now** button, checked and rate limited by the server. When saves can only live in memory (for example an unpublished place in Studio), the pill says "Saved for this test only".
 
-**Cinematic background.** Behind the title and buttons, the menu plays live camera shots of the base in a loop: the Earth rising behind the habitat as the Sun nears it, a close-up of the greenhouse plants, the greenhouse tube, the ice drills in the crater, the antenna, the base from the air, the ship and a pull-back. While nobody in the server has loaded a world, the base is shown finished for these shots; it drops back to the player's real base the moment their world loads. The same shots were used for the 30-second trailer.
+**Cinematic background.** Behind the title and buttons, the menu plays live camera shots of the base in a loop: the Earth rising behind the habitat as the Sun nears it, a close-up of the greenhouse plants, the greenhouse tube, the ice drills in the crater, the antenna, the base from the air, the ship and a pull-back. In the lobby nobody has loaded a world, so the base is shown finished for these shots. The same shots were used for the 30-second trailer.
 
 ### 2.2 Landing
 
-The player spawns inside the **arrival lander**, the only shelter at the start. Outside there are glowing build pads with holograms of the future base. The habitat is the first thing to build. C.A.R.L. greets the player: "You landed! Now let's build our Moon base."
+The player spawns inside the **arrival lander**, the only shelter at the start. Outside there are glowing build pads with holograms of the future base. C.A.R.L. greets the player: "You landed! Now let's build our Moon base."
+
+The first quest, **Hello, Moon!**, pays a reward within about a minute of landing: start the free habitat at its pad, take a parts box at the lander and bring it back (10 credits and 10 XP). When a daily supply capsule is waiting, it lands beside the lander a few seconds later (section 2.19).
 
 ### 2.3 The screen (HUD)
 
 | Part | Where | What it shows |
 | :--- | :--- | :--- |
-| Quest tracker | Left column, top | The current main quest and open side quests, every step with "have / need". It flashes when something changes. |
-| Vitals panel | Left column | Always on while playing: suit air, fresh food from the greenhouse (ready, a countdown, or the energy boost) and silo ice (once a drill stands). |
-| Wallet | Left column | Credits (with a "+N" pop), player level with an XP bar, and the base level. |
+| Quest tracker | Left column, top | The current main quest and the open side quests. Counted steps show "have / need" ("Bring ice home  0/4") with a thin progress bar; build and tool steps name the level instead ("Upgrade the antenna to level 2"). Glossary words are gold and underlined (section 2.21). It flashes when something changes. |
+| Vitals panel | Left column | Always on while playing: suit air, fresh food from the greenhouse (ready, a countdown, or the energy boost) and silo ice (once a drill stands; dimmed in a friend's world). |
+| Wallet | Left column | Credits (with a "+N" pop), player level with an XP bar, and the base level. While the player's machines earn, a slim pill under it says "Machines: +N credits a minute". |
 | Meters | Left column, during a shift | Air, food, radiation, water and "Waiting to send" (data the antenna has not sent yet). |
-| C.A.R.L. bubble | Top centre while walking | C.A.R.L.'s messages. An instruction that needs a tool shows that tool's icon. |
-| Quest notices | Right side | "New quest!", "New side quest!", "Done: (step)", "Quest complete!" with the credits and XP earned. Steps already done when a quest opens show as "Already done". Notices wait while a full-screen panel is open. |
-| Top bar | Top right | Settings, Missions and Wardrobe buttons. |
+| C.A.R.L. bubble | Top centre while walking | C.A.R.L.'s messages. An instruction that needs a tool shows that tool's icon. A small replay button beside it opens "What C.A.R.L. said". While the Lab or the Wardrobe is open, the bubble moves to the bottom centre so its answers are seen. |
+| Quest notices | Right side | "New quest!", "New side quest!", "Done: (step)", "Quest complete!" with the credits and XP earned. A main quest finished in front of the player gets a bigger gold card: "Main quest complete! Great job!". Steps already done when a quest opens show as "Already done". Notices wait while a full-screen panel is open. |
+| Top bar | Top right | Settings, Missions, Wardrobe and Achievements buttons. |
 | Bottom pills | Above the Roblox tool bar | "Carrying ice", "Carrying parts", "Auto-run (X)", the gas tank bar (with gear owned), and a pulsing "Low air! Go inside" when the suit is low outside. |
 | Build signs | Over build pads | "Step 1/2" and what is needed next. |
+| Ice line signs | Over the silo and the water plant | Silo ice ("Ice 12/20"), ice a minute, credits a minute and a status light with words beside it (section 2.13). |
+
+On phones the game UI keeps out of the notch and the rounded corners, and on touch screens no game text is smaller than 11 real pixels.
 
 ### 2.4 C.A.R.L., the guide robot
 
 C.A.R.L. is a small tracked rover that drives beside the player. The Moon has no air, so it has no propellers: it rolls on treads and hops with small gas thrusters when the player jumps.
 
 - **Colours:** cyan when all is well, orange when suit air is low, a task is urgent or a storm warning is on, red while storm particles are here.
-- **Guidance beam:** a cyan beam points exactly where its words send the player: the lander's cargo bay for parts, the build pad for assembling, a dusty panel for cleaning, the mission console for a mission step, the Lab for skills or gear. Outside missions it follows the current quest step.
+- **Guidance beam:** a cyan beam points exactly where its words send the player: the lander's cargo bay for parts, the build pad for assembling, a dusty panel for cleaning, the mission console for a mission step, the Lab for skills or gear. Outside missions it follows the current quest step. The beam does not go through walls: when the way is blocked, it ends at the nearest door C.A.R.L. can see, and a cyan target marker floats over the place. It points at the silo only when the silo is the player's and holds at least 5 ice (one cargo robot load); otherwise it points at the crater ice.
 - **Storm beam:** an orange beam points to the shelter door until the player is inside.
+- **Time to read:** a line stays 2 seconds plus 0.75 seconds a word (about 8 seconds for an 8-word line), never less than 4 seconds and at most 12 seconds (16 for fun facts). The Message time helper makes it 1.5 or 2 times longer. When many lines come at once, repeats merge and the least useful lines skip the screen; refusals, praise, questions and treasure hints stay longest.
+- **History:** the replay button opens "What C.A.R.L. said": the last 10 lines, newest first, in the current language. Lines that skipped the screen are there too.
+- **Praise for the strategy:** when a main quest is done, C.A.R.L. names what worked ("More panels made more power. Smart building!"), not only the reward.
+- **Skill points:** "You have skill points. Build the Lab!" once the base is big enough, and "The Lab is ready. Spend your skill points!" when it stands.
+- **Treasure hints:** while the Hidden treasures quest is open and nothing new was found for 5 minutes, C.A.R.L. gives one riddle-like hint for a secret not found yet ("Something is hiding under your habitat!"). Hints name landmarks, never compass directions, and never come during a mission.
+- **Breaks:** after 45 minutes of play, the next finished quest is followed once by "Base is safe. Great time for a break!". There are no streaks and no timers that punish leaving.
+- **Questions:** after some quests C.A.R.L. asks one picture question (section 2.21).
 - **Fun facts:** 88 checked facts appear at random without repeats.
-- **Rescue:** if the suit air runs out, C.A.R.L. brings the astronaut back inside with a partial refill. Nobody dies.
+- **Rescue:** if the suit air runs out, C.A.R.L. brings the astronaut to the nearest pressurized room that stands, with a partial refill. Nobody dies.
 
 Fun facts and guidance can each be switched off in Settings.
 
 ### 2.5 Open world and quests
 
-There is no mission menu at the start. The game is an open world guided by an ordered line of **21 main quests**. **9 side quests** open along the way. A quest is done when every step is done, and its credits and XP are paid once. Ice, cleaning, silo, meteorite, food, driving and visit steps count only what happens while the quest is active. Scans, skills and collectibles count the player's lifetime totals.
+There is no mission menu at the start. The game is an open world guided by an ordered line of **22 main quests**. **9 side quests** open along the way. A quest is done when every step is done, and its credits and XP are paid once. Ice, silo, meteorite, food, driving and visit steps count only what happens while the quest is active. Scans, skills, collectibles and cleaned panels count the player's lifetime totals, so a kid who already cleaned a panel is never left waiting. Quests use the same words as the pads and the HUD: "Upgrade", "Base level", "parts box", "moon buggy".
 
 #### Main quests
 
 | # | Base level | Title | Steps | Reward |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | 1 | Build your Moon home | Build the habitat. Build a solar panel. Finish the mission First steps. | 10 credits, 20 XP |
-| 2 | 1 | Grow your own food | Build the greenhouse. Finish the mission Share the power. Eat fresh food: 1. | 10, 20 |
-| 3 | 1 | Talk to Earth | Build the antenna. Finish the mission Base chores. Clean dusty solar panels: 1. | 10, 20 |
-| 4 | 1 | Get ready for storms | Build the storm shelter. Finish the mission Storm drill. | 15, 25 |
-| 5 | 1 | Ice is treasure | Go to the ice crater. Bring ice home: 4. | 10, 20 |
-| 6 | 1 | More power for the base | Build a second solar panel. Finish Chapter 1: New home. | 20, 30 |
-| 7 | 2 | Grow your base | Make the habitat level 2. Build the Lab. Go inside the Lab. | 20, 30 |
-| 8 | 2 | Learn new skills | Learn skills at the Lab: 1. Upgrade your ice drill to level 2. | 15, 25 |
-| 9 | 2 | Drills that work alone | Build ice drill 1. Collect ice from the silo: 2. | 20, 30 |
-| 10 | 2 | Storm season | Build a third solar panel. Finish Chapter 2: Storm season. | 25, 40 |
-| 11 | 2 | Explore the Moon | Scan places to explore: 2. Scan meteorite craters: 1. | 25, 40 |
-| 12 | 2 | A bigger garden | Build the second greenhouse dome. Go inside the greenhouse. Eat fresh food: 3. | 20, 30 |
-| 13 | 3 | A mining base | Make the habitat level 3. Build ice drill 2. Build the cargo robot. | 30, 50 |
-| 14 | 3 | Wheels on the Moon | Build the rover garage. Go to the garage. Drive a moon car. | 30, 50 |
-| 15 | 3 | When things break | Finish Chapter 3: Things break. Make the antenna level 2. | 40, 60 |
-| 16 | 3 | Gear up | Buy the air boots at the Lab. Learn skills: 4 in total. | 30, 50 |
-| 17 | 4 | Explorer base | Make the habitat level 4. Build the ice truck bay. Bring ice home: 8. | 50, 80 |
-| 18 | 4 | A laser to Earth | Make the antenna level 3. Build ice drill 3. | 50, 80 |
-| 19 | 4 | A pad for ships | Build the landing pad. Scan meteorite craters: 3. | 60, 100 |
-| 20 | 5 | Moon spaceport | Make the habitat level 5. Make ice drill 2 level 3. | 80, 120 |
-| 21 | 5 | Next stop: Mars | Build the ship to Mars. | 100, 150 |
+| 1 | 1 | Hello, Moon! | Start the habitat, then bring a parts box. | 10 credits, 10 XP |
+| 2 | 1 | Build your Moon home | Build the habitat. Build the solar panels. Finish the mission First steps. | 10, 20 |
+| 3 | 1 | Grow your own food | Build the greenhouse. Finish the mission Share the power. Eat fresh food: 1. | 10, 20 |
+| 4 | 1 | Talk to Earth | Build the antenna. Finish the mission Base chores. Clean a dusty solar panel: 1. | 10, 20 |
+| 5 | 1 | Get ready for storms | Build the storm shelter. Finish the mission Storm drill. | 15, 25 |
+| 6 | 1 | Ice is treasure | Go to the ice crater. Bring ice home: 4. | 10, 20 |
+| 7 | 1 | More power for the base | Upgrade the solar panels to level 2. Finish Chapter 1: New home. | 20, 30 |
+| 8 | 2 | Grow your base | Upgrade the habitat to base level 2. Build the Lab. Go inside the Lab. | 20, 30 |
+| 9 | 2 | Learn new skills | Learn a skill at the Lab: 1. At the Lab, upgrade your drill to level 2. | 15, 25 |
+| 10 | 2 | Drills that work alone | Build ice drill 1. Collect ice from the silo: 2. | 20, 30 |
+| 11 | 2 | Storm season | Upgrade the solar panels to level 3. Finish Chapter 2: Storm season. | 25, 40 |
+| 12 | 2 | Explore the Moon | Scan places to explore: 2. Scan a fresh meteorite crater: 1. | 25, 40 |
+| 13 | 2 | A bigger garden | Upgrade the greenhouse to level 2. Go inside the greenhouse. Eat fresh food: 3. | 20, 30 |
+| 14 | 3 | A mining base | Upgrade the habitat to base level 3. Build ice drill 2. Build the cargo robot. | 30, 50 |
+| 15 | 3 | Wheels on the Moon | Build the rover garage. Go to the rover garage. Drive the moon buggy. | 30, 50 |
+| 16 | 3 | When things break | Finish Chapter 3: Things break. Upgrade the antenna to level 2. | 40, 60 |
+| 17 | 3 | Gear up | Buy the air boots at the Lab. Learn skills at the Lab: 4 in total. | 30, 50 |
+| 18 | 4 | Explorer base | Upgrade the habitat to base level 4. Upgrade the rover garage to level 2. Bring ice home: 8. | 50, 80 |
+| 19 | 4 | A laser to Earth | Upgrade the antenna to level 3. Build ice drill 3. | 50, 80 |
+| 20 | 4 | A pad for ships | Build the landing pad. Scan fresh meteorite craters: 3. | 60, 100 |
+| 21 | 5 | Moon spaceport | Upgrade the habitat to base level 5. Upgrade ice drill 2 to level 3. | 80, 120 |
+| 22 | 5 | Next stop: Mars | Build the ship to Mars. | 100, 150 |
 
-When every main quest is done the tracker says: "Main quests done! Find secrets and side quests."
+When every main quest is done the tracker says: "Main quests done! Find secrets and side quests." Saves made before Stage 11 skip Hello, Moon! and keep their place in the line.
 
 #### Side quests
 
@@ -249,13 +282,15 @@ When every main quest is done the tracker says: "Main quests done! Find secrets 
 | :--- | :--- | :--- | :--- |
 | Hidden treasures | Get ready for storms | Find hidden treasures: 4. | 40 credits, 60 XP |
 | Super astronaut | Learn new skills | Learn every skill level: 15. | 60, 100 |
-| Ice master | Drills that work alone | Bring ice home: 40. Collect ice from the silo: 10. | 40, 60 |
+| Ice master | A mining base | Bring ice home: 40. Upgrade ice drill 1 to level 2. | 40, 60 |
 | Moon scientist | Explore the Moon | Scan places to explore: 5. | 40, 60 |
 | Moon farmer | A bigger garden | Eat fresh food: 10. | 25, 40 |
 | A whole week | When things break | Finish the mission Free play. | 60, 100 |
 | Fly like a rocket | Gear up | Buy the jetpack at the Lab. | 40, 60 |
-| Meteorite hunter | A pad for ships | Scan meteorite craters: 10. | 60, 100 |
-| Ice factory | Moon spaceport | Make ice drill 1, 2 and 3 level 3. | 80, 120 |
+| Meteorite hunter | A pad for ships | Scan fresh meteorite craters: 10. | 60, 100 |
+| Ice factory | Moon spaceport | Upgrade ice drills 1, 2 and 3 to level 3. | 80, 120 |
+
+Ice master used to ask for 10 hand claims at the silo, but the cargo robot empties the silo every minute, so the counter seemed broken. It now teaches that a bigger drill digs more ice by itself. No quest counts silo claims once the cargo robot can stand.
 
 ### 2.6 Missions
 
@@ -315,7 +350,7 @@ Storms use real solar flares recorded by NASA's DONKI database. The storm card n
 Building happens only at the pads in the world (there is no build menu).
 
 1. Walk to a pad and pay (prompt "Build (N credits)" or "Build (free)"). This starts the level.
-2. Take a **parts crate** from the lander's cargo bay ("Take parts crate").
+2. Take a **parts box** from the lander's cargo bay ("Take a parts box").
 3. Carry it to the pad ("Deliver parts: step N of M").
 4. Hold **Assemble** with the **wrench** in hand (a 2.5-second hold, shorter with the Fast builder skill).
 5. The structure rises a little with each step.
@@ -346,10 +381,10 @@ The silo holds 20 ice at base levels 1 and 2, then 30, 45 and 60.
 | Lab | 30 | Habitat, solar 1 | Skills, tool upgrades, gear, pet adoption. |
 | Antenna | 10 / 90 / 200 | Solar 1 | 2 is a bigger dish, 3 a laser link. Linking pays 0 / +3 / +6 extra credits. Unlocks the tablet. |
 | Storm shelter | 15 | Antenna 1 | Thick Moon dirt blocks storm particles. |
-| Ice drill 1 | 40 / 100 / 220 | Shelter, solar 1 | Digs 1 / 2 / 3 ice per minute into the silo. |
+| Ice drill 1 | 40 / 100 / 220 | Shelter, solar 1 | Digs 2 / 3 / 4 ice per minute into the silo. |
 | Ice drill 2 | 120 / 200 / 350 | Drill 1, solar 2 | Same rates. Machines need electricity: one more array. |
 | Ice drill 3 | 250 / 400 / 500 | Drill 2, solar 3 | Same rates. |
-| Cargo robot | 140 | Drill 1 | Empties the silo for its owner every 60 s. |
+| Cargo robot | 140 | Drill 1 | Adds the air maker and the supply port; drives water or air from the water plant to the hub, at most one trip a minute. |
 | Rover garage | 90 / 220 | Lab, shelter | 1 is the moon buggy bay, 2 the ice truck bay. |
 | Landing pad | 300 | Garage 1, antenna 2 | A hard floor so rockets kick up less dust. Needed for the ship. |
 | Mars ship | 1000 | Landing pad | A ship for a future trip to Mars: the long-term goal (decoration). |
@@ -406,28 +441,52 @@ A new world starts with 25 credits. Credits and XP come only from useful work:
 | Hidden collectible (first time) | 10 | 20 |
 | Exploration site (first scan) | 10 | 20 |
 | Meteorite crater scanned | 15 | 25 |
-| Silo ice, per core | 1 | 1 |
-| Parts crate delivered / build step done | 0 | 2 / 5 |
+| Silo ice melted into water, per ice | 1 | 1 |
+| A robot load of air from a powered air maker | 25% more than the same load of water (rounded down) | - |
+| Parts box delivered / build step done | 0 | 2 / 5 |
+| Learning achievement (once each) | 0 | 10 |
+| C.A.R.L.'s question, right answer (once each) | 0 | 5 |
+| Daily supply capsule | 10, 15 or 20 (days 1, 3, 5) | 15, 20 or 25 (days 2, 4, 6) |
+
+The Credit boost and XP boost skills raise the player's own work, not what the machines earn.
 
 There are **15 player levels**. Total XP needed: 0, 40, 100, 180, 280, 400, 550, 750, 1000, 1350, 1800, 2400, 3100, 3900, 4800. The player level gates skills, gear, tool upgrades and pets. It does not gate structures; the base level does.
 
-**Pacing.** `tests/economy.luau` simulates a typical kid who follows the quests, plays a mission day about every 5 minutes and never stands still to farm. It fails if the targets are missed. The current run gives:
+**Pacing.** `tests/economy.luau` simulates a typical kid who follows the quests, plays a mission day about every 5 minutes and never stands still to farm. It fails if the targets are missed. The current run (Stage 11) gives:
 
 | Milestone | Minute (typical kid) | Target |
 | :--- | :--- | :--- |
 | Base level 2 | 6.8 | 4-10 |
-| Lab | 16.5 | 8-20 |
-| Base level 3 | 33.9 | 20-40 |
-| Rover garage | 44.2 | 35-70 |
-| Base level 4 | 92.2 | 60-110 |
-| Base level 5 | 179.1 | 150-300 |
-| Mars ship | 253.9 | 150-300 |
+| Lab | 12.0 | 8-20 |
+| Base level 3 | 34.9 | 20-40 |
+| Rover garage | 45.1 | 35-70 |
+| Base level 4 | 77.6 | 60-110 |
+| Base level 5 | 163.8 | 150-300 |
+| Mars ship | 234.4 | 150-300 |
 
-In the same run the player reaches level 15 at about minute 135, and the main quest line ends with the ship at about minute 254. Income never jumps more than 2.5 times from one 10-minute window to the next. These are simulated minutes, not measured playtests.
+In the same run the player reaches level 15 at about minute 128, and the main quest line ends with the ship at about minute 234. Ice drill 1 pays itself back in about 20 minutes. From the cargo robot to the ship, the machines earn 49% of what playing earns (the test allows 30 to 50%), so they help but playing matters most. Income never jumps more than 2.5 times from one 10-minute window to the next. These are simulated minutes, not measured playtests.
 
-### 2.13 Silo, drills and cargo robot
+### 2.13 The ice line: drills, silo, water plant and cargo robot
 
-Automatic drills on the dark crater floor fill the **silo** while at least one player is in the server. The player walks to the silo and uses "Collect stored ice". Silo ice pays less than ice carried by hand (1 credit instead of 5), so the drills help but playing matters most, and a full silo is worth only a few minutes of drilling. The **cargo robot** empties the silo for its owner every 60 seconds. Silo claims by the robot do not count for quests.
+The ice line is the base's tycoon, and every part of it is in view:
+
+1. **Drills** on the dark crater floor dig 2, 3 or 4 ice a minute each (drill level 1, 2 or 3). Their bits spin faster at higher levels.
+2. **Lift belts** carry the ice cubes up to a hopper on the crater rim, and one open **belt** on posts runs over the outer slope into the silo. The number and speed of the cubes follow the ice per minute.
+3. The **silo** stands between the hub and the crater. It holds 20 ice at base levels 1 and 2, then 30, 45 and 60, and a gold ring marks this base level's size. When it is full, the belt and the drills stop.
+4. The **water plant** next to the silo melts ice into water. It has a water window and a sign in icons: ice, water, air.
+5. The **cargo robot** build adds the **air maker** (water plus electricity makes oxygen, as on the Space Station) and a supply port on the hub wall. The robot waits until the silo holds 5 ice, loads it, drives water or air tanks about 47 studs to the port, is paid on arrival, unloads and drives back, at most one trip a minute.
+
+**Pay.** Water pays 1 credit an ice. Air from a powered air maker pays 25% more (rounded down). The air maker needs at least 2 solar arrays; without them its lamp turns amber, the robot brings water instead, and C.A.R.L. says "The air maker needs power. Build solar panels!". Each robot delivery and each claim by hand shows a small "+N credits" sign with a gold coin where it happened. Only the player who got the credits sees the number.
+
+**Without a cargo robot,** the player empties the silo by hand with "Send ice to the base" at the silo: "The ice melted into water: +5 credits."
+
+**Signs and lights.** Over the silo: "Ice 12/20", "3 ice a minute" and a status light with a short reason ("Working", "Silo full: the belt stopped", "Build an ice drill first"). Over the water plant: water or air, "+3.8 credits a minute" and the plant's light ("The air maker needs power" comes first). The silo's top ring and the plant's lamp are green while the belt runs and red when the silo is full. A light's colour always has words beside it, and a full silo or a plant without power makes the sign's border pulse.
+
+**Full and bigger.** C.A.R.L. says "Silo full! Send the ice to the base." once per fill, and "Silo full! Upgrade the habitat for more room." only when the next habitat level really holds more. After a habitat upgrade: "Bigger silo! It holds 30 ice now."
+
+**Fair play.** The robot pays the world's owner only, and it rests while the owner has not moved or acted for 5 minutes ("The robot waits for you"), so standing still earns nothing. Only the owner may empty the silo by hand ("This is your friend's silo."). On a guest's screen the plant sign says "Your friend's silo" and the wallet shows no machine income.
+
+**While you were away.** The silo is saved with the owner's world. When the owner comes back, the drills' work while they were away is added, at most 8 hours and never past the silo size. C.A.R.L. says "While you were away, drills dug 24 ice!" and a card shows the ice, what it is worth and who brings it home: "The robot will bring it home." with a cargo robot, or "It waits for you in the silo." without one. Nothing is paid at load: the ice waits in the silo until it is delivered.
 
 ### 2.14 Vehicles and the garage
 
@@ -449,7 +508,7 @@ Pets follow the player and are only for looks.
 | Moon rabbit | Adopt at the Lab: 120 credits, player level 3 |
 | Space chimp | Adopt at the Lab: 200 credits, player level 7 |
 
-The **Wardrobe** keeps the player's own avatar and adds only space gear. Slots: Helmet (Classic, Gold explorer), Backpack (Classic, Laika), C.A.R.L. (Classic, Mini Earth) and Pet (or "No pet"). Rewards can be switched off.
+The **Wardrobe** keeps the player's own avatar and adds only space gear. Slots: Helmet (Classic, Gold explorer), Backpack (Classic, Laika), C.A.R.L. (Classic, Mini Earth) and Pet (or "No pet"). Rewards can be switched off. Suit stripes from the daily capsule and the Logbook are worn or removed on the Logbook's Stripes page (section 2.20).
 
 ### 2.16 Exploring the Moon
 
@@ -467,6 +526,10 @@ Five **exploration sites**, scanned with the tablet ("Scan"), each show a card w
 
 **Eclipses.** The Sun circles the horizon, as at the real lunar south pole (the game sky is much faster). When it passes behind the turning Earth, the base dims and Earth shows a red-orange ring. C.A.R.L. says "Eclipse! Earth is hiding the Sun!"
 
+**The map edge.** Invisible walls stand 12 studs inside the ground's edge, so walking, the jetpack and the buggy cannot reach the void. An orange band at each wall's foot fades in within 80 studs, and C.A.R.L. says "This is the map edge. Turn back!".
+
+**Ways out of the ice crater.** Besides the first ramp, two more 14-stud-wide exit ramps lead out of the crater, with thin cyan guide strips on their edges (cyan means guidance). A ramp is never far from anywhere on the crater floor.
+
 ### 2.17 Secrets, collectibles and codes
 
 Four collectibles hide around the base: **Mini Earth, Laika, Moon cheese and Mars potato**. Hiding places include a crawl space, a lookout rock, a lava tube and the darkest corners. Each one opens a myth-versus-science card and gives a reward:
@@ -478,11 +541,11 @@ Four collectibles hide around the base: **Mini Earth, Laika, Moon cheese and Mar
 | Moon cheese | Cheese-yellow paint for the science rover and the Moon cheese pet |
 | Mars potato | The team flag on the base roof |
 
-Finding all four opens a fifth secret: a hidden **observatory** with a telescope pointed at Mars ("Next mission: Mars"). The Collection screen shows the secrets found.
+Finding all four opens a fifth secret: a hidden **observatory** with a telescope pointed at Mars ("Next mission: Mars"). The Moon Logbook's Secrets page shows the secrets found (section 2.20). While Hidden treasures is open, C.A.R.L. gives riddle-like hints after 5 minutes without a new find.
 
 **Codes.** Settings has a "Have a code?" box. The server checks the code; the codes are never sent to players. The event code gives the "Explorer 2026 gold helmet" (gold visor and trim), a look only, never a gameplay advantage.
 
-**Learning achievements (Stage 10).** The "Achievements" button in the top bar (base mode) opens a panel with 13 achievements. Each one rewards understanding a piece of the science, and the server only unlocks it when it sees the real event. Unlocked ones show what you learned; locked ones show a hint (and progress such as 3/10). Each pays 10 XP once per save slot, with an "Achievement unlocked!" card. When the team creates a matching Roblox badge in Creator Hub, the player also gets the badge.
+**Learning achievements (Stage 10).** The "Achievements" button in the top bar (base mode) opens a panel with 13 achievements. Each one rewards understanding a piece of the science, and the server only unlocks it when it sees the real event. Unlocked ones show what you learned; locked ones show a hint (and progress such as 3/10). Hints say where to go: the five lessons that only happen in a mission shift say so ("In a storm mission, stay in the shelter"). The panel shows pages of big tiles, and glossary words in the facts are gold (section 2.21). Each achievement pays 10 XP once per save slot, with an "Achievement unlocked!" card. When the team creates a matching Roblox badge in Creator Hub, the player also gets the badge.
 
 | Achievement | How to unlock it | What it teaches |
 | :--- | :--- | :--- |
@@ -506,7 +569,85 @@ These places count as **inside** once built: the round hub of the habitat, the h
 
 The tubes from greenhouse dome A to dome B and from the hub to the Lab can be walked through, with floors, doorways and a gentle ramp to the Lab floor. Glass hatches close the doorways until greenhouse level 2 and the Lab are built.
 
-### 2.19 Controls
+### 2.19 The daily supply capsule
+
+Once per real day, a supply capsule can be opened. Days are UTC days of the server's clock; the device clock never counts.
+
+- **The landing.** When a capsule waits and the player stands in the open base for 4 seconds, a small capsule falls beside the arrival lander's parts depot with a dust ring, a beep and a thud. C.A.R.L. says "A supply capsule landed by the lander!" and the card opens (never over another panel). The capsule keeps an "Open the capsule" prompt to reopen the card. After opening, its lid swings up and it leaves 25 seconds later. With Less motion it is put down without the fall.
+- **A 7-day calendar, shown in advance.** The card shows every reward of the week (table below). Day 7 gives the sunrise stripes in week 1, ice blue in week 2 and garden green in week 3; later day 7s pay 30 credits. There is no randomness, no loot box and nothing to buy. A week pays 45 credits and 60 XP, no more than three fresh-crater scans, so playing always earns more than waiting.
+- **Forgiving.** The calendar counts capsules opened, not days in a row: "Missed a day? Your calendar just waits." Nothing is ever taken away.
+- **Cargo facts.** Each card shows one of seven short facts that repeat science already in `DATA_SOURCES.md` (crew needs, ice to water, water plus power makes air, Space Station water recycling, plants need time, mass shields, oxygen in Moon rocks), with no numbers. The card also says "A game gift, not a real NASA flight."
+- **Saved per world,** like the achievements, so a guest keeps their own calendar in a friend's world.
+
+| Day | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| Reward | 10 credits | 15 XP | 15 credits | 20 XP | 20 credits | 25 XP | Suit stripes |
+
+### 2.20 The Moon Logbook
+
+The Logbook replaces the old Collection screen. It opens from the "Logbook" button on the mission screen and from the capsule card, and it is a book with tabs:
+
+| Tab | What it holds |
+| :--- | :--- |
+| Secrets | The four collectibles and the observatory. |
+| Places | The five exploration sites, with the real fact once scanned. |
+| Space rocks | The first 5 fresh meteorite craters scanned. |
+| Achievements | The 13 learning achievements, with the fact or the hint. |
+| Facts | Cargo facts from opened capsules and fun facts C.A.R.L. shared (they are not counted as entries). |
+| Stripes | The suit stripes owned, to wear or remove. |
+
+There are 27 entries: 4 secrets, 5 places, 5 space rocks and 13 achievements ("12 of 27 entries filled"). Filling 5, 12 and 20 entries unlocks the gold star, secret pink and Moon explorer stripes ("Fill 5 entries", then "Claim"). The server counts the entries itself. C.A.R.L. says once when a reward is ready: "Logbook reward ready! Open your logbook."
+
+**Suit stripes** are six looks: two bands in the Lunar Sunrise colours around each upper arm, made of plain parts and seen by everyone. They are a look only. The first stripes earned are worn at once.
+
+### 2.21 C.A.R.L. asks, and the picture glossary
+
+**C.A.R.L. asks.** After 11 quests (power, plants, dust, shelter, ice, air, radiation, craters, flares, radio and Mars), about 12 seconds after the quest is done and only between missions, C.A.R.L. asks one picture question with 2 or 3 big answer buttons (an icon and words), "Not now" and a close button.
+
+- A right answer gives "Right! +5 XP" with stars and a "why" line, such as "Yes! Thick walls block storm particles."
+- A wrong answer gives a hint and "Good try! I will ask again later."; the question comes back after 3 minutes. "Not now" also brings it back later.
+- Nothing is lost and nothing waits on a right answer. Each question pays once per world.
+- The server picks the question and checks the answer; the right answer is never sent to the player's device. The texts quote no numbers and follow the science rules (section 3.2).
+- The card does not block play: it hides while a panel or a mission is up and comes back after.
+
+**The picture glossary.** Nine words have a picture card: habitat, parts box, solar panel, ice crater, oxygen, radiation, solar flare, silo and base level. In quest steps and achievement facts these words are gold and underlined, with a small book icon. Tapping the row or the tile opens "What does it mean?" with the word's icon and a one-line definition. Plurals and other forms ("solar panels", "parts boxes") match too.
+
+**Achievements panel.** The panel shows pages of 6 big tiles (4 on small screens) with "Page 1 of 3", and long facts wrap instead of shrinking.
+
+### 2.22 Celebrations
+
+- **Big moments.** A finished quest, an achievement, a player level up, a base level up and a finished mission get a burst of confetti in the Lunar Sunrise colours, a soft screen flash and, for levels, a big title ("Level 4", "Base level 2"). A base level up and every finished building also get sparkles at the pad, tinted in Theme colours. Moments that come together play one after another, each under 2 seconds, and never block a tap.
+- **The report.** Earned stars appear one by one with a pop and a rising note, and a completed mission rains confetti. Each day reads as cause and effect: the event and its reason, an arrow, then up to three chips for what changed that day (air or food up or down, dose up, science sent). The dose chip only points up, because dose never goes down.
+- **The camera.** A meteorite landing within 170 studs gives a short, small shake that fades with distance: a vibration through the ground, because there is no air to carry a blast. A solar storm never shakes the camera, because radiation is silent and pushes nothing; the flare warning and the particles' arrival pulse the screen edges orange instead (a false alarm gets only the warning pulse).
+- **Less motion** (Helpers): no shake, no confetti or sparkles, a very soft flash, titles that fade in place and stars that appear without popping.
+
+### 2.23 Sound and music
+
+The game has 50 sounds: 6 music tracks, 3 stings and 41 effects. The music and most effects were synthesized by the team's own code, and five effects mix in edited CC0 recordings from Freesound (section 6.2). No sound comes from the Toolbox or the Marketplace.
+
+- **Music follows the game:** the start menu, the base by day, building (while a build is in progress and for a minute after a step), missions, storms (warning and particles) and the eclipse, with 2.5-second crossfades. Victory, fail and level-up stings play at the report and on level-ups.
+- **The helmet rule.** There is no sound in a vacuum. Sounds from the world outside the helmet (builds, boxes, ice, drills, the buggy, the jetpack, meteorites) are quieter and muffled while the player is outside, as if felt through the suit and boots. Radio, tablet and C.A.R.L. sounds stay clear. Inside modules everything sounds normal, and music is not part of the world.
+- **No Earth sounds.** Roblox's default footsteps, jumps and landings are muted; footsteps play only inside modules. A meteorite is a radar tone on the radio plus a thud felt through the ground, never a whoosh in air. The storm static plays only when particles really arrive, so a false-alarm flare stays quiet after its alarm.
+- **Feedback.** Buttons click (greyed-out buttons give a soft "no"), panels open and close, coins, XP, level-ups, quests and achievements have their own sounds, C.A.R.L. beeps, and the drills, the belt and the silo hum nearby.
+- **Volume.** The Music and Effects sliders in Settings control every sound.
+
+### 2.24 Settings and Helpers
+
+Settings has two pages:
+
+- **Game:** language (English or Spanish), music and effects volume, C.A.R.L.'s fun facts and guidance beam, the "Have a code?" box and **Save now**.
+- **Helpers:** each row has a one-line explanation, and a sample line ("Hello! This is how your text looks.") shows the text size.
+
+| Helper | Choices | What it does |
+| :--- | :--- | :--- |
+| Text size | Normal, Big | Big letters (1.25 times) for every text, button and one-line label, live. |
+| Less motion | On, off | No camera shaking, no confetti, calmer screens. |
+| Message time | Normal, Long, Longer | C.A.R.L.'s messages and the quest notices stay 1, 1.5 or 2 times longer. |
+| Colour helper | On, off | "Shows shapes too, not only colours." |
+
+**Settings follow the player.** The server keeps every setting with the player's account and checks each value. They come back after a trip to a world server, a rejoin or another device; the device language no longer overwrites the saved one at start. A tap outside the panel closes it.
+
+### 2.25 Controls
 
 | Action | Keyboard and mouse | Touch |
 | :--- | :--- | :--- |
@@ -521,26 +662,16 @@ The tubes from greenhouse dome A to dome B and from the hub to the Lab can be wa
 | Auto-run | X (X or any WASD key stops it) | Auto-run button |
 | Drive | WASD in the driver seat | Thumbstick |
 | Get out of a vehicle | Space | Tap jump |
-| Missions, Wardrobe, Settings | Buttons at the top right | Same |
-| Language | Settings (English or Spanish) | Same |
+| Read C.A.R.L.'s lines again | Click the replay button by the bubble | Tap the replay button |
+| Answer C.A.R.L.'s question | Click an answer | Tap an answer |
+| Learn a gold word | Click the quest step or the tile | Tap it |
+| Settings, Missions, Wardrobe, Achievements | Buttons at the top right | Same |
+| Moon Logbook | "Logbook" on the mission screen, or the capsule card | Same |
+| Language | Settings, Game page (English or Spanish) | Same |
 
-On a gamepad, A gets out of a vehicle and holding A in the air fires the jetpack. In first person the mouse is freed whenever a card or panel is open.
+On a gamepad, A gets out of a vehicle and holding A in the air fires the jetpack, and every box puts the selection on its safe button. In first person the mouse is freed whenever a card or panel is open.
 
-### 2.20 Team debug keys
-
-These keys work only in Roblox Studio or for the place owner. The server checks every debug action again. They are for testing and recording the demo.
-
-| Key | Effect |
-| :--- | :--- |
-| F2 | A meteorite lands near the player now. |
-| F3 | Finish the build in progress, or build the next structure free, following the base-level order. |
-| F4 | Start an eclipse now. |
-| F6 | Unlock every mission and get just enough credits and XP for everything. |
-| F7 | Get the next hidden collectible the player does not own yet. |
-| F8 | Force today's event to a solar storm (before the shift or while planning). |
-| F9 | End the current shift now. |
-
-F1, F5, F10, F11 and F12 are not used, because Studio or Windows catch them first.
+Players have no debug keys. The team's test keys exist only in Roblox Studio, and the server refuses every debug action in a live game (section 4.11).
 
 ## 3. Science and NASA data
 
@@ -567,10 +698,11 @@ These rules are written into `CLAUDE.md` and apply to every mechanic, line of te
 | The shelter protects by mass, not power. | The shelter is a regolith mound with water tanks inside. It uses no power cells. Being inside it during a particle storm keeps the dose down. An unbuilt shelter (a hologram on its pad) has no mass, so it protects nobody. | NASA-STD-3001 and NASA's OCHMO radiation brief: a storm shelter of about 10 cm water equivalent. |
 | Radiation dose never goes down. | `Simulation.luau` only adds dose: a little every day for background cosmic rays, more for each astronaut caught outside in a storm. Nothing lowers it. | Dose adds up; NASA's career limit counts the total. |
 | Plants take time to grow. | Greenhouse power on one day becomes food on the next. Fresh food picked in the greenhouse also needs time before the next one is ready. | NASA Veggie: the first lettuce eaten on the Space Station grew for 33 days. |
-| Oxygen comes from water plus electricity. | Life-support cells run the air maker, which uses water from the tank. With too little water it makes only part of the air. Ice adds air only when the air maker has power. | NASA ISS ECLSS fact sheet: oxygen is made by splitting water with electricity. |
+| Oxygen comes from water plus electricity. | Life-support cells run the air maker, which uses water from the tank. With too little water it makes only part of the air. Ice adds air only when the air maker has power. At the base, the water plant melts silo ice into water, and the air maker turns that water into air only while at least 2 solar arrays stand; without power, the cargo robot brings water instead. | NASA ISS ECLSS fact sheet: oxygen is made by splitting water with electricity. |
 | A big flare does not always bring a particle storm. | Some storm days are real false alarms: a huge flare that DONKI links to no particle event. Sheltering was still the right call. | NASA / CCMC DONKI, for example the X9.0 flare of 3 October 2024. |
 | DONKI events were observed near Earth. | Every storm is a replay: "what if a storm like this reached your base?" The game never says a recorded storm hit the Moon. | DONKI events are observed from near Earth. |
 | The Moon has almost no air. | C.A.R.L. drives on treads and hops with gas thrusters, because propellers need air. Meteorites land with a flash and no burning streak. The sky is black and the Sun stays white and low. | NASA "The Moon's Atmosphere"; NASA Glenn; NASA Meteoroid Environment Office. |
+| There is no sound in a vacuum. | Outside the helmet, world sounds are quieter and muffled, as if felt through the suit; radio, tablet and C.A.R.L. stay clear. Earth footsteps are muted. A meteorite is a radar tone and a thud through the ground. Storms never shake the camera, and their static plays only when particles arrive. | Sound needs air or another material to travel; the Moon has almost no air (NASA "The Moon's Atmosphere"). |
 
 The game also keeps the real Moon-to-Earth gravity ratio (1.62 / 9.81). The game sky runs much faster than the real one: at the real south pole the Sun circles the horizon once per lunar day (about 29.5 Earth days). The Sources panel says so.
 
@@ -579,7 +711,7 @@ The game also keeps the real Moon-to-Earth gravity ratio (1.62 / 9.81). The game
 | Topic | Decision | Consequence | Real data behind it |
 | :--- | :--- | :--- | :--- |
 | Power budgeting | Each morning, how many power cells go to life support, greenhouse and science. Each clean solar array the players have built gives one cell and the battery one more, so a full base has 4. Each system takes at most 2. | A cell for science is a cell taken from air or food. Dust takes a cell away until someone cleans the panel. The board cuts science first and life support last. Each automatic ice drill needs one more solar array. | A spot on the Shackleton crater rim is sunlit about 240 days a year (LRO topography), so solar power fits the south pole. |
-| Life support | Power for life support, fetching ice, fixing leaks, and when to refill the suit inside. | Life-support cells turn water into air; ice fills the tank. Breathing, an open leak and every suit refill use base air. | NASA BVAD 2022: about 0.895 kg of oxygen and 2.5 kg of water per crew member per day. LCROSS found ice in a shadowed crater. |
+| Life support | Power for life support, fetching ice, fixing leaks, and when to refill the suit inside. Between missions: building the ice line and enough solar arrays for the air maker. | Life-support cells turn water into air; ice fills the tank. Breathing, an open leak and every suit refill use base air. Without power the air maker stops and the cargo robot brings water instead of air. | NASA BVAD 2022: about 0.895 kg of oxygen and 2.5 kg of water per crew member per day. LCROSS found ice in a shadowed crater. |
 | Food production | Power for the greenhouse; building the second dome. | Today's greenhouse power is tomorrow's food. Cutting it looks free until the next day. | NASA Veggie: 33 days to the first lettuce meal. About 3,000 kcal per crew member per day. |
 | Radiation shielding | Hide in the shelter during a storm, or keep working outside. | Everyone outside when particles arrive adds to the dose. Reaching the limit sends the crew home early. | Real DONKI flares. Chang'e-4: about 1.37 mSv a day on the Moon, against 6.2 mSv a year in the United States. NASA career limit: 600 mSv. |
 | Communication delay | Spend shift time aligning the antenna with the tablet, or do other tasks. | With the link, Earth warns the crew 45 seconds before particles arrive; without it, 15 seconds. The link also sends waiting science. A bigger dish and then a laser link send more data. | 1.3 seconds Moon to Earth; 3 to 22 minutes from Mars. NASA: laser links carry 10 to 100 times more data than radio. |
@@ -711,9 +843,19 @@ Sites are stand-ins inspired by real places: the game never says a real lander o
 
 Each reference is a row in the Stage 6 to 8 sections of `DATA_SOURCES.md`.
 
+### 3.8 Science in the Stage 11 features
+
+- **Ice to water to air.** The ice line shows the life-support chain one machine at a time: drills dig polar crater ice, the water plant melts it into water, and the air maker splits water into oxygen with electricity. The plant's sign says it in icons (ice, water, air) and in words ("Ice makes water. Water plus power makes air."). With fewer than 2 solar arrays the air maker stops and the robot brings water: no power, no air. This is how the Space Station makes oxygen (electrolysis, NASA ECLSS), and it is why the water ice LCROSS found in a shadowed crater matters for a future base. The game does not claim that a real Moon base works this way today.
+- **Sound in a vacuum.** Sound needs air or another material to travel, and the Moon has almost no air. So world sounds outside the helmet are soft and muffled, as if felt through the suit and boots; radio, tablet and C.A.R.L. stay clear; Roblox's Earth footsteps are muted; a meteorite is a radar tone and a thud through the ground; and a storm has no sound of its own until particles reach the radio as static.
+- **Feel without fake physics.** A nearby meteorite shakes the camera a little, as a vibration through the ground, never as an air blast. A solar storm never shakes anything: radiation is silent and pushes nothing, so the screen edges glow orange instead.
+- **Dose never goes down, on every screen.** The report's dose chip only points up, and the live radiation meter only rises.
+- **Words without numbers.** C.A.R.L.'s questions, the glossary cards and the capsule's cargo facts quote no numbers, so nothing can drift from `DATA_SOURCES.md` (`tests/localization` and `tests/daily` check it). The question bank's science answers follow the rules in 3.2: the shelter protects by mass, plants take time, oxygen comes from water plus electricity, a big flare does not always bring a particle storm.
+- **Honest gifts.** The supply capsule says "A game gift, not a real NASA flight."
+- **Learning design.** C.A.R.L. praises the strategy that worked, not the kid (Mueller and Dweck, 1998: praise for effort and strategy builds persistence), asks short recall questions after a lesson, and suggests a break after 45 minutes of play. These are design references, not numbers shown to players.
+
 ## 4. Technical design
 
-This section explains how Space Base Odyssey is built, how to run it, and how the code is organised and tested. It describes the game as it stands at Stage 10 (build `0.10.0-stage10` in `src/shared/Version.luau`).
+This section explains how Space Base Odyssey is built, how to run it, and how the code is organised and tested. It describes the game as it stands at Stage 11 (build `0.11.0-stage11` in `src/shared/Version.luau`).
 
 ### 4.1 Tools
 
@@ -723,6 +865,7 @@ This section explains how Space Base Odyssey is built, how to run it, and how th
 | Luau | strict mode | Every code file starts with `--!strict` and an AI (SI) disclosure line |
 | Rojo | 7.7.1 | Syncs the files in this repository into Studio, and builds a place file |
 | Lune | 0.11.1 | Runs the test suites outside Roblox |
+| Python | 3 | The team's audio synthesis scripts (in the git-ignored `promo/audio/synth`) |
 | Roblox Studio MCP server | - | Lets the AI assistant start Play mode and read the console during assistant-driven playtests |
 | Git and GitHub | - | Version control and the public repository |
 | Claude (Anthropic), in Claude Code | - | AI assistance, disclosed in section 6.4 |
@@ -733,16 +876,18 @@ The files in the repository are the source of truth. Scripts are never edited in
 
 | Path | Contents | Synced to |
 | :--- | :--- | :--- |
-| `src/shared` | Mission rules, numbers, network contract, quests, text, icons, theme | `ReplicatedStorage.Shared` |
+| `src/shared` | Mission rules, numbers, network contract, quests, text, icons, sound list, theme | `ReplicatedStorage.Shared` |
 | `src/server` | World builder, services, live NASA data, saves | `ServerScriptService.Server` |
-| `src/client` | Interface, guidance, C.A.R.L., movement helpers | `StarterPlayer.StarterPlayerScripts.Client` |
-| `tests` | Five Lune test suites | not synced |
+| `src/client` | Interface, guidance, C.A.R.L., sound, movement helpers | `StarterPlayer.StarterPlayerScripts.Client` |
+| `tests` | Eleven Lune test suites | not synced |
 | `default.project.json` | Rojo project file (the three mappings above) | - |
+| `docs-public` | Educator pack: three 20-minute lesson plans, in English and Spanish | - |
 | `DATA_SOURCES.md` | Every real-world number with its source | - |
-| `THIRD_PARTY_NOTICES.md` | Licences of third-party assets (Tabler Icons, NASA Blue Marble map) | - |
+| `THIRD_PARTY_NOTICES.md` | Licences of third-party assets (Tabler Icons, NASA Blue Marble map, CC0 sound recordings) | - |
+| `DOCUMENTATION.md`, `DOCUMENTACION.md` | This document, in English and Spanish | - |
 | `DEVELOPMENT.md` | Development log, decisions, testing evidence, use of AI | - |
 | `README.md` | Short introduction, controls, status and how to run it | - |
-| `SUBMISSION.md` | Drafts of the Space Apps project page fields | - |
+| `SUBMISSION.md` | The Space Apps project page fields | - |
 | `CLAUDE.md` | Project rules for AI coding assistants | - |
 | `LICENSE` | Apache License 2.0 | - |
 
@@ -767,6 +912,12 @@ lune run tests/balance
 lune run tests/missions
 lune run tests/base
 lune run tests/economy
+lune run tests/cinematic
+lune run tests/worlds
+lune run tests/achievements
+lune run tests/daily
+lune run tests/feel
+lune run tests/reading
 lune run tests/localization
 ```
 
@@ -774,20 +925,28 @@ lune run tests/localization
 
 #### Server authoritative
 
-The server owns the game state: the mission phase, the meters, the builds, the credits and the saves. A client never changes the state directly. It only sends a `Types.Action` table through one RemoteEvent, and the server checks every action before it acts on it (the phase is right, the player owns the item, has the credits, has the tool in hand, is close enough to the prompt, and so on). The server answers with snapshots and per-player state.
+The server owns the game state: the mission phase, the meters, the builds, the credits, the silo and the saves. A client never changes the state directly. It only sends a `Types.Action` table through one RemoteEvent, and the server checks every action before it acts on it (the player has a loaded save, the phase is right, the player owns the item, has the credits, has the tool in hand, is close enough to the prompt, and so on). The server answers with snapshots and per-player state. Animation that only shows the state (the ice line's cubes, drill bits, robot and fan) runs on each client.
 
 #### Pure, testable rules
 
 The game rules that matter most live in pure Luau modules with no Roblox instances, so they run unchanged in Roblox and in Lune:
 
 - `Simulation.luau`: the mission day (begin day, planning, shift result, end day) and the live meters during a shift.
-- `BaseBuild.luau`: credits, experience, player level, build costs and gates, skills, pets, gear and drills.
+- `BaseBuild.luau`: credits, experience, player level, build costs and gates, skills, pets, gear, drills, the silo and the ice line's pay.
 - `Missions.luau` and `Quests.luau`: the mission list and the quest line, as data plus small helpers.
+- `ServerGuard.luau`: the server's safety rules (prompt distance and repeats, ice travel and drill rate, the session lock, settings checks).
+- `Worlds.luau`: who may join a world and whose base it shows.
+- `Achievements.luau`, `Quiz.luau` and `Glossary.luau`: learning achievements, C.A.R.L.'s questions and the picture glossary.
+- `IceLineView.luau`: what the ice line's signs, pops and C.A.R.L. show.
+- `Daily.luau`: the supply capsule calendar and the Moon Logbook entries.
+- `Reading.luau`: reading times and the message queue.
+- `Feel.luau` and `WorldSafety.luau`: celebration detection, report chips, camera shake, the crater exits and the map edge.
+- `CinematicShots.luau` and `AudioIds.luau`: the start menu's camera shots and the list of 50 sounds, as data.
 - `Localization.luau` and `PetModels.luau`: text and pet shapes as plain data.
 
 #### One source of numbers
 
-Every number the game uses lives in `src/shared/MissionData.luau`, grouped in tables such as `REAL`, `WORLD`, `MISSION`, `POWER`, `METERS`, `WATER`, `SCIENCE`, `SUIT`, `STORM`, `BASE` and `EVENTS`. Each value is tagged **REAL** (with the `DATA_SOURCES.md` section it comes from) or **GAME** (a tuning value chosen for playability). Two examples: the Moon's surface gravity of 1.62 m/s² is REAL; the 150-second shift is GAME. Roblox's default gravity of 196.2 studs/s² stands for Earth, so the Moon uses 32.4 studs/s², which keeps the real Moon-to-Earth ratio (GAME, derived).
+Every number the game uses lives in `src/shared/MissionData.luau`, grouped in tables such as `REAL`, `WORLD`, `MISSION`, `POWER`, `METERS`, `WATER`, `SCIENCE`, `SUIT`, `STORM`, `BASE`, `EVENTS`, `ACHIEVEMENTS`, `GUARD`, `QUESTS`, `TYCOON_CLIENT`, `DAILY` and `LOGBOOK`. Each value is tagged **REAL** (with the `DATA_SOURCES.md` section it comes from) or **GAME** (a tuning value chosen for playability). Two examples: the Moon's surface gravity of 1.62 m/s² is REAL; the 150-second shift is GAME. Roblox's default gravity of 196.2 studs/s² stands for Earth, so the Moon uses 32.4 studs/s², which keeps the real Moon-to-Earth ratio (GAME, derived). Technical UI timings (how long a line stays on screen) are not gameplay numbers and live in `Reading.luau`.
 
 #### Text and languages
 
@@ -795,7 +954,7 @@ All player-facing text travels as localization keys and is translated on the cli
 
 #### Visual identity "Lunar Sunrise"
 
-`Theme.luau` holds the palette (night blue, cyan, orange, lime, magenta, cream, plus derived red and gold) and semantic roles (`Theme.ROLE`, for example `accent`, `warning`, `danger`, `good`, `reward`). Code uses roles, not raw colours, for UI, lights and base accents. `Theme.FONT` sets two fonts: Fredoka One for titles and buttons, Gotham Bold for body text. The only image assets are 68 white Tabler icons (MIT licence), listed in `Icons.luau` and tinted in game with Theme colours, plus the public-domain NASA Blue Marble Earth map and a near-black skybox face made by the team. There is no emoji anywhere in the UI.
+`Theme.luau` holds the palette (night blue, cyan, orange, lime, magenta, cream, plus derived red and gold) and semantic roles (`Theme.ROLE`, for example `accent`, `warning`, `danger`, `good`, `reward`). Code uses roles, not raw colours, for UI, lights and base accents, and the confetti, the suit stripes and the ice line's lamps use the same palette. `Theme.FONT` sets two fonts: Fredoka One for titles and buttons, Gotham Bold for body text. The only image assets are 68 white Tabler icons (MIT licence), listed in `Icons.luau` and tinted in game with Theme colours, plus the public-domain NASA Blue Marble Earth map and a near-black skybox face made by the team. There is no emoji anywhere in the UI.
 
 #### Space weather data
 
@@ -807,32 +966,46 @@ All player-facing text travels as localization keys and is translated on the cli
 
 | Module | Job |
 | :--- | :--- |
-| `BaseBuild` | Pure build-and-grow rules: credits, XP, levels, costs, habitat gates, skills, pets, gear, drills |
+| `Achievements` | The 13 learning achievements: ids, icons, texts, unlock rules, save records |
+| `AudioIds` | The 50 sounds: asset, group (Music or Effects), loop, volume, length, cooldown, whether it is a world sound |
+| `BaseBuild` | Pure build-and-grow rules: credits, XP, levels, costs, habitat gates, skills, pets, gear, drills, silo size, ice line pay |
+| `CinematicShots` | The start menu's eight camera shots, as data and maths |
+| `Daily` | Daily supply capsule calendar, cargo facts, suit stripes and Moon Logbook entries and milestones |
+| `Feel` | Celebration detection, the report's cause-and-effect chips, camera shake falloff |
+| `Glossary` | The nine picture glossary words with their icons and word forms |
+| `IceLineView` | What the ice line shows: sign texts, status lights, "+N" pops, when C.A.R.L. points at the silo |
 | `Icons` | Asset IDs of the Tabler icons and the Earth map |
 | `Localization` | Every player-facing string in English and Spanish, looked up by key |
 | `MissionData` | Every number in the game, tagged REAL or GAME |
 | `Missions` | Training missions, three story chapters and free play, as data |
 | `PetModels` | Part data for the four pets, based on a team member's designs |
-| `Quests` | Main and side quests as data, with pure helpers |
+| `Quests` | Main and side quests as data, with pure helpers, save migration and treasure hints |
+| `Quiz` | C.A.R.L.'s question bank (one right answer each) and the answer record rules |
+| `Reading` | How long a line stays on screen, and which waiting line skips first |
+| `ServerGuard` | Pure server checks: prompt distance, ice limits, the session lock, settings clamps, message speeds |
 | `Simulation` | Pure mission rules for one day and the live meters |
 | `SpaceWeatherArchive` | Saved real X-class flares from DONKI |
 | `Theme` | "Lunar Sunrise" palette, roles and fonts |
 | `Types` | Network contract: snapshots, state types, actions, remote names |
 | `Version` | Build identifier, used to confirm that Rojo sync reached Studio |
+| `Worlds` | Private worlds: server roles, who may join, whose base a world shows |
+| `WorldSafety` | Crater exit ramps and their clearances, the map edge walls |
 
 #### Server modules (`src/server`)
 
 | Module | Job |
 | :--- | :--- |
 | `Main.server` | Entry point: builds the world, creates remotes, starts the services, spawns players after a save slot loads |
-| `BaseService` | Building and growing the base in steps: build pads, parts crates, credits, XP, skills, Lab purchases, silo |
+| `AchievementService` | Unlocks learning achievements from real events, keeps them in the save, awards Roblox badges |
+| `BaseService` | Building and growing the base in steps: build pads, parts boxes, credits, XP, skills, Lab purchases, the ice line (silo, water plant, cargo robot trips, offline ice) |
 | `Codes` | Redeem codes for event cosmetics; server only, so players cannot read them |
-| `CrewService` | Suit oxygen per player, pressurized zones, carried ice, C.A.R.L. rescue to the lander |
+| `CrewService` | Suit oxygen per player, pressurized zones, carried ice, rescue to the nearest pressurized room |
+| `DailyService` | The daily supply capsule, the Moon Logbook milestones and the suit stripes |
 | `ExploreService` | Exploration site scans with the tablet and random meteorite impacts |
 | `MissionService` | The mission loop: phases, power allocation, shift tasks, storms, action dispatch |
 | `PetService` | Builds the equipped pet and moves it after its astronaut |
-| `ProgressService` | Saves: three slots per player, meta record, migrations, autosave, "Save now", solo teleport |
-| `QuestService` | Tracks main and side quests from real events and pays each reward once |
+| `ProgressService` | Saves: three slots per player, meta record, session lock, settings, migrations, autosave, "Save now", private world trips |
+| `QuestService` | Tracks main and side quests from real events, pays each reward once, asks C.A.R.L.'s questions, gives treasure hints and break lines |
 | `SpaceWeatherService` | Live DONKI query with the archive as backup, and flare choice for storms |
 | `SuitService` | EVA helmet and life-support backpack welded over the player's own avatar, plus gear models |
 | `ToolModels` | Part models of the tools: wrench, ice drill, brush, repair kit, tablet, salad tray |
@@ -844,40 +1017,51 @@ All player-facing text travels as localization keys and is translated on the cli
 | `WorldSecrets` | Hidden places, the four collectibles, the team flag and the sealed observatory |
 | `WorldSites` | Lab, garage, landing pad and ship models, five exploration sites, meteorite craters |
 | `WorldSky` | Moon gravity, lighting, black sky, the Earth, Mars, stars, the Sun's horizon track and eclipses |
-| `WorldStructures` | Ice drills, conveyor, silo, cargo robot, build pads and holograms, the lander, construction steps, crates |
+| `WorldStructures` | Ice drills, belts, silo, water plant, cargo robot, build pads and holograms, the lander, construction steps, boxes |
 
 #### Client modules (`src/client`)
 
 | Module | Job |
 | :--- | :--- |
 | `Main.client` | Entry point: builds the UI, listens to the server, shows the right screen |
+| `AchievementsPanel` | The Achievements panel: pages of big tiles with facts, hints and progress |
+| `Audio` | Every sound: pooled one-shots, fading loops, 3D hums, music by game state, the helmet rule |
 | `BasePanel` | Lab panel: skills, gear, tool upgrades and pets; opens only at the Lab |
-| `CarlDrone` | C.A.R.L., the tracked helper rover, with its guidance beam and shelter beam |
-| `Collection` | Collectibles screen and the myth-versus-science find card |
-| `DemoKeys` | F-key shortcuts for testing and recording, Studio or place owner only |
+| `CameraFx` | The meteorite ground shake and the orange storm edge pulse |
+| `CarlDrone` | C.A.R.L., the tracked helper rover, with its guidance beam (blocked by walls) and shelter beam |
+| `Celebrate` | Confetti, flashes, level titles and star sparkles |
+| `Cinematic` | Plays the start menu's camera shots and the cinematic grade |
+| `Collection` | The Moon Logbook (secrets, places, space rocks, achievements, facts, stripes) and the myth-versus-science find card |
+| `DailyCapsule` | The capsule's landing by the lander and the 7-day calendar card |
+| `DemoKeys` | F-key shortcuts for testing and recording, Roblox Studio only |
 | `ExploreCard` | Card shown after scanning a site or a meteorite crater |
 | `FunFacts` | C.A.R.L.'s short true facts, from a shuffle bag with no repeats |
 | `Gear` | Air boots (double jump) and jetpack, their keys, touch buttons and gas tank |
-| `Hud` | Shift HUD, always-on vitals panel, wallet, carried ice and pills |
+| `GlossaryCard` | The "What does it mean?" picture card for gold words |
+| `Hud` | Shift HUD, always-on vitals panel, wallet with the machines pill, carried ice and pills |
+| `IncomePops` | "+N credits" pops at the silo and the supply port, and the "While you were away" card |
+| `MapEdge` | The orange band at the map edge and C.A.R.L.'s warning |
 | `Markers` | Floating task markers, shown only when they matter |
-| `Messages` | C.A.R.L.'s speech bubble with message and tip queues and tool badges |
+| `Messages` | C.A.R.L.'s speech bubble: reading times, merged and skipped lines, tool badges, the history list |
 | `Meters` | Air, food, radiation and water bars in row and column layouts |
-| `MissionSelect` | The habitat's mission console: training, story and free play cards |
+| `MissionSelect` | The habitat's mission console: training, story and free play cards, and the Logbook button |
 | `Movement` | Shorter prompt hold times from the drill level and the builder skill |
-| `Objectives` | Mission objectives checklist and the quest tracker |
+| `Objectives` | Mission objectives checklist and the quest tracker with progress bars |
 | `Onboarding` | Guided tips and power-board highlights that never block play |
 | `PowerBoard` | Planning overlay where the crew shares power cells between systems |
+| `ProductionLine` | Animates the ice line (cubes, drill bits, robot, fan, bubbles) and its world signs |
 | `Prompts` | Localizes world prompts and signs from their key attributes |
-| `QuestToasts` | "New quest", "Done" and "Quest complete" cards on the right side |
-| `Report` | End-of-mission report with stars and a day-by-day timeline of causes |
+| `QuestToasts` | "New quest", "Done", "Quest complete" and the big gold main quest card |
+| `QuizCard` | C.A.R.L.'s picture question card and its result |
+| `Report` | End-of-mission report with stars and a day-by-day cause-and-effect timeline |
 | `Rewards` | Client-side collectible rewards, such as opening the observatory door |
 | `SaveIndicator` | The "Game saved" pill after each save |
-| `Settings` | Language, volume, C.A.R.L. options, redeem code, "Save now" |
+| `Settings` | Game page (language, volume, C.A.R.L. options, redeem code, "Save now") and Helpers page |
 | `Sources` | "Real NASA data" panel: live or archive status, real facts, source credits |
 | `Sprint` | Run toggle, speed bonuses and auto-run |
-| `StartMenu` | First screen: Continue, New game, Load game, Settings, Credits, then solo or friends |
-| `Store` | Client state: latest snapshot, progress, base state, slots, language, settings |
-| `Ui` | Shared UI building blocks: scaled root, panels, labels, buttons, bars, tinted icons |
+| `StartMenu` | First screen: Continue with its card, New game or My worlds, Join a friend, Settings, Credits; the world list, Continue or Start over, Just me or With friends, the wait screen |
+| `Store` | Client state: latest snapshot, progress, base state, slots, language, settings and helpers |
+| `Ui` | Shared UI building blocks: scaled root with safe insets, panels, labels with the text floor, buttons with sounds, bars, tinted icons |
 | `VehicleClient` | Driving input, chase camera and the vehicle panel |
 | `Wardrobe` | Choose helmet, backpack, C.A.R.L. skin and pet |
 
@@ -888,45 +1072,54 @@ The server creates its RemoteEvents in `ReplicatedStorage.Remotes`. Their names 
 | Remote | Direction | Carries |
 | :--- | :--- | :--- |
 | `Action` | client to server | `Types.Action`, the only way a client asks for anything |
-| `Snapshot` | server to all | Full mission state, sent on every change and to late joiners |
+| `Snapshot` | server to all | Full mission state, sent on changes (at most one every 0.1 s after actions) and to late joiners |
 | `PlayerStats` | server to one | That player's suit and field values |
 | `AssistantMessage` | server to client | A C.A.R.L. line as a localization key with parameters |
 | `Progress` | server to one | Completed missions, collectibles, cosmetics |
 | `Collected` | server to one | A collectible pickup, right after it happens |
-| `BaseState` | server to one | Credits, XP, builds, skills, tools, gear, pets, quest tracker |
+| `BaseState` | server to one | Credits, XP, builds, skills, tools, gear, pets, quest tracker, the waiting question, machine income |
 | `Explore` | server to one | A site or meteorite scan result |
-| `Slots` | server to one | The three save slots for the start menu |
+| `Slots` | server to one | The three save slots for the start menu, with the saved settings |
 | `Saved` | server to one | A notice after each save of that player's slot |
+| `Worlds` | server to one | The "Join a friend" list |
+| `Achievements` | server to one | That player's achievements and counters |
+| `IceLine` | server to one | A delivery or claim (credits, product, position) for the "+N" pops, and the "while you were away" notice |
+| `Daily` | server to one | The capsule calendar, the Logbook and the stripes |
 
 Actions fall into groups:
 
 - **Mission:** `SetCells`, `StartMission`, `StartShift`, `Restart`.
-- **Player settings:** `SetLanguage`, `RedeemCode`.
-- **Saves:** `ChooseSlot`, `RequestSlots`, `SaveNow` (handled by `ProgressService`).
+- **Player settings:** `SetLanguage`, `SaveSettings`, `RedeemCode`.
+- **Saves and worlds:** `ChooseSlot`, `RequestSlots`, `ListFriendWorlds`, `JoinWorld`, `SaveNow` (handled by `ProgressService`).
 - **Base:** `Build`, `LearnSkill`, `Equip`, `BuyPet`, `ClaimSilo`, `UpgradeTool`, `BuyGear`, `ToggleGear` (validated by `BaseService`).
-- **Debug:** `DebugMeteor`, `DebugBuildNext`, `DebugForceEvent`, `DebugEndShift`, `DebugEclipse` and others. They are accepted only in Studio or from the place owner, and are used for testing and recording the demo.
+- **Learning:** `OpenSources`, `AnswerQuiz`.
+- **Daily and Logbook:** `ClaimDaily`, `RequestDaily`, `ClaimLogbook`, `WearStripes`, `HeardFact` (validated by `DailyService`).
+- **Debug:** `DebugMeteor`, `DebugBuildNext`, `DebugForceEvent`, `DebugEndShift`, `DebugEclipse` and others. Since Stage 11 they are accepted only in Roblox Studio, never in a live server, and are used for testing and recording.
 
-`MissionService` limits each player to 20 actions per second. Slot and save actions have their own limits in `ProgressService` (one slot list request and one "Save now" request per second), and a redeem code can be tried once every 2 seconds.
+`MissionService` limits each player to 20 actions per second, and the public lobby accepts no game action at all. Slot and save actions have their own limits in `ProgressService` (one slot list request and one "Save now" request per second), a redeem code can be tried once every 2 seconds, an answer to C.A.R.L.'s question once a second, and the Sources screen counts once every 5 seconds.
 
 ### 4.7 The save system
 
 `ProgressService` keeps each player's progress in a Roblox DataStore named `SBO_Progress_v1`.
 
-- **Three slots.** Each player has three save slots ("worlds"), keyed `p_<userId>_s<slot>`. A slot holds completed missions, collectibles, cosmetics and the base record (credits, XP, builds, skills, tools, gear, pets, what the player wears, scanned sites and quest progress).
-- **Meta record.** `p_<userId>_meta` summarises the slots for the start menu (used or empty, base level, player level, credits, last save time, solo or friends) and remembers the last slot. Event cosmetics are account-wide and live here.
-- **Old saves.** The save from before slots (`u_<userId>`) is never deleted and becomes slot 1. Saves from earlier stages are migrated on load so nobody loses their base.
+- **Three slots.** Each player has three save slots ("worlds"), keyed `p_<userId>_s<slot>`. A slot holds completed missions, collectibles, cosmetics and the base record: credits, XP, builds, skills, tools, gear, pets, what the player wears, scanned sites, quest progress and question answers, achievements, the daily capsule calendar and stripes, and the silo (`base.silo = { ice, at }`).
+- **Meta record.** `p_<userId>_meta` summarises the slots for the start menu (used or empty, base level, player level, credits, last save time, solo or friends), remembers the last slot and keeps the player's settings. Event cosmetics are account-wide and live here.
+- **Private worlds.** Every world is its owner's slot and runs in its own reserved server, for both modes. Continue, New game, Just me or With friends reserves a server and teleports the player there; if the trip fails, the player goes back to the menu with a message. A MemoryStore map ("SBO_Worlds") lists open friends worlds (access code, players, base level), refreshed every 30 seconds and gone after 120. The lobby and the world server both check the friendship, that the world is open and that it has room.
+- **Session lock.** A slot loads only after the server writes a lock into it (server, visit, time). A fresh lock of another server makes the load wait up to 20 seconds for that server's last save, then takes over; a lock older than 3 minutes is stale. Every save checks and refreshes the lock, and the last save on leave frees it. A server that lost the lock never writes again. This closes the server-hop trick of spending credits in one world and keeping them in another.
+- **Continue never wipes.** Only an explicit Start over (New game in a used world) replaces a slot.
+- **Settings follow the player.** Language, volumes, fun facts, guidance and the four helpers are saved through the `SaveSettings` action, checked and clamped on the server, and come back in the slot list, in the trip's TeleportData and as player attributes. The client sends a change 0.6 seconds after the last one, so a slider drag sends once.
+- **Old saves.** The save from before slots (`u_<userId>`) is never deleted and becomes slot 1. Saves from earlier stages are migrated on load so nobody loses their base; the quest record has a version (`v = 2`), so saves made before Stage 11 skip the new first quest.
 - **No character until a slot loads.** The player spawns only after choosing a slot, so nothing is saved for a player who has not picked one.
-- **Solo and friends.** In a published game, "Just me" moves the player to a new reserved server. If the teleport fails, the slot loads in the current server. "With friends" loads in the current server.
-- **Autosave.** A changed slot is saved at most once every 10 seconds. The meta record is saved at most every 60 seconds. A safety check every 60 seconds schedules anything still unsaved.
-- **Merging.** A save only adds to what is stored, so two servers saving the same slot do not lose progress. New Game and the debug reset are the only writes that replace.
-- **Leaving.** A player who leaves counts as a save in flight at once, and `BindToClose` waits for it (up to 25 seconds on a live server).
+- **Autosave.** A changed slot is saved at most once every 10 seconds, and idle players are re-saved quietly about every minute to keep the lock fresh. The meta record is saved at most every 60 seconds. The silo is written at most every 30 seconds while it changes, and after each payout.
+- **Merging.** A save only adds to what is stored, so progress is never lost. Start over and the debug reset are the only writes that replace.
+- **Leaving.** A player who leaves counts as a save in flight at once, and `BindToClose` waits for it (up to 25 seconds on a live server). Builds they paid for but did not finish are refunded into their save first, because a world server closes when its owner leaves.
 - **"Save now".** The Settings button sends `SaveNow`. The server writes as soon as the DataStore allows one write per key (about every 6 seconds) and confirms on the `Saved` remote. The client shows "Game saved"; autosave notices show at most once every 30 seconds.
-- **Studio behaviour.** If the place is published, Studio uses a separate store, `SBO_Progress_v1_Studio`, so debug credits never reach live saves. One probe read decides; if DataStores do not answer within 8 seconds, memory is used. In an unpublished place, saves live in memory and are lost when Play stops, and the pill says "Saved for this test only". A workspace attribute, `SBO_StudioDataStores`, can force memory (`false`) or the live store (`true`).
+- **Studio behaviour.** If the place is published, Studio uses a separate store, `SBO_Progress_v1_Studio`, so debug credits never reach live saves. One probe read decides; if DataStores do not answer within 8 seconds, memory is used. In an unpublished place, saves live in memory and are lost when Play stops, and the pill says "Saved for this test only". A workspace attribute, `SBO_StudioDataStores`, can force memory (`false`) or the live store (`true`). Reserved servers do not exist in Studio, so there the first player whose slot loads owns the world and later players are guests.
 - **Limits on stored values.** Credits and XP read from storage are clamped, so a damaged record cannot break the game.
 
 ### 4.8 The world built by code
 
-`WorldBuilder.build` creates the whole south-pole base from plain Parts when the server starts: terrain features, the crater with ice, the solar ridge, the arrival lander, build pads with holograms, pressurized zones, exploration sites and secrets. Nothing is placed by hand in Studio.
+`WorldBuilder.build` creates the whole south-pole base from plain Parts when the server starts: terrain features, the crater with ice and three exit ramps, the solar ridge, the arrival lander, build pads with holograms, the ice line (lift belts, the rim hopper, the open belt, the silo, the water plant and the supply port), pressurized zones, exploration sites, secrets and invisible walls 12 studs inside the ground's edge. Nothing is placed by hand in Studio.
 
 Roblox refuses to set a script's source when it is longer than 200,000 characters. During Stage 7 the world builder grew to about 238,000 characters, and Rojo live sync stopped working for it. It was split into sibling modules:
 
@@ -934,67 +1127,87 @@ Roblox refuses to set a script's source when it is longer than 200,000 character
 | :--- | :--- |
 | `WorldParts` | Layout anchors, palette and part helpers shared by the others |
 | `WorldSky` | Environment: gravity, lighting, sky, Earth, Sun track, eclipses |
-| `WorldStructures` | Build-and-grow structures, the lander and construction steps |
+| `WorldStructures` | Build-and-grow structures, the ice line, the lander and construction steps |
 | `WorldSecrets` | Hidden places and collectibles |
 | `WorldSites` | Lab, garage, landing pad, ship, exploration sites, meteorites |
 
-`WorldBuilder.luau` itself is now about 142,000 characters, and the largest other file, `Localization.luau`, is about 118,000. Both are under the limit.
+`WorldBuilder.luau` itself is now about 149,000 characters, and the largest file, `Localization.luau`, is about 155,000. Both are under the limit.
 
-Some world details carry science rules. The Sun follows a precomputed track along the horizon, as at the real lunar south pole, because Roblox's own Sun model does not circle the pole. The sky stays black because the Moon has no atmosphere. Meteorites land with a flash and dust but no burning streak. The shelter is a mound covered in regolith, because mass protects from radiation, not power.
+Some world details carry science rules. The Sun follows a precomputed track along the horizon, as at the real lunar south pole, because Roblox's own Sun model does not circle the pole. The sky stays black because the Moon has no atmosphere. Meteorites land with a flash and dust but no burning streak. The shelter is a mound covered in regolith, because mass protects from radiation, not power. The crater's ramps are placed by `WorldSafety.exitAngles` clear of the drills, their belts, the cheese niche, the ice nodes and the lamps, and `tests/feel` checks all 36 possible crater layouts.
 
-### 4.9 Testing
+### 4.9 Audio pipeline
 
-All five Lune suites are pure: they load the shared modules directly and need no Roblox. Current results (all pass, 0 failed):
+- **Made by the team.** The music and most effects were synthesized by the team's own code (Python scripts in the git-ignored `promo/audio/synth`, written with AI assistance; no generative audio model). Five effects mix in edited CC0 recordings from Freesound, found through Openverse (section 6.2). No sound is CC BY, and no Toolbox or Marketplace audio is used.
+- **Uploaded and listed.** The team uploaded the 50 sounds as Roblox audio. Their asset IDs, groups, volumes, lengths and cooldowns are in `src/shared/AudioIds.luau`; the source files and loudness checks are in the git-ignored `promo/audio/manifest.json`.
+- **One module plays everything.** `src/client/Audio.luau` owns every sound: pooled one-shots with a small pitch change, loops that fade, 3D sounds heard only nearby (the drills, the belt and the silo hum within about 75 studs), and stings that duck the music. It reuses the `SBO_Music` and `SBO_SFX` sound groups from `Settings.luau`, so the two volume sliders control everything. Every call runs in `pcall`, and nothing plays before a slot is chosen.
+- **The helmet rule in code.** World sounds go through a sub-group of the effects group. While the player attribute `SBO_Inside` is not true, an equalizer muffles that group (mids -7 dB, highs -22 dB) and its volume drops. Radio, tablet and C.A.R.L. sounds skip it. Roblox's default character sounds are muted on every character.
+- **Music by state.** Every quarter second the module picks a track: menu, storm, mission, eclipse, building or base by day, with 2.5-second crossfades; a paused track resumes where it stopped.
+- **Hooks.** Each sound hook in another module is a short line marked "Stage 11 audio" (buttons and panels in `Ui.luau`, the wallet, the quest toasts, C.A.R.L., the gear and the buggy); the rest is driven from the game state inside `Audio.start`.
+
+### 4.10 Testing
+
+All eleven Lune suites are pure: they load the shared modules directly and need no Roblox. Current results (16 November 2026, all pass, 0 failed):
 
 | Suite | Command | Checks | What it proves |
 | :--- | :--- | :--- | :--- |
-| Localization | `lune run tests/localization` | 36091 | Every key exists in English and Spanish with the same placeholders; word limits; no emoji or symbols outside Latin text; no technical jargon in gameplay text; fun facts do not repeat and only use numbers found in `DATA_SOURCES.md`; source files use only known keys |
-| Base | `lune run tests/base` | 1686 | Build data is well formed; XP and the 15 player levels; costs, requirements and habitat gates; shared builds take the highest level; skills, pets, drills, steps, tools, gear, save migration, the habitat tree and quests |
-| Missions | `lune run tests/missions` | 693 | Mission ids, schedules and objectives are valid; a careful crew can finish every story chapter; a training day never empties a meter; needed builds exist and can be paid for from mission rewards; tasks come after the build that unlocks their tool |
-| Balance | `lune run tests/balance` | 671 | "No choice is free": a passive player still reaches day 5; no fixed plan earns 3 stars; reacting to events can earn 3 stars; cutting the greenhouse shows up as less food later; no ice makes air fall faster; no antenna means science waits |
-| Economy | `lune run tests/economy` | 221 | A simulated kid player reaches each base level inside the team's pacing targets; income never jumps more than 2.5 times between 10-minute windows; automatic drills stay a helper, not an idle farm |
+| Localization | `lune run tests/localization` | 51496 | Every key exists in English and Spanish with the same placeholders; word limits; no emoji or symbols outside Latin text; no technical jargon in gameplay text; fun facts do not repeat and only use numbers found in `DATA_SOURCES.md`; counted quest steps have no `{n}`; quiz and glossary texts quote no numbers; source files use only known keys |
+| Base | `lune run tests/base` | 2201 | Build data; XP and the 15 player levels; costs, requirements and habitat gates; skills, pets, drills, steps, tools, gear, save migration, the habitat tree and quests; the first quest, praise keys and treasure hints; the ice line (plant, power, statuses, delivery pay, robot load, offline ice, silo saves) and what its signs show |
+| Missions | `lune run tests/missions` | 729 | Mission ids, schedules and objectives; a careful crew can finish every story chapter; a training day never empties a meter; needed builds exist and can be paid for; the ice limits against every legal speed, the drill rate, hauler payments and the open-world dust timer |
+| Balance | `lune run tests/balance` | 716 | "No choice is free": a passive player still reaches day 5; no fixed plan earns 3 stars; reacting to events can earn 3 stars; cutting the greenhouse shows up as less food later; storm dose is counted per second, rises live and never goes down; false alarms add nothing |
+| Economy | `lune run tests/economy` | 234 | A simulated kid reaches each base level inside the pacing targets; income never jumps more than 2.5 times between 10-minute windows; from the cargo robot to the ship the machines earn 30 to 50% of what playing earns; drill payback; offline ice cap |
+| Cinematic | `lune run tests/cinematic` | 189 | The start menu's camera shots: keys, curves, timing and framing |
+| Worlds | `lune run tests/worlds` | 116 | Server roles, TeleportData checks, only friends join and never past 4, solo stays private, the base is the owner's, the session lock (hop, steal, stale lock, release), saved settings and helpers |
+| Achievements | `lune run tests/achievements` | 758 | Ids, icons, texts in en and es, unlock rules, old saves and merges; the whole question bank (exactly one right answer, science answers, record rules) and the glossary |
+| Daily | `lune run tests/daily` | 222 | One capsule per UTC day, the fixed calendar, the forgiving count, a week pays no more than three crater scans, stripes, Logbook entries and milestones, cargo facts without numbers |
+| Feel | `lune run tests/feel` | 323 | Celebration detection, report chips (dose only up), camera shake falloff, the map edge, and all 36 crater layouts: two extra exits each, every clearance, a ramp within 90 studs of anywhere on the floor |
+| Reading | `lune run tests/reading` | 102 | Reading times, the minimum and maximum, the Message time factors, merged repeats and which waiting line skips first |
 
-Besides the Lune suites, every stage was played in Studio by the AI assistant using real key presses and remote actions, with the console checked for script errors. These playtests are listed in `DEVELOPMENT.md`. Playtests with people outside the team are still to come.
+Besides the Lune suites, every stage was played in Studio by the AI assistant using real key presses and remote actions, with the console checked for script errors. Stage 11 passed a Studio smoke test: the start menu without Load game, the world list, the lander spawn, the quest tracker, the daily capsule card, the ice line and no console errors. These playtests are listed in `DEVELOPMENT.md`. Playtests with people outside the team are still to come.
 
-### 4.10 Performance and safety notes
+### 4.11 Performance and safety notes
 
-- **Small network updates.** During a shift the snapshot with live meters is pushed at most about four times per second. Pets move only their root part about 20 times per second and turn their joints with `Motor6D`, so very little data is sent.
-- **Cheap visuals.** The helmet shell is made once with CSG at server start, cached and cloned per character (plain balls are used if CSG fails). Pets never collide, block rays or cast shadows. The Earth is a cheap rotating disc. Task markers show only when the player is near, when C.A.R.L. points at them, or when the current objective needs them.
+- **Small network updates.** During a shift the snapshot with live meters is pushed at most about four times per second, and snapshots after actions are coalesced to one every 0.1 seconds. The server no longer moves anything on the ice line: it publishes the line's state as attributes, and each client animates the cubes, bits, robot and fan locally and sleeps when the camera is far away. Before, the server wrote drill, cube and robot positions 15 to 20 times a second to every player. Pets move only their root part about 20 times per second and turn their joints with `Motor6D`.
+- **Cheap visuals.** The helmet shell is made once with CSG at server start, cached and cloned per character (plain balls are used if CSG fails). Pets never collide, block rays or cast shadows. The Earth is a cheap rotating disc. Task markers show only when they matter. C.A.R.L.'s beam checks its way with one ray four times a second.
 - **Fault isolation.** Each service after the core is started inside `pcall`, so a broken piece is reported with a warning and never stops the server.
-- **Untrusted clients.** Every action is checked on the server. Redeem codes live only on the server. Debug actions work only in Studio or for the place owner. Builds check level, credits, requirements, ownership and distance.
+- **Untrusted clients (`ServerGuard`).** Every action is checked on the server. Task prompts (panels, crater ice, the water machine, the leak, the antenna, the console, greenhouse food) check that the player stands next to the prompt and ignore repeats faster than 0.25 seconds. Drilling is limited to 15 cores a minute per player, one a second at most, and a core is only accepted at the water machine once it could really have travelled there at 50 studs a second. Each hauler core pays the player who loaded it. A meteorite crater remembers who scanned it by account. Mission actions need a loaded save, and the lobby accepts none.
+- **Debug actions are Studio-only.** The team's F-keys (`DemoKeys`) and every debug action work only in Roblox Studio. The live game refuses them, even for the place owner.
+- **Redeem codes** live only on the server.
 - **Honest data.** The live label appears only when this server's DONKI query succeeded. Otherwise the archive is used and labelled as such.
-- **Client-owned movement.** Roblox gives the client control of its own character. The double jump, the jetpack thrust, running speed and shorter prompt holds are therefore applied on the client, using values the server sets as player attributes.
+- **Client-owned movement.** Roblox gives the client control of its own character. The double jump, the jetpack thrust, running speed and shorter prompt holds are therefore applied on the client, using values the server sets as player attributes. The map edge walls stop the buggy and the jetpack at the edge.
 
-### 4.11 Accessibility
+### 4.12 Accessibility
 
-- **Two languages.** The EN and ES buttons in the Settings panel (also reachable from the start menu) switch between English and Spanish at any time. The choice is sent with `SetLanguage`, and world prompts and signs update at once.
-- **Plain words.** Gameplay text is short (at most 8 words) and avoids jargon, and the tests enforce it.
-- **Icons with colour.** Meters show an icon, a label and a zone icon as well as the bar colour, and C.A.R.L. shows the icon of the tool a task needs.
-- **Touch layout.** On touch screens there are buttons for running, auto-run and the gear (boots and jetpack), placed near the jump button. The save pill and quest cards are positioned so they do not cover Roblox's own buttons.
+- **Two languages.** The EN and ES buttons in Settings (also reachable from the start menu) switch between English and Spanish at any time. The choice is saved, and world prompts and signs update at once.
+- **Plain words.** Gameplay text is short (at most 8 words) and avoids jargon, and the tests enforce it. A picture glossary explains nine key words.
+- **Helpers page.** Big text (1.25 times, live), Less motion, longer message times (1.5 or 2 times) and a Colour helper switch. The Colour helper is stored and sent to the client; no screen reads it yet, because meter zones and on/off buttons already show shapes.
+- **Time to read.** C.A.R.L.'s lines and quest notices stay long enough for a 7-year-old (about 8 seconds for 8 words), the clock pauses while the start menu is up, and the history list shows the last 10 lines again.
+- **Icons and words with colour.** Meters show an icon, a label and a zone icon as well as the bar colour; the ice line's lights always have words beside them; C.A.R.L. shows the icon of the tool a task needs.
+- **Phones.** On touch screens no text made by the game UI is smaller than 11 real pixels, touch-only devices lay out for a 560-unit height (about 1.3 times bigger), and the UI keeps out of the notch and rounded corners (`ScreenInsets.DeviceSafeInsets`). Buttons for running, auto-run and the gear sit near the jump button.
 - **Scaled UI.** The interface is designed for a 720-unit tall screen, and a `UIScale` maps it to the real screen height, so it keeps its proportions on phones and large screens.
+- **Gamepad.** Every box moves the selection to its safe button and gives it back afterwards.
 - **First person.** Roblox locks the mouse to the screen centre in first person. A hidden modal button frees it whenever a card or panel is open.
-- **Calm guidance.** Tips never block play, and fun facts and C.A.R.L.'s guidance beam can be switched off in Settings.
+- **Calm guidance.** Tips never block play, celebrations never block a tap, and fun facts and C.A.R.L.'s guidance beam can be switched off in Settings.
 
-### 4.12 Known technical limitations
+### 4.13 Known technical limitations
 
 - **Age gate.** New Roblox experiences open only to age-checked accounts aged 16 or older until they pass Roblox's evaluation. Kids in the target age range cannot play the public version yet.
 - **Roblox needs an account and an install.** It is not a browser game without sign-in, which is why the video and the Studio place file matter for judges.
 - **Phones.** The phone layout has not been checked on a real device yet.
-- **One base per server.** Gravity and lighting are global in Roblox, so each server runs one shared base.
+- **One base per server.** Gravity and lighting are global in Roblox, so each world server runs one base: its owner's.
 - **Meters are game units.** Air, food and radiation run from 0 to 100 so kids can read them. The real values are shown separately on the Sources panel.
 - **The Moon's signal delay is short.** At 1.3 seconds, the delay itself is not a problem on the Moon, so the game makes the antenna link the decision and compares it with Mars, where it would be 3 to 22 minutes.
 - **Sound in vacuum.** There is no sound in space. Outside, world sounds are soft and muffled, as if felt through the suit; radio beeps stay clear. Inside modules sounds are normal. Music is not part of the world.
 - **Live data needs HTTP.** Without "Allow HTTP Requests", or if DONKI does not answer within 15 seconds, the game uses the archive. A flare is only replayed as a false alarm once its particle status has had two days to settle.
-- **Saves in Studio.** In an unpublished place, saves live in memory and are lost when Play stops. Solo reserved servers work only in the published game.
+- **Saves and worlds in Studio.** In an unpublished place, saves live in memory and are lost when Play stops. Reserved servers and the "Join a friend" list work only in the published game.
 - **DataStore pace.** Roblox allows about one write per key every 6 seconds, so a "Save now" may wait a few seconds.
-- **Shared builds.** Builds in a server stand at the highest level any present player has built. When that player leaves, the structures drop to the level of the players still there.
-- **Local-only effects.** Some rewards, such as the opened observatory door and C.A.R.L.'s Earth skin, exist only on that player's client.
+- **A friends world closes with its owner.** When the owner leaves, the guests' saves are kept and they return to the menu.
+- **Local-only effects.** Some rewards, such as the opened observatory door and C.A.R.L.'s Earth skin, and the daily capsule's landing exist only on that player's client.
 - **No external links.** Roblox does not allow links that leave the experience, so sources are credited as text (for example "NASA / CCMC DONKI").
 - **Script size.** Roblox's 200,000-character limit on script source means large modules must stay split.
 
 ## 5. Development log
 
-How Space Base Odyssey was built during NASA Space Apps 2026 (14–15 November, Querétaro local event). It records what was decided, by whom, what was tested and how AI was used. Times are local (UTC−6).
+How Space Base Odyssey was built during NASA Space Apps 2026 (14–15 November, Querétaro local event), followed by the Stage 10 release and the overnight Stage 11 update on 16 November. It records what was decided, by whom, what was tested and how AI was used. Times are local (UTC−6).
 
 ### 5.1 Team and roles
 
@@ -1350,6 +1563,39 @@ Tested in Studio (assistant-driven):
 - Walking the hub to the lab and dome A to dome B never counted as outside.
 - No script errors.
 
+#### Sunday 15 November, afternoon and evening
+
+**Stage 10 follow-ups.** The full entries are in `DEVELOPMENT.md`.
+- **Cinematic start menu.** Eight live camera shots play behind the menu (`CinematicShots.luau`, `Cinematic.luau`, `tests/cinematic`), with a finished showcase base while nobody in the server has loaded a save. The same shots were cut into the 30-second trailer, with an original score synthesized in code.
+- **Suit air while driving.** Riding a vehicle now uses the resting rate, not the running rate.
+- **Storms and radiation.** Friends playing the published game in a crew of three reported storms "very, very often" and a radiation bar that barely moved. The Storm drill now repeats only after a 45-second break and at most 3 times a shift, staying safe counts per player, and storm dose is counted second by second while particles are here, so the meter climbs for anyone outside and does not move for a crew in the shelter.
+- **Private worlds.** A player pressed New game and landed in a friend's world. Every world now runs in its own reserved server, the base is always the owner's, and "With friends" admits up to 3 Roblox friends through "Join a friend" (`Worlds.luau`, `tests/worlds`).
+- **Learning achievements.** 13 science achievements tied to real events, 10 XP each, with a panel, toasts and optional Roblox badges (`Achievements.luau`, `tests/achievements`).
+- **One documentation file per language:** this file and `DOCUMENTACION.md`.
+
+#### Monday 16 November
+
+**Stage 10 release.** Private worlds, the storm and radiation fixes and the learning achievements were tested in Studio and published to the live experience. The place's server size was set to 4.
+
+**00:03 – Debug keys only in Studio.** The team's F-keys and every debug action now work only in Roblox Studio, never in the live game, not even for the place owner.
+
+**01:30 – Stage 11, wave 1: server, data and sound.** An audit of the live game, a UX audit of the first minutes and research on how kids learn led to an overnight overhaul, built by parallel AI agents with a review of each part.
+- **Safer server (`ServerGuard.luau`, `MissionData.GUARD`).** Task prompts check on the server that the player stands next to them. Drilling is limited to 15 cores a minute, and a core only counts at the water machine once it could really have travelled there. The lobby accepts no game action. A session lock stops the server-hop trick of spending credits in one world and keeping them in another, and Continue never wipes a slot. Settings are saved with the player. Dust now falls on one solar panel between missions too, and an empty suit brings the kid to the nearest pressurized room.
+- **Quests that teach (`Quests.luau`, `Quiz.luau`, `Glossary.luau`).** A first quest, "Hello, Moon!", pays a reward within about a minute. Steps show their number once and use the same words as the pads and the HUD. Ice master teaches that a bigger drill digs more by itself. C.A.R.L. praises the strategy that worked, asks a picture question after 11 quests, gives riddle-like treasure hints and suggests a break after 45 minutes.
+- **Sound and music (`AudioIds.luau`, `Audio.luau`).** The game had no sound. It now has 50: 6 music tracks, 3 stings and 41 effects, synthesized by the team's own code plus five CC0 mixes, with an honest helmet rule for sound in a vacuum.
+- **The ice line is a real tycoon.** Team report: the production line "is not visible and it does not even make money". Drills now dig 2, 3 or 4 ice a minute, the cubes ride one open belt into a taller silo, a new water plant melts the ice into water, the cargo robot build adds an air maker and the robot drives water or air to a supply port, in view. The server publishes the line's state and each client animates it. The silo is saved, and the drills keep working while the owner is away (at most 8 hours). From the cargo robot to the ship, machines earn 49% of what playing earns.
+
+**02:06 – Stage 11, wave 2: what the player sees.**
+- **The tycoon on screen.** "+N credits" pops, the "While you were away" card, signs over the silo and the water plant, the machines pill under the wallet, and C.A.R.L.'s beam no longer goes through walls.
+- **Start menu, saved settings and helpers.** No "Load game" (team request: it looked like uploading a file). Continue with a card, My worlds with Continue or Start over, a slow-load "Back to the start", themed teleport screens, settings that survive trips and rejoins, and a Helpers page (big text, less motion, message time, colour helper).
+- **Readable UI.** Reading times for a 7-year-old, merged and skipped lines, a history of C.A.R.L.'s last 10 lines, progress bars in the tracker, a big gold main quest card, paged achievements, C.A.R.L.'s question card and the picture glossary (`Reading.luau`, `tests/reading`).
+- **Celebrations, camera feel, phones and a safer map.** Confetti, flashes and level titles; stars one by one in the report and cause-and-effect chips; a small ground shake for nearby meteorites and an orange edge pulse for storms; a text floor and safe insets on phones; walls at the map edge; and two more ramps out of the ice crater (`Feel.luau`, `WorldSafety.luau`, `tests/feel`).
+- **Daily supply capsule and Moon Logbook.** One capsule per real day with a fixed 7-day calendar and no randomness, a forgiving count, cargo facts without numbers, suit stripes, and the Logbook with 27 entries and three milestones (`Daily.luau`, `DailyService.luau`, `tests/daily`).
+
+**02:10 – Stage 11 test fixes, version 0.11.0.** The text floor now applies only on touch screens, the day 7 label fits on one line, and the sparkles use Roblox's default soft particle, because the star icon has no 3D texture version.
+
+Tested in Studio (smoke test): the start menu without Load game, the world list, the lander spawn, the quest tracker, the daily capsule card, the ice line, and no console errors. All eleven Lune suites pass and the project builds with Rojo.
+
 ### 5.3 Decisions
 
 | Decision | Who decided | Why |
@@ -1379,19 +1625,35 @@ Tested in Studio (assistant-driven):
 | Open world with main quests; three save slots; habitat as base level | Team | Progress as you play, keep progress, coherent growth. |
 | Economy paced by a simulated player | Team, on AI recommendation | Stops players from unlocking everything in minutes. |
 | Roblox Studio as the engine | Team | Team skills; Roblox was used in earlier Space Apps editions. |
+| Private worlds: every world in its own server, the base is the owner's | Team | A player landed in a friend's world; kids must keep their own base. |
+| Debug keys only in Studio | Team | The live game must give no player shortcuts. |
+| No "Load game" on the start menu | Team | It looked like uploading a file; Continue and My worlds are clearer. |
+| An ice line you can watch, paying through a real robot trip | Team, on AI recommendation | The team found the tycoon invisible and unpaid; machines stay a helper (30 to 50% of what playing earns). |
+| Honest sound: muffled outside the helmet, no storm shake | Team, on AI recommendation | There is no sound in a vacuum and radiation pushes nothing. |
+| Daily capsule with a fixed calendar, no randomness, a forgiving count | Team, on AI recommendation | Reward coming back without loot boxes or pressure; playing earns more than waiting. |
+| Praise the strategy, short questions, a break reminder | Team, on AI recommendation | Learning research for young kids; nothing is lost for a wrong answer. |
 
 ### 5.4 Testing evidence
 
 | What | How | Result |
 | :--- | :--- | :--- |
-| Mission balance | `lune run tests/balance` | 671 checks pass. |
-| Economy pacing | `lune run tests/economy` | 221 checks pass (simulated kid timeline). |
-| Missions and the build-and-grow rules | `lune run tests/missions`, `lune run tests/base` | 693 and 1686 checks pass. |
-| Text length and translations | `lune run tests/localization` | 36091 checks pass: all keys in en and es, at most 8 words. |
+| Mission balance | `lune run tests/balance` | 716 checks pass. |
+| Economy pacing | `lune run tests/economy` | 234 checks pass (simulated kid timeline, machines at 49% of play income). |
+| Missions and the build-and-grow rules | `lune run tests/missions`, `lune run tests/base` | 729 and 2201 checks pass. |
+| Cinematic shots | `lune run tests/cinematic` | 189 checks pass. |
+| Private worlds and the session lock | `lune run tests/worlds` | 116 checks pass. |
+| Achievements, questions and glossary | `lune run tests/achievements` | 758 checks pass. |
+| Daily capsule and Moon Logbook | `lune run tests/daily` | 222 checks pass. |
+| Celebrations, crater exits, map edge | `lune run tests/feel` | 323 checks pass. |
+| Reading times | `lune run tests/reading` | 102 checks pass. |
+| Text length and translations | `lune run tests/localization` | 51496 checks pass: all keys in en and es, at most 8 words. |
+| Place builds | `rojo build default.project.json -o <temp>.rbxl` | Builds. |
 | Full mission in Roblox | Studio playtest driven by the assistant | 7 days, report reached, no script errors. |
 | Live NASA data | Studio playtest | 13 flares fetched; fetch time shown. |
 | Storm warning with antenna | Studio playtest, real key press | 45 s warning, flare labelled as a replay with its date. |
-| Playtest with people outside the team | Planned for Sunday morning | — |
+| Live radiation | Studio playtest (Stage 10 release) | Rose from 0.5 to 23.1 while standing outside during the training storm. |
+| Stage 11 smoke test | Studio playtest | Start menu without Load game, world list, lander spawn, quest tracker, daily capsule card, ice line, no console errors. |
+| Playtest with people outside the team | Still to do | — |
 
 ### 5.5 How AI was used
 
@@ -1404,6 +1666,7 @@ The rules call this "Super Intelligence (SI)".
 - Code generation in parallel agents, with integration reviews.
 - Automated tests and playtests in Studio.
 - Text drafts.
+- The audio synthesis scripts the team used to make the music and most effects, and the audit and research behind Stage 11.
 
 **What the team did:**
 - The concept and every design decision.
@@ -1417,6 +1680,8 @@ Every AI-assisted code file starts with a disclosure line. No AI-generated image
 
 - New Roblox experiences only open to age-checked 16+ accounts until they pass Roblox's evaluation. Kids in the target age range cannot play the public version yet.
 - The phone layout has not been checked on a real device yet.
+- Stage 11 has passed a Studio smoke test, not a full playtest with kids; the sounds, the daily capsule over several real days and a friends world with Stage 11 still need a live check.
+- The Colour helper is saved, but no screen reads it yet (meter zones and on/off buttons already show shapes).
 
 ## 6. Sources, credits and licenses
 
@@ -1838,7 +2103,7 @@ Space Base Odyssey is released under the **Apache License, Version 2.0** (Januar
 | Liability | Contributors are not liable for damages that come from using the work, unless the law requires it or they agreed to it in writing. |
 | Extra support | A redistributor may offer support, warranty or liability for a fee, but only on their own behalf. |
 
-The Apache 2.0 license covers the team's own code and text. Third-party material keeps its own terms: the Tabler Icons are under the MIT License, and the Earth image is public domain (see 6.2). Roblox Studio, Rojo and Lune are tools used to build and test the game. They are not redistributed with it.
+The Apache 2.0 license covers the team's own code and text. Third-party material keeps its own terms: the Tabler Icons are under the MIT License, the Earth image is public domain, and the four Freesound recordings mixed into five sound effects are CC0 1.0 (public domain) (see 6.2). The Credits screen says so as text: "Sounds: by the team, plus CC0 Freesound clips". Roblox Studio, Rojo and Lune are tools used to build and test the game. They are not redistributed with it.
 
 ### 6.4 Use of Super Intelligence
 
@@ -1855,7 +2120,8 @@ We used **Claude, by Anthropic**, working inside **Claude Code**, as an AI assis
 - **Design review.** An audit of the team's first design documents, plan drafts and independent critiques of those plans.
 - **Code generation.** Claude wrote most of the Luau code and the automated tests from the team's design, using parallel agents followed by integration reviews.
 - **Testing.** Automated tests run in Lune, and playtests in Roblox Studio driven by the assistant.
-- **Text drafts.** Claude drafted the in-game sentences in English and Spanish, the README, the development log and the submission texts.
+- **Text drafts.** Claude drafted the in-game sentences in English and Spanish, the README, the development log, this documentation, the educator pack and the submission texts.
+- **Audio scripts.** Claude helped write the team's Python scripts that synthesize the music and most sound effects. No generative audio model was used.
 
 #### What the team did
 

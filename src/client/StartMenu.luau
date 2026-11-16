@@ -744,7 +744,9 @@ function StartMenu.new(root: Frame, deps: Deps): StartMenuView
 			elseif info.used then
 				openChoice(slot) -- Stage 11 menu: Continue or Start over
 			else
-				openMode(slot, true, "slots") -- an empty world starts fresh
+				-- An empty card never wipes: the lobby's summary may be stale or unread (offline), and the
+				-- server already treats an empty slot record as a new explorer. Only Start over sends fresh.
+				openMode(slot, false, "slots")
 			end
 		end)
 		local stroke = button:FindFirstChildOfClass("UIStroke") :: UIStroke

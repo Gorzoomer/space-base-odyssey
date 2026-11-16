@@ -28,14 +28,19 @@ NASA Space Apps Challenge 2026, reto "Build a Junior Astronaut Mission Trainer".
   - [2.10 Equipo](#210-equipo)
   - [2.11 Habilidades](#211-habilidades)
   - [2.12 Créditos, XP, niveles y ritmo](#212-créditos-xp-niveles-y-ritmo)
-  - [2.13 Silo, taladros y robot de carga](#213-silo-taladros-y-robot-de-carga)
+  - [2.13 La línea de hielo: taladros, silo, planta de agua y robot de carga](#213-la-línea-de-hielo-taladros-silo-planta-de-agua-y-robot-de-carga)
   - [2.14 Vehículos y el garaje](#214-vehículos-y-el-garaje)
   - [2.15 Mascotas y vestidor](#215-mascotas-y-vestidor)
   - [2.16 Explorar la Luna](#216-explorar-la-luna)
   - [2.17 Secretos, coleccionables y códigos](#217-secretos-coleccionables-y-códigos)
   - [2.18 Módulos presurizados y tubos transitables](#218-módulos-presurizados-y-tubos-transitables)
-  - [2.19 Controles](#219-controles)
-  - [2.20 Teclas de depuración del equipo](#220-teclas-de-depuración-del-equipo)
+  - [2.19 La cápsula de suministros diaria](#219-la-cápsula-de-suministros-diaria)
+  - [2.20 La Bitácora lunar](#220-la-bitácora-lunar)
+  - [2.21 C.A.R.L. pregunta, y el glosario con imágenes](#221-carl-pregunta-y-el-glosario-con-imágenes)
+  - [2.22 Celebraciones](#222-celebraciones)
+  - [2.23 Sonido y música](#223-sonido-y-música)
+  - [2.24 Configuración y Ayudas](#224-configuración-y-ayudas)
+  - [2.25 Controles](#225-controles)
 - [3. Ciencia y datos de la NASA](#3-ciencia-y-datos-de-la-nasa)
   - [3.1 Objetivos de aprendizaje](#31-objetivos-de-aprendizaje)
   - [3.2 Reglas científicas que el juego respeta](#32-reglas-científicas-que-el-juego-respeta)
@@ -44,6 +49,7 @@ NASA Space Apps Challenge 2026, reto "Build a Junior Astronaut Mission Trainer".
   - [3.5 Números REAL y GAME](#35-números-real-y-game)
   - [3.6 Datos de agencias espaciales aliadas y otras referencias](#36-datos-de-agencias-espaciales-aliadas-y-otras-referencias)
   - [3.7 Referencias del mundo real detrás de los sitios, vehículos y equipo](#37-referencias-del-mundo-real-detrás-de-los-sitios-vehículos-y-equipo)
+  - [3.8 La ciencia en las funciones de la etapa 11](#38-la-ciencia-en-las-funciones-de-la-etapa-11)
 - [4. Diseño técnico](#4-diseño-técnico)
   - [4.1 Herramientas](#41-herramientas)
   - [4.2 Estructura del repositorio](#42-estructura-del-repositorio)
@@ -53,10 +59,11 @@ NASA Space Apps Challenge 2026, reto "Build a Junior Astronaut Mission Trainer".
   - [4.6 Remotos y acciones](#46-remotos-y-acciones)
   - [4.7 El sistema de guardado](#47-el-sistema-de-guardado)
   - [4.8 El mundo construido por código](#48-el-mundo-construido-por-código)
-  - [4.9 Pruebas](#49-pruebas)
-  - [4.10 Notas de rendimiento y seguridad](#410-notas-de-rendimiento-y-seguridad)
-  - [4.11 Accesibilidad](#411-accesibilidad)
-  - [4.12 Limitaciones técnicas conocidas](#412-limitaciones-técnicas-conocidas)
+  - [4.9 Proceso de audio](#49-proceso-de-audio)
+  - [4.10 Pruebas](#410-pruebas)
+  - [4.11 Notas de rendimiento y seguridad](#411-notas-de-rendimiento-y-seguridad)
+  - [4.12 Accesibilidad](#412-accesibilidad)
+  - [4.13 Limitaciones técnicas conocidas](#413-limitaciones-técnicas-conocidas)
 - [5. Registro de desarrollo](#5-registro-de-desarrollo)
   - [5.1 Equipo y roles](#51-equipo-y-roles)
   - [5.2 Cronología](#52-cronología)
@@ -106,7 +113,7 @@ Los tiempos de aviso, la duración del turno y los medidores de 0 a 100 son valo
 
 ### Resumen general del proyecto
 
-Space Base Odyssey es un juego cooperativo de Roblox en el que niñas y niños de 7 a 12 años empiezan en el pequeño módulo de aterrizaje que los llevó al polo sur de la Luna y hacen crecer una base desde cero. Cargan cajas de piezas desde el módulo de aterrizaje y arman cada edificio paso a paso con una llave: el hábitat, los paneles solares, un invernadero, una antena, un refugio contra tormentas hecho de regolito y, más adelante, un laboratorio, taladros de hielo, un garaje con un carrito lunar y un camión de hielo, una plataforma de aterrizaje y una nave para la siguiente misión, rumbo a Marte. Un mundo abierto guiado por 21 aventuras principales y 9 aventuras extra enseña un sistema a la vez, y el hábitat crece a lo largo de cinco niveles de base, desde el campamento de llegada hasta el puerto espacial. Las tripulaciones también juegan misiones de siete días en las que, cada mañana, reparten una cantidad limitada de energía entre el soporte vital, la comida y la ciencia. Las tormentas solares reproducen llamaradas reales de la base de datos DONKI de la NASA, etiquetadas con su fecha real, incluidas falsas alarmas reales en las que una llamarada enorme no trajo ninguna tormenta de partículas. Cada número del mundo real tiene su fuente citada, y nadie sale lastimado nunca: una misión que sale mal termina antes de tiempo, de forma segura, con un reporte que explica por qué.
+Space Base Odyssey es un juego cooperativo de Roblox en el que niñas y niños de 7 a 12 años empiezan en el pequeño módulo de aterrizaje que los llevó al polo sur de la Luna y hacen crecer una base desde cero. Cargan cajas de piezas desde el módulo de aterrizaje y arman cada edificio paso a paso con una llave: el hábitat, los paneles solares, un invernadero, una antena, un refugio contra tormentas hecho de regolito y, más adelante, un laboratorio, taladros de hielo, un garaje con un carrito lunar y un camión de hielo, una plataforma de aterrizaje y una nave para la siguiente misión, rumbo a Marte. Una línea de hielo que se ve funcionar convierte el hielo del cráter en agua y aire. Un mundo abierto guiado por 22 aventuras principales y 9 aventuras extra enseña un sistema a la vez, y el hábitat crece a lo largo de cinco niveles de base, desde el campamento de llegada hasta el puerto espacial. Las tripulaciones también juegan misiones de siete días en las que, cada mañana, reparten una cantidad limitada de energía entre el soporte vital, la comida y la ciencia. Las tormentas solares reproducen llamaradas reales de la base de datos DONKI de la NASA, etiquetadas con su fecha real, incluidas falsas alarmas reales en las que una llamarada enorme no trajo ninguna tormenta de partículas. Cada número del mundo real tiene su fuente citada, y nadie sale lastimado nunca: una misión que sale mal termina antes de tiempo, de forma segura, con un reporte que explica por qué.
 
 ### Beneficios para niñas y niños
 
@@ -129,11 +136,13 @@ Los roles se reparten así: un integrante trabaja en Roblox Studio con un asiste
 
 ### Estado actual
 
-- **La etapa 10 está terminada.** Añadió pulido a partir de las pruebas de juego: cuadros de texto más pequeños, un panel de signos vitales siempre visible, avisos de aventuras, guardado visible y tubos transitables. Dos correcciones posteriores alinearon el domo A del invernadero con el tubo del núcleo.
-- **Se puede jugar en Roblox Studio.** Se ejecuta desde el repositorio con Rojo (`rojo serve`, luego Play), con las solicitudes HTTP permitidas para los datos en vivo de la NASA.
-- **Aún no está publicado.** El lugar todavía no se ha publicado en Roblox, así que las partidas guardadas en una prueba de Studio solo viven en memoria ("Guardado solo para esta prueba"). Las partidas guardadas reales usan los DataStores de Roblox una vez que el juego se publique.
+- **La etapa 11 está terminada (compilación `0.11.0-stage11`).** Una renovación hecha durante la noche del 16 de noviembre de 2026: sonido y música con una regla honesta del casco, una línea de hielo tipo tycoon que se ve funcionar (taladros, banda, silo, planta de agua, robot de carga), un servidor más seguro con candados en las partidas guardadas, aventuras que enseñan (un premio en el primer minuto, preguntas con imagen de C.A.R.L., un glosario con imágenes), un menú de inicio nuevo sin "Cargar juego", una configuración que acompaña al jugador y una página de Ayudas, una cápsula de suministros diaria y la Bitácora lunar, celebraciones y un mapa más seguro. Pasó una prueba rápida en Studio: menú de inicio sin Cargar juego, la lista de mundos, la aparición en la nave, el seguimiento de aventuras, la tarjeta de la cápsula diaria, la línea de hielo y ningún error en la consola.
+- **Publicado.** La versión de la etapa 10 (mundos privados, las correcciones de tormentas y radiación, los logros de aprendizaje) se publicó en la experiencia en vivo el 16 de noviembre de 2026, con servidores de 4 jugadores. La etapa 11 llega al juego en vivo cuando el equipo la publique. Las partidas del juego en vivo se guardan con los DataStores de Roblox.
+- **Se puede jugar en Roblox Studio.** Se ejecuta desde el repositorio con Rojo (`rojo serve`, luego Play), con las solicitudes HTTP permitidas para los datos en vivo de la NASA. En un lugar de Studio sin publicar, las partidas solo viven en memoria ("Guardado solo para esta prueba").
 - **Limitación por verificación de edad.** Las experiencias nuevas de Roblox solo están abiertas para cuentas con verificación de edad de 16 años o más hasta que aprueban la evaluación de Roblox para todas las edades. Hasta entonces, las niñas y los niños del rango de edad objetivo no pueden jugar la versión pública. El jurado puede ver el video de la partida completa o ejecutar el juego en Roblox Studio.
-- **Pendiente:** pruebas de juego con personas ajenas al equipo, una revisión del diseño para teléfono en un dispositivo real y el lanzamiento público.
+- **Para docentes.** Un paquete breve para docentes, con tres planes de clase de 20 minutos, está en `docs-public/GUIA_DOCENTE.md` (español) y `docs-public/EDUCATOR_GUIDE.md` (inglés).
+- **Pendiente:** pruebas de juego con personas ajenas al equipo y una revisión del diseño para teléfono en un dispositivo real.
+- **Por agregar antes de la entrega:** el enlace al video de demostración de 30 segundos (público, sin inicio de sesión, sin menores, sin logotipos de la NASA), el enlace al video de la partida completa, de 4 a 6 capturas de pantalla para la página del proyecto y el archivo de lugar congelado `game.rbxl` en la raíz del repositorio (todavía no está en el repositorio; los archivos de trabajo en `place/` están excluidos por git). También hay que revisar que el video de demostración no tenga imágenes, video ni voces generados por IA: si se agrega alguno, necesita una marca de agua visible.
 
 ### Enlaces
 
@@ -143,118 +152,145 @@ Los roles se reparten así: un integrante trabaja en Roblox Studio con un asiste
 
 ### Evidencia para el jurado
 
-Las pruebas automatizadas se ejecutan fuera de Roblox con Lune, porque las reglas de la misión viven en un módulo puro sin código de Roblox. Todas pasan al momento de escribir este documento.
+Las pruebas automatizadas se ejecutan fuera de Roblox con Lune, porque las reglas del juego viven en módulos puros sin código de Roblox. Los once conjuntos pasan al momento de escribir este documento (16 de noviembre de 2026, compilación `0.11.0-stage11`).
 
 | Qué se verifica | Comando | Resultado |
 | :--- | :--- | :--- |
-| Balance de la misión: una tripulación que nunca reacciona aun así llega al menos al día 5, ningún plan de energía fijo obtiene 3 estrellas, una tripulación que reacciona a los eventos sí puede, y recortar el invernadero se nota después como menos comida | `lune run tests/balance` | 671 aprobadas, 0 fallidas |
-| Misiones de entrenamiento y capítulos de la historia | `lune run tests/missions` | 693 aprobadas, 0 fallidas |
-| Reglas de construcción y crecimiento: pasos de construcción, niveles de base, habilidades, mascotas, taladros, equipo, aventuras | `lune run tests/base` | 1686 aprobadas, 0 fallidas |
-| Ritmo de la economía, con un niño típico simulado | `lune run tests/economy` | 221 aprobadas, 0 fallidas |
-| Cada clave de texto existe en inglés y en español, con un máximo de 8 palabras | `lune run tests/localization` | 36091 aprobadas, 0 fallidas |
+| Balance de la misión: una tripulación que nunca reacciona aun así llega al menos al día 5, ningún plan de energía fijo obtiene 3 estrellas, una tripulación que reacciona a los eventos sí puede, recortar el invernadero se nota después como menos comida, la dosis de tormenta sube en vivo y nunca baja | `lune run tests/balance` | 716 aprobadas, 0 fallidas |
+| Misiones de entrenamiento y capítulos de la historia, límites del hielo contra cada velocidad permitida, pagos del camión de hielo, el polvo del mundo abierto | `lune run tests/missions` | 729 aprobadas, 0 fallidas |
+| Reglas de construcción y crecimiento: pasos de construcción, niveles de base, habilidades, mascotas, taladros, equipo, aventuras, la línea de hielo, sus letreros y su guardado | `lune run tests/base` | 2201 aprobadas, 0 fallidas |
+| Ritmo de la economía con un niño típico simulado; las máquinas ganan del 30 al 50% de lo que gana jugar | `lune run tests/economy` | 234 aprobadas, 0 fallidas |
+| Las tomas de cámara del menú de inicio | `lune run tests/cinematic` | 189 aprobadas, 0 fallidas |
+| Mundos privados (quién puede entrar, de quién es la base), el candado de sesión, la configuración guardada | `lune run tests/worlds` | 116 aprobadas, 0 fallidas |
+| Logros de aprendizaje, el banco de preguntas de C.A.R.L. y el glosario con imágenes | `lune run tests/achievements` | 758 aprobadas, 0 fallidas |
+| La cápsula de suministros diaria y la Bitácora lunar | `lune run tests/daily` | 222 aprobadas, 0 fallidas |
+| Celebraciones, sacudida de cámara, fichas del reporte, salidas del cráter y el borde del mapa | `lune run tests/feel` | 323 aprobadas, 0 fallidas |
+| Tiempos de lectura y la cola de mensajes de C.A.R.L. | `lune run tests/reading` | 102 aprobadas, 0 fallidas |
+| Cada clave de texto existe en inglés y en español, con un máximo de 8 palabras | `lune run tests/localization` | 51496 aprobadas, 0 fallidas |
 
-Las pruebas de juego en Roblox Studio cubrieron cada etapa: una misión completa de 7 días que llega al reporte sin errores de script, la consulta en vivo a DONKI (13 llamaradas devueltas en la prueba de la etapa 2, con la hora de la consulta visible), el aviso de tormenta de 45 segundos con la antena enlazada y la llamarada etiquetada como repetición con su fecha real, y las funciones de la etapa 10 (panel de signos vitales, tarjetas de aventuras, guardado y tubos transitables). Siete rondas de comentarios de las pruebas de juego del equipo, y lo que cambió con cada una, están registradas en `DEVELOPMENT.md`.
+Las pruebas de juego en Roblox Studio cubrieron cada etapa: una misión completa de 7 días que llega al reporte sin errores de script, la consulta en vivo a DONKI (13 llamaradas devueltas en la prueba de la etapa 2, con la hora de la consulta visible), el aviso de tormenta de 45 segundos con la antena enlazada y la llamarada etiquetada como repetición con su fecha real, las funciones de la etapa 10 (panel de signos vitales, tarjetas de aventuras, guardado, tubos transitables, mundos privados, radiación en vivo durante una tormenta) y la prueba rápida de la etapa 11 (menú de inicio, lista de mundos, aparición en la nave, seguimiento de aventuras, tarjeta de la cápsula diaria, línea de hielo, sin errores en la consola). Siete rondas de comentarios de las pruebas de juego del equipo, un reporte de amigos que jugaron la versión en vivo y lo que cambió con cada uno están registrados en `DEVELOPMENT.md`.
 
 ## 2. Cómo jugar
 
-Esta sección acompaña a un jugador por el juego actual (Etapa 10), desde el menú de inicio hasta la nave a Marte. Cada número proviene de `src/shared/MissionData.luau` (valores de ajuste GAME, salvo los marcados como REAL) o de la lista de aventuras en `src/shared/Quests.luau`. Los nombres que ve el jugador son los textos en español de `src/shared/Localization.luau`.
+Esta sección acompaña a un jugador por el juego actual (Etapa 11, compilación `0.11.0-stage11`), desde el menú de inicio hasta la nave a Marte. Cada número proviene de `src/shared/MissionData.luau` (valores de ajuste GAME, salvo los marcados como REAL) o de la lista de aventuras en `src/shared/Quests.luau`. Los nombres que ve el jugador son los textos en español de `src/shared/Localization.luau`.
 
 ### 2.1 El menú de inicio
 
-La primera pantalla muestra un campo de estrellas, la Tierra girando (mapa Blue Marble de la NASA) y el resplandor de un amanecer en el horizonte de la Luna. El jugador no tiene personaje hasta que se carga un mundo. Los botones son:
+La primera pantalla reproduce tomas de cámara en vivo de la base detrás del título y los botones. El jugador no tiene personaje hasta que se carga un mundo. Ya no existe el botón "Cargar juego": al equipo le pareció que sonaba a subir un archivo. Los botones son:
 
 | Botón | Qué hace |
 | :--- | :--- |
-| Continuar | Carga el mundo jugado la última vez. |
-| Juego nuevo | Elige uno de 3 mundos. Si el mundo ya está en uso, primero pregunta: "¿Empezar este mundo otra vez?" |
-| Cargar juego | Muestra las 3 tarjetas de mundo: nivel de base, nivel del jugador, créditos, cuándo se guardó por última vez y cómo se jugó. |
-| Configuración | Abre el panel de Configuración (idioma, volúmenes, opciones de C.A.R.L., códigos, "Guardar ahora"). |
-| Créditos | El equipo, el evento, los créditos de datos e imágenes y la declaración de uso de IA, todo como texto. |
+| Continuar | Carga el mundo jugado la última vez. Debajo, una tarjeta dice qué va a cargar: el mundo y cómo se jugó, el nivel de base, el nivel del jugador y cuándo se guardó por última vez. Si todavía no hay mundo, dice "Aún no hay un mundo guardado". |
+| Juego nuevo | Abre la lista de los 3 mundos del jugador. En cuanto el jugador tiene un mundo, el botón dice **Mis mundos**. |
+| Unirse a un amigo | Muestra a los amigos de Roblox del jugador que tienen abierto un mundo con amigos: nombre, nivel de base y "n de 4 jugadores". |
+| Configuración | Abre el panel de Configuración con sus páginas Juego y Ayudas (sección 2.24). |
+| Créditos | El equipo, el evento, los créditos de datos, imágenes y sonidos, y la declaración de uso de IA, todo como texto. |
 
-Después de elegir un mundo, el jugador decide cómo jugar:
+**La lista de mundos.** Una tarjeta vacía empieza un mundo nuevo. Una tarjeta usada abre un cuadro con **Continuar** y **Empezar de nuevo**. Empezar de nuevo vuelve a preguntar ("¿Empezar este mundo otra vez?", "Tu base de este mundo se borrará."), y la opción segura, "No, déjalo así", regresa al cuadro. Solo Empezar de nuevo reemplaza un mundo. Continuar nunca borra uno.
 
-- **Solo yo** (individual): "Tu propia Luna, solo para ti". En el juego publicado, el jugador pasa a un servidor reservado solo para él.
-- **Con amigos**: "Tus amigos pueden unirse a tu base". El mundo se carga en el servidor actual y los amigos entran con el botón Unirse de Roblox. Las estructuras son compartidas: cada una se muestra en el nivel más alto que haya construido cualquiera de los jugadores presentes. Los créditos, la XP, las habilidades, el equipo y las mascotas son de cada jugador.
+**Cómo jugar.** Después de elegir un mundo, el jugador decide:
+
+- **Solo yo**: "Tu propia Luna, solo para ti". Solo el dueño puede quedarse en ese mundo.
+- **Con amigos**: "Tú y hasta 3 amigos". El dueño y hasta 3 amigos de Roblox, 4 jugadores como máximo. Un amigo elige el mundo en Unirse a un amigo y luego decide cuál de sus propias partidas lleva ("Elige tu partida de explorador"). Una partida vacía empieza un explorador nuevo, y nada se borra desde esa pantalla.
+
+Cada mundo corre en su propio servidor reservado, y el servidor público es solo un vestíbulo para el menú de inicio. La base (construcciones, construcciones en curso y el silo) siempre es del dueño del mundo. Los invitados conservan en su propia partida sus créditos, XP, nivel, habilidades, equipo, herramientas, mascotas, vestidor, aventuras, coleccionables y misiones, y la base propia de un invitado nunca cambia en el mundo de un amigo. Cuando el dueño se va, se guarda la partida de cada invitado y todos vuelven al menú: "Tu amigo se fue y su base cerró."
+
+**El viaje.** Una pantalla de teletransporte con el tema del juego ("Volando a tu propia Luna...") se funde con la pantalla de espera al llegar. Si la base tarda en cargar, a los 40 segundos la pantalla de espera dice "Tu base aún se prepara. Espera un poco." y ofrece "Volver al inicio", mientras sigue esperando. Cada cuadro pone la selección del control de videojuegos en su botón seguro.
 
 **El guardado es automático y gratuito.** Las partidas se guardan con DataStores de Roblox, que no tienen costo. El menú de inicio y la Configuración dicen "Tu juego se guarda solo". Una pequeña etiqueta "Juego guardado" aparece después de un guardado automático (como máximo una vez cada 30 segundos) y después de un guardado manual. La Configuración también tiene un botón **Guardar ahora**, que el servidor verifica y limita en frecuencia. Cuando las partidas solo pueden vivir en memoria (por ejemplo, en un lugar no publicado en Studio), la etiqueta dice "Guardado solo para esta prueba".
 
-**Fondo cinematográfico.** Detrás del título y los botones, el menú reproduce en bucle tomas de cámara en vivo de la base: la Tierra saliendo detrás del hábitat mientras el Sol se acerca a ella, un primer plano de las plantas del invernadero, el tubo del invernadero, los taladros de hielo en el cráter, la antena, la base desde el aire, la nave y una toma que se aleja. Mientras nadie en el servidor ha cargado un mundo, la base se muestra terminada para estas tomas; en cuanto carga el mundo del jugador, vuelve a su base real. Las mismas tomas se usaron para el tráiler de 30 segundos.
+**Fondo cinematográfico.** Detrás del título y los botones, el menú reproduce en bucle tomas de cámara en vivo de la base: la Tierra saliendo detrás del hábitat mientras el Sol se acerca a ella, un primer plano de las plantas del invernadero, el tubo del invernadero, los taladros de hielo en el cráter, la antena, la base desde el aire, la nave y una toma que se aleja. En el vestíbulo nadie ha cargado un mundo, así que la base se muestra terminada para estas tomas. Las mismas tomas se usaron para el tráiler de 30 segundos.
 
 ### 2.2 El aterrizaje
 
-El jugador aparece dentro de la **nave de llegada**, el único refugio al inicio. Afuera hay plataformas de construcción brillantes con hologramas de la futura base. El hábitat es lo primero que se construye. C.A.R.L. saluda al jugador: "¡Aterrizaste! Ahora construyamos nuestra base lunar."
+El jugador aparece dentro de la **nave de llegada**, el único refugio al inicio. Afuera hay plataformas de construcción brillantes con hologramas de la futura base. C.A.R.L. saluda al jugador: "¡Aterrizaste! Ahora construyamos nuestra base lunar."
+
+La primera aventura, **¡Hola, Luna!**, da un premio en más o menos un minuto después de aterrizar: empezar el hábitat gratis en su plataforma, tomar una caja de piezas en la nave y traerla de vuelta (10 créditos y 10 XP). Cuando hay una cápsula de suministros diaria esperando, cae junto a la nave unos segundos después (sección 2.19).
 
 ### 2.3 La pantalla (HUD)
 
 | Parte | Dónde | Qué muestra |
 | :--- | :--- | :--- |
-| Seguimiento de aventuras | Columna izquierda, arriba | La aventura principal actual y las aventuras extra abiertas, cada paso con "tienes / necesitas". Parpadea cuando algo cambia. |
-| Panel de signos vitales | Columna izquierda | Siempre visible durante el juego: aire del traje, comida fresca del invernadero (lista, una cuenta regresiva o la energía extra) y hielo del silo (cuando ya hay un taladro). |
-| Cartera | Columna izquierda | Créditos (con un aviso "+N"), nivel del jugador con una barra de XP y el nivel de base. |
+| Seguimiento de aventuras | Columna izquierda, arriba | La aventura principal actual y las aventuras extra abiertas. Los pasos que se cuentan muestran "tienes / necesitas" ("Lleva hielo a la base  0/4") con una barra de avance delgada; los pasos de construcción y de herramientas dicen el nivel ("Mejora la antena al nivel 2"). Las palabras del glosario se ven doradas y subrayadas (sección 2.21). Parpadea cuando algo cambia. |
+| Panel de signos vitales | Columna izquierda | Siempre visible durante el juego: aire del traje, comida fresca del invernadero (lista, una cuenta regresiva o la energía extra) y hielo del silo (cuando ya hay un taladro; atenuado en el mundo de un amigo). |
+| Cartera | Columna izquierda | Créditos (con un aviso "+N"), nivel del jugador con una barra de XP y el nivel de base. Mientras las máquinas del jugador ganan, una etiqueta delgada debajo dice "Máquinas: +N créditos por minuto". |
 | Medidores | Columna izquierda, durante un turno | Aire, comida, radiación, agua y "Por enviar" (datos que la antena todavía no envía). |
-| Globo de C.A.R.L. | Arriba al centro, al caminar | Los mensajes de C.A.R.L. Una instrucción que necesita una herramienta muestra el ícono de esa herramienta. |
-| Avisos de aventuras | Lado derecho | "¡Nueva aventura!", "¡Nueva aventura extra!", "Listo: (paso)", "¡Aventura completa!" con los créditos y la XP ganados. Los pasos que ya estaban hechos al abrirse una aventura aparecen como "Ya hecho". Los avisos esperan mientras hay un panel de pantalla completa abierto. |
-| Barra superior | Arriba a la derecha | Botones de Configuración, Misiones y Vestidor. |
+| Globo de C.A.R.L. | Arriba al centro, al caminar | Los mensajes de C.A.R.L. Una instrucción que necesita una herramienta muestra el ícono de esa herramienta. Un pequeño botón para repetir, junto al globo, abre "Lo que dijo C.A.R.L.". Mientras el Laboratorio o el Vestidor están abiertos, el globo baja al centro inferior para que sus respuestas se vean. |
+| Avisos de aventuras | Lado derecho | "¡Nueva aventura!", "¡Nueva aventura extra!", "Listo: (paso)", "¡Aventura completa!" con los créditos y la XP ganados. Una aventura principal terminada frente al jugador muestra una tarjeta dorada más grande: "¡Aventura principal completa! ¡Muy bien!". Los pasos que ya estaban hechos al abrirse una aventura aparecen como "Ya hecho". Los avisos esperan mientras hay un panel de pantalla completa abierto. |
+| Barra superior | Arriba a la derecha | Botones de Configuración, Misiones, Vestidor y Logros. |
 | Etiquetas inferiores | Sobre la barra de herramientas de Roblox | "Llevas hielo", "Llevas piezas", "Avanzar solo (X)", la barra del tanque de gas (si se tiene equipo) y un aviso que late, "¡Poco aire! Ve adentro", cuando el traje tiene poco aire afuera. |
 | Letreros de obra | Sobre las plataformas de construcción | "Paso 1/2" y lo que se necesita después. |
+| Letreros de la línea de hielo | Sobre el silo y la planta de agua | Hielo del silo ("Hielo 12/20"), hielo por minuto, créditos por minuto y una luz de estado con palabras al lado (sección 2.13). |
+
+En los teléfonos, la interfaz del juego se aleja del notch y de las esquinas redondeadas, y en pantallas táctiles ningún texto del juego mide menos de 11 píxeles reales.
 
 ### 2.4 C.A.R.L., el robot guía
 
 C.A.R.L. es un pequeño rover con orugas que avanza junto al jugador. La Luna no tiene aire, así que no tiene hélices: rueda sobre orugas y da saltitos con pequeños propulsores de gas cuando el jugador salta.
 
 - **Colores:** cian cuando todo está bien; naranja cuando queda poco aire en el traje, cuando una tarea es urgente o cuando hay aviso de tormenta; rojo mientras las partículas de la tormenta están presentes.
-- **Haz guía:** un haz cian apunta exactamente adonde lo envían sus palabras: la bodega de carga de la nave para las piezas, la plataforma de construcción para armar, un panel con polvo para limpiarlo, la consola de misiones para un paso de misión, el Laboratorio para habilidades o equipo. Fuera de las misiones, sigue el paso actual de la aventura.
+- **Haz guía:** un haz cian apunta exactamente adonde lo envían sus palabras: la bodega de carga de la nave para las piezas, la plataforma de construcción para armar, un panel con polvo para limpiarlo, la consola de misiones para un paso de misión, el Laboratorio para habilidades o equipo. Fuera de las misiones, sigue el paso actual de la aventura. El haz no atraviesa paredes: si el camino está bloqueado, termina en la puerta más cercana que C.A.R.L. pueda ver, y un marcador cian flota sobre el lugar. Solo apunta al silo cuando el silo es del jugador y tiene al menos 5 de hielo (una carga del robot de carga); si no, apunta al hielo del cráter.
 - **Haz de tormenta:** un haz naranja apunta a la puerta del refugio hasta que el jugador está adentro.
-- **Datos curiosos:** unos 60 datos verificados aparecen al azar y sin repetirse.
-- **Rescate:** si se acaba el aire del traje, C.A.R.L. lleva al astronauta de regreso adentro con una recarga parcial. Nadie muere.
+- **Tiempo para leer:** una frase se queda 2 segundos más 0.75 segundos por palabra (unos 8 segundos para una frase de 8 palabras), nunca menos de 4 segundos y como máximo 12 (16 para los datos curiosos). La ayuda Tiempo de mensajes la deja 1.5 o 2 veces más. Cuando llegan muchas frases a la vez, las repetidas se juntan y las menos útiles no se muestran; las negativas, las felicitaciones, las preguntas y las pistas de tesoros duran más.
+- **Historial:** el botón para repetir abre "Lo que dijo C.A.R.L.": las últimas 10 frases, de la más nueva a la más vieja, en el idioma actual. Ahí también están las frases que no se alcanzaron a mostrar.
+- **Felicita la estrategia:** al terminar una aventura principal, C.A.R.L. dice qué funcionó ("Más paneles, más energía. ¡Buena construcción!"), no solo el premio.
+- **Puntos de habilidad:** "Tienes puntos de habilidad. ¡Construye el Laboratorio!" cuando la base ya es suficientemente grande, y "El Laboratorio está listo. ¡Usa tus puntos!" cuando ya existe.
+- **Pistas de tesoros:** mientras la aventura Tesoros escondidos está abierta y pasan 5 minutos sin encontrar nada nuevo, C.A.R.L. da una pista tipo adivinanza de un secreto que falta ("¡Algo se esconde debajo de tu hábitat!"). Las pistas nombran lugares conocidos, nunca puntos cardinales, y nunca llegan durante una misión.
+- **Descansos:** después de 45 minutos de juego, la siguiente aventura terminada va seguida, una sola vez, de "Base a salvo. ¡Buen momento para descansar!". No hay rachas ni relojes que castiguen por irse.
+- **Preguntas:** después de algunas aventuras, C.A.R.L. hace una pregunta con imagen (sección 2.21).
+- **Datos curiosos:** 88 datos verificados aparecen al azar y sin repetirse.
+- **Rescate:** si se acaba el aire del traje, C.A.R.L. lleva al astronauta al cuarto presurizado más cercano que ya esté construido, con una recarga parcial. Nadie muere.
 
 Los datos curiosos y la guía se pueden desactivar por separado en la Configuración.
 
 ### 2.5 Mundo abierto y aventuras
 
-No hay un menú de misiones al inicio. El juego es un mundo abierto guiado por una serie ordenada de **21 aventuras principales**. En el camino se abren **9 aventuras extra**. Una aventura se completa cuando todos sus pasos están hechos, y sus créditos y su XP se pagan una sola vez. Los pasos de hielo, limpieza, silo, meteoritos, comida, manejo y visitas cuentan solo lo que ocurre mientras la aventura está activa. Los escaneos, las habilidades y los coleccionables cuentan los totales acumulados del jugador.
+No hay un menú de misiones al inicio. El juego es un mundo abierto guiado por una serie ordenada de **22 aventuras principales**. En el camino se abren **9 aventuras extra**. Una aventura se completa cuando todos sus pasos están hechos, y sus créditos y su XP se pagan una sola vez. Los pasos de hielo, silo, meteoritos, comida, manejo y visitas cuentan solo lo que ocurre mientras la aventura está activa. Los escaneos, las habilidades, los coleccionables y los paneles limpiados cuentan los totales acumulados del jugador, así que un niño que ya limpió un panel nunca se queda esperando. Las aventuras usan las mismas palabras que las plataformas y el HUD: "Mejora", "nivel de base", "caja de piezas", "carrito lunar".
 
 #### Aventuras principales
 
 | # | Nivel de base | Título | Pasos | Premio |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | 1 | Construye tu casa en la Luna | Construye el hábitat. Construye un panel solar. Termina la misión Primeros pasos. | 10 créditos, 20 XP |
-| 2 | 1 | Cultiva tu propia comida | Construye el invernadero. Termina la misión Reparte la energía. Come comida fresca: 1. | 10, 20 |
-| 3 | 1 | Habla con la Tierra | Construye la antena. Termina la misión Tareas de la base. Limpia paneles con polvo: 1. | 10, 20 |
-| 4 | 1 | Prepárate para las tormentas | Construye el refugio. Termina la misión Simulacro de tormenta. | 15, 25 |
-| 5 | 1 | El hielo es un tesoro | Ve al cráter de hielo. Lleva hielo a la base: 4. | 10, 20 |
-| 6 | 1 | Más energía para la base | Construye un segundo panel solar. Termina el Capítulo 1: Nuevo hogar. | 20, 30 |
-| 7 | 2 | Haz crecer tu base | Sube el hábitat al nivel 2. Construye el Laboratorio. Entra al Laboratorio. | 20, 30 |
-| 8 | 2 | Aprende habilidades nuevas | Aprende habilidades en el Laboratorio: 1. Mejora tu taladro al nivel 2. | 15, 25 |
-| 9 | 2 | Taladros que trabajan solos | Construye el taladro de hielo 1. Recoge hielo del silo: 2. | 20, 30 |
-| 10 | 2 | Temporada de tormentas | Construye un tercer panel solar. Termina el Capítulo 2: Temporada de tormentas. | 25, 40 |
-| 11 | 2 | Explora la Luna | Escanea lugares para explorar: 2. Escanea cráteres de meteoritos: 1. | 25, 40 |
-| 12 | 2 | Un jardín más grande | Construye el segundo domo del invernadero. Entra al invernadero. Come comida fresca: 3. | 20, 30 |
-| 13 | 3 | Una base minera | Sube el hábitat al nivel 3. Construye el taladro de hielo 2. Construye el robot de carga. | 30, 50 |
-| 14 | 3 | Ruedas en la Luna | Construye el garaje de rovers. Ve al garaje. Maneja un auto lunar. | 30, 50 |
-| 15 | 3 | Cuando algo se rompe | Termina el Capítulo 3: Algo se rompe. Sube la antena al nivel 2. | 40, 60 |
-| 16 | 3 | Equípate | Compra las botas de aire en el Laboratorio. Aprende habilidades: 4 en total. | 30, 50 |
-| 17 | 4 | Base de exploradores | Sube el hábitat al nivel 4. Construye la cochera del camión de hielo. Lleva hielo a la base: 8. | 50, 80 |
-| 18 | 4 | Un láser a la Tierra | Sube la antena al nivel 3. Construye el taladro de hielo 3. | 50, 80 |
-| 19 | 4 | Una plataforma para naves | Construye la plataforma de aterrizaje. Escanea cráteres de meteoritos: 3. | 60, 100 |
-| 20 | 5 | Puerto espacial lunar | Sube el hábitat al nivel 5. Sube el taladro de hielo 2 al nivel 3. | 80, 120 |
-| 21 | 5 | Próxima parada: Marte | Construye la nave a Marte. | 100, 150 |
+| 1 | 1 | ¡Hola, Luna! | Empieza el hábitat, trae una caja de piezas. | 10 créditos, 10 XP |
+| 2 | 1 | Construye tu casa en la Luna | Construye el hábitat. Construye los paneles solares. Termina la misión Primeros pasos. | 10, 20 |
+| 3 | 1 | Cultiva tu propia comida | Construye el invernadero. Termina la misión Reparte la energía. Come comida fresca: 1. | 10, 20 |
+| 4 | 1 | Habla con la Tierra | Construye la antena. Termina la misión Tareas de la base. Limpia un panel solar con polvo: 1. | 10, 20 |
+| 5 | 1 | Prepárate para las tormentas | Construye el refugio. Termina la misión Simulacro de tormenta. | 15, 25 |
+| 6 | 1 | El hielo es un tesoro | Ve al cráter de hielo. Lleva hielo a la base: 4. | 10, 20 |
+| 7 | 1 | Más energía para la base | Mejora los paneles solares al nivel 2. Termina el Capítulo 1: Nuevo hogar. | 20, 30 |
+| 8 | 2 | Haz crecer tu base | Mejora el hábitat al nivel de base 2. Construye el Laboratorio. Entra al Laboratorio. | 20, 30 |
+| 9 | 2 | Aprende habilidades nuevas | Aprende una habilidad en el Laboratorio: 1. En el Laboratorio, mejora tu taladro al nivel 2. | 15, 25 |
+| 10 | 2 | Taladros que trabajan solos | Construye el taladro de hielo 1. Recoge hielo del silo: 2. | 20, 30 |
+| 11 | 2 | Temporada de tormentas | Mejora los paneles solares al nivel 3. Termina el Capítulo 2: Temporada de tormentas. | 25, 40 |
+| 12 | 2 | Explora la Luna | Escanea lugares para explorar: 2. Escanea un cráter de meteorito nuevo: 1. | 25, 40 |
+| 13 | 2 | Un jardín más grande | Mejora el invernadero al nivel 2. Entra al invernadero. Come comida fresca: 3. | 20, 30 |
+| 14 | 3 | Una base minera | Mejora el hábitat al nivel de base 3. Construye el taladro de hielo 2. Construye el robot de carga. | 30, 50 |
+| 15 | 3 | Ruedas en la Luna | Construye el garaje de rovers. Ve al garaje de rovers. Maneja el carrito lunar. | 30, 50 |
+| 16 | 3 | Cuando algo se rompe | Termina el Capítulo 3: Algo se rompe. Mejora la antena al nivel 2. | 40, 60 |
+| 17 | 3 | Equípate | Compra las botas de aire en el Laboratorio. Aprende habilidades en el Laboratorio: 4 en total. | 30, 50 |
+| 18 | 4 | Base de exploradores | Mejora el hábitat al nivel de base 4. Mejora el garaje de rovers al nivel 2. Lleva hielo a la base: 8. | 50, 80 |
+| 19 | 4 | Un láser a la Tierra | Mejora la antena al nivel 3. Construye el taladro de hielo 3. | 50, 80 |
+| 20 | 4 | Una plataforma para naves | Construye la plataforma de aterrizaje. Escanea cráteres de meteorito nuevos: 3. | 60, 100 |
+| 21 | 5 | Puerto espacial lunar | Mejora el hábitat al nivel de base 5. Mejora el taladro de hielo 2 al nivel 3. | 80, 120 |
+| 22 | 5 | Próxima parada: Marte | Construye la nave a Marte. | 100, 150 |
 
-Cuando se completan todas las aventuras principales, el seguimiento dice: "¡Aventuras listas! Busca secretos y aventuras extra."
+Cuando se completan todas las aventuras principales, el seguimiento dice: "¡Aventuras listas! Busca secretos y aventuras extra." Las partidas guardadas antes de la etapa 11 se saltan ¡Hola, Luna! y conservan su lugar en la serie.
 
 #### Aventuras extra
 
 | Título | Se abre después de | Pasos | Premio |
 | :--- | :--- | :--- | :--- |
 | Tesoros escondidos | Prepárate para las tormentas | Encuentra tesoros escondidos: 4. | 40 créditos, 60 XP |
-| Súper astronauta | Aprende habilidades nuevas | Aprende todos los niveles: 15. | 60, 100 |
-| Maestro del hielo | Taladros que trabajan solos | Lleva hielo a la base: 40. Recoge hielo del silo: 10. | 40, 60 |
+| Súper astronauta | Aprende habilidades nuevas | Aprende todos los niveles de habilidad: 15. | 60, 100 |
+| Maestro del hielo | Una base minera | Lleva hielo a la base: 40. Mejora el taladro de hielo 1 al nivel 2. | 40, 60 |
 | Científico lunar | Explora la Luna | Escanea lugares para explorar: 5. | 40, 60 |
 | Granjero lunar | Un jardín más grande | Come comida fresca: 10. | 25, 40 |
 | Una semana completa | Cuando algo se rompe | Termina la misión Juego libre. | 60, 100 |
 | Vuela como un cohete | Equípate | Compra la mochila propulsora en el Laboratorio. | 40, 60 |
-| Cazador de meteoritos | Una plataforma para naves | Escanea cráteres de meteoritos: 10. | 60, 100 |
-| Fábrica de hielo | Puerto espacial lunar | Sube los taladros de hielo 1, 2 y 3 al nivel 3. | 80, 120 |
+| Cazador de meteoritos | Una plataforma para naves | Escanea cráteres de meteorito nuevos: 10. | 60, 100 |
+| Fábrica de hielo | Puerto espacial lunar | Mejora los taladros de hielo 1, 2 y 3 al nivel 3. | 80, 120 |
+
+Antes, Maestro del hielo pedía recoger 10 veces el silo a mano, pero el robot de carga vacía el silo cada minuto, así que el contador parecía descompuesto. Ahora enseña que un taladro más grande saca más hielo por sí solo. Ninguna aventura cuenta recolecciones del silo una vez que se puede construir el robot de carga.
 
 ### 2.6 Misiones
 
@@ -340,10 +376,10 @@ El silo guarda 20 de hielo en los niveles de base 1 y 2, y luego 30, 45 y 60.
 | Laboratorio | 30 | Hábitat, solar 1 | Habilidades, mejoras de herramientas, equipo, adopción de mascotas. |
 | Antena | 10 / 90 / 200 | Solar 1 | El 2 es una antena parabólica más grande y el 3, un enlace láser. Conectarla paga 0 / +3 / +6 créditos extra. Desbloquea la tableta. |
 | Refugio | 15 | Antena 1 | La tierra lunar gruesa bloquea las partículas de la tormenta. |
-| Taladro de hielo 1 | 40 / 100 / 220 | Refugio, solar 1 | Saca 1 / 2 / 3 de hielo por minuto hacia el silo. |
+| Taladro de hielo 1 | 40 / 100 / 220 | Refugio, solar 1 | Saca 2 / 3 / 4 de hielo por minuto hacia el silo. |
 | Taladro de hielo 2 | 120 / 200 / 350 | Taladro 1, solar 2 | Mismos ritmos. Las máquinas necesitan electricidad: un arreglo más. |
 | Taladro de hielo 3 | 250 / 400 / 500 | Taladro 2, solar 3 | Mismos ritmos. |
-| Robot de carga | 140 | Taladro 1 | Vacía el silo para su dueño cada 60 s. |
+| Robot de carga | 140 | Taladro 1 | Agrega la máquina de aire y el puerto de suministros; lleva agua o aire de la planta de agua al núcleo, como máximo un viaje por minuto. |
 | Garaje de rovers | 90 / 220 | Laboratorio, refugio | El 1 es la cochera del carrito lunar y el 2, la cochera del camión de hielo. |
 | Plataforma de aterrizaje | 300 | Garaje 1, antena 2 | Un piso duro para que los cohetes levanten menos polvo. Se necesita para la nave. |
 | Nave a Marte | 1000 | Plataforma de aterrizaje | Una nave para un futuro viaje a Marte: la meta a largo plazo (decorativa). |
@@ -400,28 +436,52 @@ Un mundo nuevo empieza con 25 créditos. Los créditos y la XP solo se obtienen 
 | Coleccionable escondido (primera vez) | 10 | 20 |
 | Lugar de exploración (primer escaneo) | 10 | 20 |
 | Cráter de meteorito escaneado | 15 | 25 |
-| Hielo del silo, por núcleo | 1 | 1 |
+| Hielo del silo convertido en agua, por cada hielo | 1 | 1 |
+| Una carga de aire del robot con la máquina de aire encendida | 25% más que la misma carga de agua (redondeado hacia abajo) | - |
 | Caja de piezas entregada / paso de construcción hecho | 0 | 2 / 5 |
+| Logro de aprendizaje (una vez cada uno) | 0 | 10 |
+| Pregunta de C.A.R.L. contestada bien (una vez cada una) | 0 | 5 |
+| Cápsula de suministros diaria | 10, 15 o 20 (días 1, 3, 5) | 15, 20 o 25 (días 2, 4, 6) |
+
+Las habilidades Más créditos y Más XP aumentan el trabajo propio del jugador, no lo que ganan las máquinas.
 
 Hay **15 niveles de jugador**. XP total necesaria: 0, 40, 100, 180, 280, 400, 550, 750, 1000, 1350, 1800, 2400, 3100, 3900, 4800. El nivel del jugador limita las habilidades, el equipo, las mejoras de herramientas y las mascotas. No limita las estructuras; eso lo hace el nivel de base.
 
-**Ritmo.** `tests/economy.luau` simula a un niño típico que sigue las aventuras, juega un día de misión aproximadamente cada 5 minutos y nunca se queda quieto repitiendo una tarea para acumular recompensas. La prueba falla si no se cumplen las metas. La ejecución actual da:
+**Ritmo.** `tests/economy.luau` simula a un niño típico que sigue las aventuras, juega un día de misión aproximadamente cada 5 minutos y nunca se queda quieto repitiendo una tarea para acumular recompensas. La prueba falla si no se cumplen las metas. La ejecución actual (etapa 11) da:
 
 | Hito | Minuto (niño típico) | Meta |
 | :--- | :--- | :--- |
 | Nivel de base 2 | 6.8 | 4-10 |
-| Laboratorio | 16.5 | 8-20 |
-| Nivel de base 3 | 33.9 | 20-40 |
-| Garaje de rovers | 44.2 | 35-70 |
-| Nivel de base 4 | 92.2 | 60-110 |
-| Nivel de base 5 | 179.1 | 150-300 |
-| Nave a Marte | 253.9 | 150-300 |
+| Laboratorio | 12.0 | 8-20 |
+| Nivel de base 3 | 34.9 | 20-40 |
+| Garaje de rovers | 45.1 | 35-70 |
+| Nivel de base 4 | 77.6 | 60-110 |
+| Nivel de base 5 | 163.8 | 150-300 |
+| Nave a Marte | 234.4 | 150-300 |
 
-En la misma ejecución, el jugador llega al nivel 15 alrededor del minuto 135, y la línea de aventuras principales termina con la nave alrededor del minuto 254. Los ingresos nunca se multiplican por más de 2.5 de una ventana de 10 minutos a la siguiente. Son minutos simulados, no pruebas de juego medidas.
+En la misma ejecución, el jugador llega al nivel 15 alrededor del minuto 128, y la línea de aventuras principales termina con la nave alrededor del minuto 234. El taladro de hielo 1 se paga solo en unos 20 minutos. Desde el robot de carga hasta la nave, las máquinas ganan el 49% de lo que gana jugar (la prueba permite del 30 al 50%), así que ayudan, pero jugar es lo que más cuenta. Los ingresos nunca se multiplican por más de 2.5 de una ventana de 10 minutos a la siguiente. Son minutos simulados, no pruebas de juego medidas.
 
-### 2.13 Silo, taladros y robot de carga
+### 2.13 La línea de hielo: taladros, silo, planta de agua y robot de carga
 
-Los taladros automáticos en el fondo oscuro del cráter llenan el **silo** mientras haya al menos un jugador en el servidor. El jugador camina hasta el silo y usa "Recoger el hielo guardado". El hielo del silo paga menos que el hielo llevado a mano (1 crédito en vez de 5), así que los taladros ayudan, pero jugar es lo que más cuenta, y un silo lleno equivale solo a unos minutos de perforación. El **robot de carga** vacía el silo para su dueño cada 60 segundos. Lo que recoge el robot del silo no cuenta para las aventuras.
+La línea de hielo es el tycoon de la base, y cada parte está a la vista:
+
+1. Los **taladros** en el fondo oscuro del cráter sacan 2, 3 o 4 de hielo por minuto cada uno (taladro de nivel 1, 2 o 3). Sus brocas giran más rápido en los niveles altos.
+2. Unas **bandas elevadoras** suben los cubos de hielo a una tolva en el borde del cráter, y una **banda** abierta sobre postes cruza la ladera exterior hasta el silo. La cantidad y la velocidad de los cubos siguen al hielo por minuto.
+3. El **silo** está entre el núcleo y el cráter. Guarda 20 de hielo en los niveles de base 1 y 2, y luego 30, 45 y 60; un anillo dorado marca el tamaño del nivel de base actual. Cuando se llena, la banda y los taladros se detienen.
+4. La **planta de agua**, junto al silo, derrite el hielo y lo convierte en agua. Tiene una ventana de agua y un letrero con íconos: hielo, agua, aire.
+5. La construcción del **robot de carga** agrega la **máquina de aire** (agua más electricidad da oxígeno, como en la Estación Espacial) y un puerto de suministros en la pared del núcleo. El robot espera a que el silo tenga 5 de hielo, lo carga, lleva tanques de agua o de aire unos 47 studs hasta el puerto, cobra al llegar, descarga y regresa, como máximo un viaje por minuto.
+
+**Pago.** El agua paga 1 crédito por cada hielo. El aire de una máquina de aire con energía paga 25% más (redondeado hacia abajo). La máquina de aire necesita al menos 2 arreglos solares; sin ellos su lámpara se pone ámbar, el robot lleva agua en su lugar y C.A.R.L. dice "El fabricante de aire necesita energía. ¡Más paneles!". Cada entrega del robot y cada recolección a mano muestran un pequeño letrero "+N créditos" con una moneda dorada en el lugar donde ocurrió. Solo el jugador que recibió los créditos ve el número.
+
+**Sin robot de carga,** el jugador vacía el silo a mano con "Manda el hielo a la base" en el silo: "El hielo se hizo agua: +5 créditos."
+
+**Letreros y luces.** Sobre el silo: "Hielo 12/20", "3 de hielo por minuto" y una luz de estado con una razón corta ("Trabajando", "Silo lleno: la banda se paró", "Primero construye un taladro"). Sobre la planta de agua: agua o aire, "+3.8 créditos por minuto" y la luz de la planta ("El fabricante de aire necesita energía" va primero). El anillo superior del silo y la lámpara de la planta están en verde mientras la banda funciona y en rojo cuando el silo está lleno. El color de una luz siempre tiene palabras al lado, y un silo lleno o una planta sin energía hacen que el borde del letrero palpite.
+
+**Lleno y más grande.** C.A.R.L. dice "¡Silo lleno! Manda el hielo a la base." una vez por cada llenado, y "¡Silo lleno! Mejora el hábitat para más espacio." solo cuando el siguiente nivel del hábitat de verdad guarda más. Después de mejorar el hábitat: "¡Silo más grande! Ahora guarda 30 de hielo."
+
+**Juego limpio.** El robot solo le paga al dueño del mundo, y descansa mientras el dueño lleva 5 minutos sin moverse ni hacer nada ("El robot te espera"), así que quedarse quieto no da nada. Solo el dueño puede vaciar el silo a mano ("Este es el silo de tu amigo."). En la pantalla de un invitado, el letrero de la planta dice "Silo de tu amigo" y la cartera no muestra ingresos de máquinas.
+
+**Mientras no estabas.** El silo se guarda con el mundo del dueño. Cuando el dueño regresa, se suma lo que sacaron los taladros mientras no estaba, como máximo 8 horas y nunca más que el tamaño del silo. C.A.R.L. dice "¡Mientras no estabas, los taladros sacaron 24 hielo!" y una tarjeta muestra el hielo, cuánto vale y quién lo lleva a casa: "El robot lo llevará a casa." si hay robot de carga, o "Te espera en el silo." si no lo hay. Nada se paga al cargar: el hielo espera en el silo hasta que se entrega.
 
 ### 2.14 Vehículos y el garaje
 
@@ -443,7 +503,7 @@ Las mascotas siguen al jugador y son solo decorativas.
 | Conejo lunar | Adoptarlo en el Laboratorio: 120 créditos, nivel de jugador 3 |
 | Chimpancé espacial | Adoptarlo en el Laboratorio: 200 créditos, nivel de jugador 7 |
 
-El **Vestidor** conserva el avatar propio del jugador y solo agrega equipo espacial. Espacios: Casco (Clásico, Explorador dorado), Mochila (Clásica, Laika), C.A.R.L. (Clásico, Mini Tierra) y Mascota (o "Sin mascota"). Las recompensas se pueden quitar.
+El **Vestidor** conserva el avatar propio del jugador y solo agrega equipo espacial. Espacios: Casco (Clásico, Explorador dorado), Mochila (Clásica, Laika), C.A.R.L. (Clásico, Mini Tierra) y Mascota (o "Sin mascota"). Las recompensas se pueden quitar. Las franjas del traje de la cápsula diaria y de la Bitácora se ponen o se quitan en la página Franjas de la Bitácora (sección 2.20).
 
 ### 2.16 Explorar la Luna
 
@@ -461,6 +521,10 @@ Los **meteoritos** caen al azar, cada 4 a 7 minutos. Solo se ve un destello, sin
 
 **Eclipses.** El Sol da vueltas por el horizonte, como en el verdadero polo sur lunar (el cielo del juego va mucho más rápido). Cuando pasa detrás de la Tierra que gira, la base se oscurece y la Tierra muestra un anillo rojo anaranjado. C.A.R.L. dice "¡Eclipse! La Tierra está tapando el Sol."
 
+**El borde del mapa.** Unas paredes invisibles están 12 studs antes de la orilla del terreno, así que ni caminando, ni con la mochila propulsora, ni en el carrito se puede llegar al vacío. Una franja naranja al pie de cada pared aparece a menos de 80 studs, y C.A.R.L. dice "Aquí termina el mapa. ¡Da la vuelta!".
+
+**Salidas del cráter de hielo.** Además de la primera rampa, otras dos rampas de 14 studs de ancho salen del cráter, con delgadas franjas guía cian en sus orillas (el cian indica guía). Siempre hay una rampa cerca de cualquier punto del fondo del cráter.
+
 ### 2.17 Secretos, coleccionables y códigos
 
 Cuatro coleccionables se esconden alrededor de la base: **Mini Tierra, Laika, Queso lunar y Papa marciana**. Entre los escondites hay un espacio para gatear, una roca mirador, un tubo de lava y los rincones más oscuros. Cada uno abre una tarjeta de mito contra ciencia y da un premio:
@@ -472,11 +536,11 @@ Cuatro coleccionables se esconden alrededor de la base: **Mini Tierra, Laika, Qu
 | Queso lunar | Pintura amarillo queso para el rover de ciencia y la mascota Quesito lunar |
 | Papa marciana | La bandera del equipo en el techo de la base |
 
-Encontrar los cuatro abre un quinto secreto: un **observatorio** escondido con un telescopio que apunta a Marte ("Próxima misión: Marte"). La pantalla de Colección muestra los secretos encontrados.
+Encontrar los cuatro abre un quinto secreto: un **observatorio** escondido con un telescopio que apunta a Marte ("Próxima misión: Marte"). La página Secretos de la Bitácora lunar muestra los secretos encontrados (sección 2.20). Mientras Tesoros escondidos está abierta, C.A.R.L. da pistas tipo adivinanza después de 5 minutos sin un hallazgo nuevo.
 
 **Códigos.** La Configuración tiene un cuadro "¿Tienes un código?". El servidor revisa el código; los códigos nunca se envían a los jugadores. El código del evento da el "Casco dorado Explorador 2026" (visor y detalles dorados), solo una apariencia, nunca una ventaja en el juego.
 
-**Logros de aprendizaje (Etapa 10).** El botón "Logros" de la barra superior (modo base) abre un panel con 13 logros. Cada uno premia entender una parte de la ciencia, y el servidor solo lo desbloquea cuando ve el evento real. Los desbloqueados muestran lo que aprendiste; los bloqueados muestran una pista (y el avance, por ejemplo 3/10). Cada uno da 10 XP una sola vez por partida, con una tarjeta "¡Logro desbloqueado!". Cuando el equipo crea la insignia de Roblox correspondiente en Creator Hub, el jugador también recibe la insignia.
+**Logros de aprendizaje (Etapa 10).** El botón "Logros" de la barra superior (modo base) abre un panel con 13 logros. Cada uno premia entender una parte de la ciencia, y el servidor solo lo desbloquea cuando ve el evento real. Los desbloqueados muestran lo que aprendiste; los bloqueados muestran una pista (y el avance, por ejemplo 3/10). Las pistas dicen adónde ir: las cinco lecciones que solo ocurren en un turno de misión lo indican ("En misión de tormenta, quédate en el refugio"). El panel muestra páginas de mosaicos grandes, y las palabras del glosario en los datos se ven doradas (sección 2.21). Cada logro da 10 XP una sola vez por partida, con una tarjeta "¡Logro desbloqueado!". Cuando el equipo crea la insignia de Roblox correspondiente en Creator Hub, el jugador también recibe la insignia.
 
 | Logro | Cómo se desbloquea | Qué enseña |
 | :--- | :--- | :--- |
@@ -500,7 +564,85 @@ Estos lugares cuentan como **adentro** una vez construidos: el núcleo redondo d
 
 Los tubos que van del domo A al domo B del invernadero y del núcleo al Laboratorio se pueden recorrer caminando, con pisos, entradas y una rampa suave hacia el piso del Laboratorio. Unas compuertas de vidrio cierran las entradas hasta que se construyen el invernadero nivel 2 y el Laboratorio.
 
-### 2.19 Controles
+### 2.19 La cápsula de suministros diaria
+
+Una vez por día real se puede abrir una cápsula de suministros. Los días son días UTC del reloj del servidor; el reloj del dispositivo nunca cuenta.
+
+- **La llegada.** Cuando hay una cápsula esperando y el jugador pasa 4 segundos en la base abierta, una pequeña cápsula cae junto al depósito de piezas de la nave de llegada, con un anillo de polvo, un pitido y un golpe. C.A.R.L. dice "¡Una cápsula llegó junto a la nave!" y se abre la tarjeta (nunca encima de otro panel). La cápsula conserva la indicación "Abrir la cápsula" para volver a abrir la tarjeta. Después de abrirla, su tapa se levanta y la cápsula se va 25 segundos después. Con Menos movimiento, se coloca sin caer.
+- **Un calendario de 7 días, visible por adelantado.** La tarjeta muestra todos los premios de la semana (tabla abajo). El día 7 da las franjas de amanecer en la semana 1, azul hielo en la semana 2 y verde jardín en la semana 3; después, los días 7 pagan 30 créditos. No hay azar, ni cajas de botín, ni nada que comprar. Una semana paga 45 créditos y 60 XP, no más que tres escaneos de cráteres nuevos, así que jugar siempre da más que esperar.
+- **Comprensiva.** El calendario cuenta las cápsulas abiertas, no los días seguidos: "¿Faltaste un día? Tu calendario te espera." Nunca se quita nada.
+- **Datos de la carga.** Cada tarjeta muestra uno de siete datos cortos que repiten ciencia que ya está en `DATA_SOURCES.md` (lo que necesita la tripulación, del hielo al agua, agua más energía da aire, el reciclaje de agua de la Estación Espacial, las plantas necesitan tiempo, la masa protege, el oxígeno en las rocas lunares), sin números. La tarjeta también dice "Un regalo del juego, no un vuelo real."
+- **Se guarda por mundo,** como los logros, así que un invitado conserva su propio calendario en el mundo de un amigo.
+
+| Día | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| Premio | 10 créditos | 15 XP | 15 créditos | 20 XP | 20 créditos | 25 XP | Franjas del traje |
+
+### 2.20 La Bitácora lunar
+
+La Bitácora reemplaza a la antigua pantalla de Colección. Se abre con el botón "Bitácora" de la pantalla de misiones y desde la tarjeta de la cápsula, y es un libro con pestañas:
+
+| Pestaña | Qué contiene |
+| :--- | :--- |
+| Secretos | Los cuatro coleccionables y el observatorio. |
+| Lugares | Los cinco lugares de exploración, con el dato real una vez escaneados. |
+| Rocas espaciales | Los primeros 5 cráteres de meteorito nuevos escaneados. |
+| Logros | Los 13 logros de aprendizaje, con el dato o la pista. |
+| Datos | Los datos de la carga de las cápsulas abiertas y los datos curiosos que compartió C.A.R.L. (no cuentan como registros). |
+| Franjas | Las franjas del traje que se tienen, para ponerlas o quitarlas. |
+
+Hay 27 registros: 4 secretos, 5 lugares, 5 rocas espaciales y 13 logros ("12 de 27 registros llenos"). Llenar 5, 12 y 20 registros desbloquea las franjas de estrella dorada, rosa secreto y explorador lunar ("Llena 5 registros", luego "Reclamar"). El servidor cuenta los registros por su cuenta. C.A.R.L. avisa una vez cuando hay un premio listo: "¡Premio listo! Abre tu bitácora."
+
+Las **franjas del traje** son seis apariencias: dos bandas con los colores de Lunar Sunrise alrededor de cada brazo, hechas con piezas simples y visibles para todos. Son solo una apariencia. Las primeras franjas que se ganan se ponen de inmediato.
+
+### 2.21 C.A.R.L. pregunta, y el glosario con imágenes
+
+**C.A.R.L. pregunta.** Después de 11 aventuras (energía, plantas, polvo, refugio, hielo, aire, radiación, cráteres, llamaradas, radio y Marte), unos 12 segundos después de terminar la aventura y solo entre misiones, C.A.R.L. hace una pregunta con imagen, con 2 o 3 botones grandes de respuesta (un ícono y palabras), "Ahora no" y un botón para cerrar.
+
+- Una respuesta correcta da "¡Correcto! +5 XP" con estrellas y una frase que explica por qué, como "¡Sí! Los muros gruesos frenan las partículas."
+- Una respuesta equivocada da una pista y "¡Buen intento! Te pregunto otra vez luego."; la pregunta vuelve a los 3 minutos. "Ahora no" también la hace volver después.
+- No se pierde nada y nada depende de contestar bien. Cada pregunta paga una sola vez por mundo.
+- El servidor elige la pregunta y revisa la respuesta; la respuesta correcta nunca se envía al dispositivo del jugador. Los textos no citan números y siguen las reglas científicas (sección 3.2).
+- La tarjeta no bloquea el juego: se oculta mientras hay un panel o una misión y regresa después.
+
+**El glosario con imágenes.** Nueve palabras tienen una tarjeta con imagen: hábitat, caja de piezas, panel solar, cráter de hielo, oxígeno, radiación, llamarada solar, silo y nivel de base. En los pasos de las aventuras y en los datos de los logros, estas palabras se ven doradas y subrayadas, con un pequeño ícono de libro. Al tocar la fila o el mosaico se abre "¿Qué significa?" con el ícono de la palabra y una definición de una línea. También reconoce plurales y otras formas ("paneles solares", "cajas de piezas").
+
+**Panel de logros.** El panel muestra páginas de 6 mosaicos grandes (4 en pantallas pequeñas) con "Página 1 de 3", y los datos largos bajan de renglón en vez de encogerse.
+
+### 2.22 Celebraciones
+
+- **Momentos importantes.** Una aventura terminada, un logro, subir de nivel de jugador, subir de nivel de base y una misión terminada traen confeti con los colores de Lunar Sunrise, un destello suave en la pantalla y, en los niveles, un título grande ("Nivel 4", "Nivel de base 2"). Subir de nivel de base y cada edificio terminado también traen destellos en la plataforma, con los colores de Theme. Los momentos que llegan juntos se muestran uno tras otro, cada uno en menos de 2 segundos, y nunca bloquean un toque.
+- **El reporte.** Las estrellas ganadas aparecen una por una con un salto y una nota que sube, y una misión completa hace llover confeti. Cada día se lee como causa y efecto: el evento y su razón, una flecha y hasta tres fichas con lo que cambió ese día (aire o comida que sube o baja, dosis que sube, ciencia enviada). La ficha de la dosis solo apunta hacia arriba, porque la dosis nunca baja.
+- **La cámara.** Un meteorito que cae a menos de 170 studs da una sacudida corta y pequeña que disminuye con la distancia: una vibración a través del suelo, porque no hay aire que lleve una onda expansiva. Una tormenta solar nunca sacude la cámara, porque la radiación es silenciosa y no empuja nada; en su lugar, el aviso de la llamarada y la llegada de las partículas hacen palpitar en naranja los bordes de la pantalla (una falsa alarma solo tiene el pulso del aviso).
+- **Menos movimiento** (Ayudas): sin sacudidas, sin confeti ni destellos, un destello de pantalla muy suave, títulos que aparecen sin moverse y estrellas que aparecen sin saltar.
+
+### 2.23 Sonido y música
+
+El juego tiene 50 sonidos: 6 pistas de música, 3 remates musicales y 41 efectos. La música y la mayoría de los efectos los sintetizó el código propio del equipo, y cinco efectos mezclan grabaciones CC0 editadas de Freesound (sección 6.2). Ningún sonido viene de la Toolbox ni del Marketplace.
+
+- **La música sigue al juego:** el menú de inicio, la base de día, la construcción (mientras hay una obra en curso y durante un minuto después de un paso), las misiones, las tormentas (aviso y partículas) y el eclipse, con transiciones de 2.5 segundos. Los remates de victoria, de misión fallida y de subir de nivel suenan en el reporte y al subir de nivel.
+- **La regla del casco.** En el vacío no hay sonido. Los sonidos del mundo fuera del casco (obras, cajas, hielo, taladros, el carrito, la mochila propulsora, meteoritos) suenan más bajo y apagados mientras el jugador está afuera, como si se sintieran a través del traje y las botas. Los sonidos del radio, la tableta y C.A.R.L. se oyen claros. Dentro de los módulos todo suena normal, y la música no es parte del mundo.
+- **Sin sonidos de la Tierra.** Los pasos, saltos y aterrizajes predeterminados de Roblox están silenciados; los pasos solo suenan dentro de los módulos. Un meteorito es un tono de radar en el radio más un golpe que se siente en el suelo, nunca un zumbido en el aire. La estática de la tormenta solo suena cuando de verdad llegan las partículas, así que una falsa alarma queda en silencio después de su alarma.
+- **Respuesta al jugador.** Los botones hacen clic (los botones grises dan un "no" suave), los paneles suenan al abrir y cerrar, las monedas, la XP, los niveles, las aventuras y los logros tienen sus propios sonidos, C.A.R.L. pita, y los taladros, la banda y el silo zumban de cerca.
+- **Volumen.** Los controles de Música y Efectos de la Configuración controlan todos los sonidos.
+
+### 2.24 Configuración y Ayudas
+
+La Configuración tiene dos páginas:
+
+- **Juego:** idioma (inglés o español), volumen de música y de efectos, los datos curiosos y el haz guía de C.A.R.L., el cuadro "¿Tienes un código?" y **Guardar ahora**.
+- **Ayudas:** cada fila tiene una explicación de una línea, y una frase de muestra ("¡Hola! Así se ve tu texto.") enseña el tamaño del texto.
+
+| Ayuda | Opciones | Qué hace |
+| :--- | :--- | :--- |
+| Tamaño del texto | Normal, Grande | Letras grandes (1.25 veces) en todos los textos, botones y etiquetas de una línea, al momento. |
+| Menos movimiento | Sí, no | Sin cámara que tiembla, sin confeti, pantallas más tranquilas. |
+| Tiempo de mensajes | Normal, Largo, Más largo | Los mensajes de C.A.R.L. y los avisos de aventuras duran 1, 1.5 o 2 veces más. |
+| Ayuda de colores | Sí, no | "Muestra formas, no solo colores." |
+
+**La configuración acompaña al jugador.** El servidor guarda cada ajuste con la cuenta del jugador y revisa cada valor. Los ajustes regresan después de viajar a un servidor de mundo, de volver a entrar o de cambiar de dispositivo; el idioma del dispositivo ya no sobrescribe el idioma guardado al iniciar. Tocar fuera del panel lo cierra.
+
+### 2.25 Controles
 
 | Acción | Teclado y mouse | Táctil |
 | :--- | :--- | :--- |
@@ -515,26 +657,16 @@ Los tubos que van del domo A al domo B del invernadero y del núcleo al Laborato
 | Avanzar solo | X (X o cualquier tecla WASD lo detiene) | Botón de avanzar solo |
 | Manejar | WASD en el asiento del conductor | Palanca virtual |
 | Bajarse de un vehículo | Espacio | Tocar saltar |
-| Misiones, Vestidor, Configuración | Botones arriba a la derecha | Igual |
-| Idioma | Configuración (inglés o español) | Igual |
+| Volver a leer a C.A.R.L. | Clic en el botón para repetir junto al globo | Tocar el botón para repetir |
+| Contestar la pregunta de C.A.R.L. | Clic en una respuesta | Tocar una respuesta |
+| Aprender una palabra dorada | Clic en el paso de la aventura o en el mosaico | Tocarlo |
+| Configuración, Misiones, Vestidor, Logros | Botones arriba a la derecha | Igual |
+| Bitácora lunar | "Bitácora" en la pantalla de misiones, o la tarjeta de la cápsula | Igual |
+| Idioma | Configuración, página Juego (inglés o español) | Igual |
 
-En un control de videojuegos, A sirve para bajarse de un vehículo y mantener A en el aire enciende la mochila propulsora. En primera persona, el mouse se libera cada vez que hay una tarjeta o un panel abierto.
+En un control de videojuegos, A sirve para bajarse de un vehículo y mantener A en el aire enciende la mochila propulsora, y cada cuadro pone la selección en su botón seguro. En primera persona, el mouse se libera cada vez que hay una tarjeta o un panel abierto.
 
-### 2.20 Teclas de depuración del equipo
-
-Estas teclas solo funcionan en Roblox Studio o para el dueño del lugar. El servidor vuelve a verificar cada acción de depuración. Sirven para probar y grabar la demostración.
-
-| Tecla | Efecto |
-| :--- | :--- |
-| F2 | Un meteorito cae cerca del jugador en ese momento. |
-| F3 | Termina la construcción en curso, o construye gratis la siguiente estructura, siguiendo el orden de niveles de base. |
-| F4 | Inicia un eclipse en ese momento. |
-| F6 | Desbloquea todas las misiones y da justo los créditos y la XP necesarios para todo. |
-| F7 | Da el siguiente coleccionable escondido que el jugador todavía no tiene. |
-| F8 | Fuerza que el evento de hoy sea una tormenta solar (antes del turno o durante la planeación). |
-| F9 | Termina el turno actual en ese momento. |
-
-F1, F5, F10, F11 y F12 no se usan, porque Studio o Windows las capturan primero.
+Los jugadores no tienen teclas de depuración. Las teclas de prueba del equipo solo existen en Roblox Studio, y el servidor rechaza toda acción de depuración en el juego en vivo (sección 4.11).
 
 ## 3. Ciencia y datos de la NASA
 
@@ -561,10 +693,11 @@ Estas reglas están escritas en `CLAUDE.md` y se aplican a cada mecánica, cada 
 | El refugio protege por su masa, no por energía. | El refugio es un montículo de regolito con tanques de agua dentro. No usa celdas de energía. Estar dentro durante una tormenta de partículas mantiene baja la dosis. Un refugio sin construir (un holograma sobre su plataforma) no tiene masa, así que no protege a nadie. | NASA-STD-3001 y el informe sobre radiación de la OCHMO de la NASA: un refugio contra tormentas de unos 10 cm de equivalente en agua. |
 | La dosis de radiación nunca baja. | `Simulation.luau` solo suma dosis: un poco cada día por los rayos cósmicos de fondo y más por cada astronauta que la tormenta sorprende afuera. Nada la reduce. | La dosis se acumula; el límite de carrera de la NASA cuenta el total. |
 | Las plantas tardan en crecer. | La energía que recibe el invernadero un día se convierte en comida al día siguiente. La comida fresca que se cosecha en el invernadero también necesita tiempo antes de que la siguiente esté lista. | NASA Veggie: la primera lechuga que se comió en la Estación Espacial creció durante 33 días. |
-| El oxígeno sale del agua más electricidad. | Las celdas de soporte vital hacen funcionar la máquina de aire, que usa agua del tanque. Con muy poca agua produce solo una parte del aire. El hielo aporta aire solo cuando la máquina de aire tiene energía. | Hoja informativa del ECLSS de la ISS de la NASA: el oxígeno se produce separando el agua con electricidad. |
+| El oxígeno sale del agua más electricidad. | Las celdas de soporte vital hacen funcionar la máquina de aire, que usa agua del tanque. Con muy poca agua produce solo una parte del aire. El hielo aporta aire solo cuando la máquina de aire tiene energía. En la base, la planta de agua derrite el hielo del silo y la máquina de aire convierte esa agua en aire solo mientras haya al menos 2 arreglos solares; sin energía, el robot de carga lleva agua en su lugar. | Hoja informativa del ECLSS de la ISS de la NASA: el oxígeno se produce separando el agua con electricidad. |
 | Una gran llamarada no siempre trae una tormenta de partículas. | Algunos días de tormenta son falsas alarmas reales: una llamarada enorme que DONKI no vincula con ningún evento de partículas. Aun así, refugiarse era la decisión correcta. | NASA / CCMC DONKI, por ejemplo la llamarada X9.0 del 3 de octubre de 2024. |
 | Los eventos de DONKI se observaron cerca de la Tierra. | Cada tormenta es una repetición: "¿y si una tormenta así llegara a tu base?". El juego nunca dice que una tormenta registrada haya golpeado la Luna. | Los eventos de DONKI se observan desde las cercanías de la Tierra. |
 | La Luna casi no tiene aire. | C.A.R.L. avanza sobre orugas y salta con propulsores de gas, porque las hélices necesitan aire. Los meteoritos caen con un destello y sin estela ardiente. El cielo es negro y el Sol se mantiene blanco y bajo. | NASA "The Moon's Atmosphere"; NASA Glenn; NASA Meteoroid Environment Office. |
+| En el vacío no hay sonido. | Fuera del casco, los sonidos del mundo suenan más bajo y apagados, como si se sintieran a través del traje; el radio, la tableta y C.A.R.L. se oyen claros. Los pasos terrestres están silenciados. Un meteorito es un tono de radar y un golpe a través del suelo. Las tormentas nunca sacuden la cámara, y su estática solo suena cuando llegan las partículas. | El sonido necesita aire u otro material para viajar; la Luna casi no tiene aire (NASA "The Moon's Atmosphere"). |
 
 El juego también conserva la proporción real entre la gravedad de la Luna y la de la Tierra (1.62 / 9.81). El cielo del juego avanza mucho más rápido que el real: en el verdadero polo sur, el Sol da una vuelta al horizonte por cada día lunar (unos 29.5 días terrestres). El panel de Fuentes lo aclara.
 
@@ -573,7 +706,7 @@ El juego también conserva la proporción real entre la gravedad de la Luna y la
 | Tema | Decisión | Consecuencia | Datos reales detrás |
 | :--- | :--- | :--- | :--- |
 | Presupuesto de energía | Cada mañana, cuántas celdas de energía van a soporte vital, invernadero y ciencia. Cada arreglo solar limpio que los jugadores han construido da una celda y la batería una más, así que una base completa tiene 4. Cada sistema recibe como máximo 2. | Una celda para ciencia es una celda que se le quita al aire o a la comida. El polvo quita una celda hasta que alguien limpia el panel. El tablero recorta primero la ciencia y al final el soporte vital. Cada taladro de hielo automático necesita un arreglo solar más. | Un punto del borde del cráter Shackleton recibe luz solar unos 240 días al año (topografía del LRO), así que la energía solar es adecuada para el polo sur. |
-| Soporte vital | Energía para el soporte vital, traer hielo, arreglar fugas y cuándo recargar el traje adentro. | Las celdas de soporte vital convierten agua en aire; el hielo llena el tanque. Respirar, una fuga abierta y cada recarga del traje consumen aire de la base. | NASA BVAD 2022: unos 0.895 kg de oxígeno y 2.5 kg de agua por tripulante al día. LCROSS encontró hielo en un cráter en sombra. |
+| Soporte vital | Energía para el soporte vital, traer hielo, arreglar fugas y cuándo recargar el traje adentro. Entre misiones: construir la línea de hielo y suficientes arreglos solares para la máquina de aire. | Las celdas de soporte vital convierten agua en aire; el hielo llena el tanque. Respirar, una fuga abierta y cada recarga del traje consumen aire de la base. Sin energía, la máquina de aire se detiene y el robot de carga lleva agua en vez de aire. | NASA BVAD 2022: unos 0.895 kg de oxígeno y 2.5 kg de agua por tripulante al día. LCROSS encontró hielo en un cráter en sombra. |
 | Producción de alimentos | Energía para el invernadero; construir la segunda cúpula. | La energía de hoy en el invernadero es la comida de mañana. Recortarla parece gratis hasta el día siguiente. | NASA Veggie: 33 días hasta la primera comida de lechuga. Unas 3,000 kcal por tripulante al día. |
 | Protección contra la radiación | Esconderse en el refugio durante una tormenta o seguir trabajando afuera. | Todos los que están afuera cuando llegan las partículas suman dosis. Alcanzar el límite hace que la tripulación regrese antes a casa. | Llamaradas reales de DONKI. Chang'e-4: unos 1.37 mSv al día en la Luna, frente a 6.2 mSv al año en Estados Unidos. Límite de carrera de la NASA: 600 mSv. |
 | Retraso en las comunicaciones | Usar tiempo del turno para alinear la antena con la tableta, o hacer otras tareas. | Con el enlace, la Tierra avisa a la tripulación 45 segundos antes de que lleguen las partículas; sin él, 15 segundos. El enlace también envía la ciencia pendiente. Una antena más grande y luego un enlace láser envían más datos. | 1.3 segundos de la Luna a la Tierra; de 3 a 22 minutos desde Marte. NASA: los enlaces láser transmiten de 10 a 100 veces más datos que la radio. |
@@ -705,9 +838,19 @@ Los sitios son representaciones inspiradas en lugares reales: el juego nunca dic
 
 Cada referencia es una fila en las secciones de las Etapas 6 a 8 de `DATA_SOURCES.md`.
 
+### 3.8 La ciencia en las funciones de la etapa 11
+
+- **Del hielo al agua y al aire.** La línea de hielo muestra la cadena del soporte vital una máquina a la vez: los taladros sacan hielo de un cráter polar, la planta de agua lo derrite y la máquina de aire separa el agua en oxígeno con electricidad. El letrero de la planta lo dice con íconos (hielo, agua, aire) y con palabras ("Hielo da agua; agua con energía da aire."). Con menos de 2 arreglos solares la máquina de aire se detiene y el robot lleva agua: sin energía no hay aire. Así fabrica oxígeno la Estación Espacial (electrólisis, ECLSS de la NASA), y por eso importa el hielo de agua que LCROSS encontró en un cráter en sombra para una futura base. El juego no afirma que una base lunar real funcione así hoy.
+- **El sonido en el vacío.** El sonido necesita aire u otro material para viajar, y la Luna casi no tiene aire. Por eso los sonidos del mundo fuera del casco son suaves y apagados, como si se sintieran a través del traje y las botas; el radio, la tableta y C.A.R.L. se oyen claros; los pasos terrestres de Roblox están silenciados; un meteorito es un tono de radar y un golpe a través del suelo; y una tormenta no tiene sonido propio hasta que las partículas llegan al radio como estática.
+- **Sensaciones sin física falsa.** Un meteorito cercano sacude un poco la cámara, como una vibración a través del suelo, nunca como una onda expansiva en el aire. Una tormenta solar nunca sacude nada: la radiación es silenciosa y no empuja, así que en su lugar los bordes de la pantalla brillan en naranja.
+- **La dosis nunca baja, en ninguna pantalla.** La ficha de dosis del reporte solo apunta hacia arriba, y el medidor de radiación en vivo solo sube.
+- **Palabras sin números.** Las preguntas de C.A.R.L., las tarjetas del glosario y los datos de la carga de la cápsula no citan números, así que nada puede alejarse de `DATA_SOURCES.md` (`tests/localization` y `tests/daily` lo revisan). Las respuestas científicas del banco de preguntas siguen las reglas de 3.2: el refugio protege por su masa, las plantas tardan en crecer, el oxígeno sale del agua más electricidad, una gran llamarada no siempre trae una tormenta de partículas.
+- **Regalos honestos.** La cápsula de suministros dice "Un regalo del juego, no un vuelo real."
+- **Diseño para aprender.** C.A.R.L. felicita la estrategia que funcionó, no a la persona (Mueller y Dweck, 1998: felicitar el esfuerzo y la estrategia genera perseverancia), hace preguntas cortas para recordar después de una lección y sugiere un descanso después de 45 minutos de juego. Son referencias de diseño, no números que se muestran a los jugadores.
+
 ## 4. Diseño técnico
 
-Esta sección explica cómo está construido Space Base Odyssey, cómo ejecutarlo y cómo está organizado y probado el código. Describe el juego tal como se encuentra en la Etapa 10 (compilación `0.10.0-stage10` en `src/shared/Version.luau`).
+Esta sección explica cómo está construido Space Base Odyssey, cómo ejecutarlo y cómo está organizado y probado el código. Describe el juego tal como se encuentra en la Etapa 11 (compilación `0.11.0-stage11` en `src/shared/Version.luau`).
 
 ### 4.1 Herramientas
 
@@ -717,7 +860,10 @@ Esta sección explica cómo está construido Space Base Odyssey, cómo ejecutarl
 | Luau | modo estricto | Cada archivo de código comienza con `--!strict` y una línea de declaración de uso de IA (SI) |
 | Rojo | 7.7.1 | Sincroniza los archivos de este repositorio con Studio y genera un archivo de lugar (place) |
 | Lune | 0.11.1 | Ejecuta los conjuntos de pruebas fuera de Roblox |
+| Python | 3 | Los scripts del equipo que sintetizan el audio (en `promo/audio/synth`, excluido por git) |
 | Servidor MCP de Roblox Studio | - | Permite que el asistente de IA inicie el modo Play y lea la consola durante las pruebas de juego dirigidas por el asistente |
+| Git y GitHub | - | Control de versiones y el repositorio público |
+| Claude (Anthropic), en Claude Code | - | Asistencia de IA, declarada en la sección 6.4 |
 
 Los archivos del repositorio son la fuente de verdad. Los scripts nunca se editan dentro de Studio, y el mundo se construye mediante código, no con piezas colocadas a mano. No se usan recursos de la Toolbox ni del Marketplace.
 
@@ -725,14 +871,19 @@ Los archivos del repositorio son la fuente de verdad. Los scripts nunca se edita
 
 | Ruta | Contenido | Se sincroniza con |
 | :--- | :--- | :--- |
-| `src/shared` | Reglas de la misión, números, contrato de red, aventuras, textos, íconos, tema | `ReplicatedStorage.Shared` |
+| `src/shared` | Reglas de la misión, números, contrato de red, aventuras, textos, íconos, lista de sonidos, tema | `ReplicatedStorage.Shared` |
 | `src/server` | Constructor del mundo, servicios, datos de la NASA en vivo, partidas guardadas | `ServerScriptService.Server` |
-| `src/client` | Interfaz, guía, C.A.R.L., ayudas de movimiento | `StarterPlayer.StarterPlayerScripts.Client` |
-| `tests` | Cinco conjuntos de pruebas de Lune | no se sincroniza |
+| `src/client` | Interfaz, guía, C.A.R.L., sonido, ayudas de movimiento | `StarterPlayer.StarterPlayerScripts.Client` |
+| `tests` | Once conjuntos de pruebas de Lune | no se sincroniza |
 | `default.project.json` | Archivo de proyecto de Rojo (las tres asignaciones anteriores) | - |
+| `docs-public` | Paquete para docentes: tres planes de clase de 20 minutos, en español y en inglés | - |
 | `DATA_SOURCES.md` | Cada número del mundo real con su fuente | - |
-| `THIRD_PARTY_NOTICES.md` | Licencias de recursos de terceros (Tabler Icons, mapa Blue Marble de la NASA) | - |
+| `THIRD_PARTY_NOTICES.md` | Licencias de recursos de terceros (Tabler Icons, mapa Blue Marble de la NASA, grabaciones de sonido CC0) | - |
+| `DOCUMENTATION.md`, `DOCUMENTACION.md` | Este documento, en inglés y en español | - |
 | `DEVELOPMENT.md` | Bitácora de desarrollo, decisiones, evidencia de pruebas, uso de IA | - |
+| `README.md` | Presentación breve, controles, estado y cómo ejecutarlo | - |
+| `SUBMISSION.md` | Los campos de la página del proyecto de Space Apps | - |
+| `CLAUDE.md` | Reglas del proyecto para asistentes de programación con IA | - |
 | `LICENSE` | Apache License 2.0 | - |
 
 ### 4.3 Ejecución local
@@ -756,6 +907,12 @@ lune run tests/balance
 lune run tests/missions
 lune run tests/base
 lune run tests/economy
+lune run tests/cinematic
+lune run tests/worlds
+lune run tests/achievements
+lune run tests/daily
+lune run tests/feel
+lune run tests/reading
 lune run tests/localization
 ```
 
@@ -763,20 +920,28 @@ lune run tests/localization
 
 #### Servidor autoritativo
 
-El servidor es dueño del estado del juego: la fase de la misión, los medidores, las construcciones, los créditos y las partidas guardadas. Un cliente nunca cambia el estado directamente. Solo envía una tabla `Types.Action` a través de un único RemoteEvent, y el servidor revisa cada acción antes de actuar sobre ella (que la fase sea la correcta, que el jugador sea dueño del objeto, que tenga los créditos, que tenga la herramienta en la mano, que esté lo bastante cerca del aviso de interacción, etcétera). El servidor responde con instantáneas (snapshots) y con el estado de cada jugador.
+El servidor es dueño del estado del juego: la fase de la misión, los medidores, las construcciones, los créditos, el silo y las partidas guardadas. Un cliente nunca cambia el estado directamente. Solo envía una tabla `Types.Action` a través de un único RemoteEvent, y el servidor revisa cada acción antes de actuar sobre ella (que el jugador tenga una partida cargada, que la fase sea la correcta, que el jugador sea dueño del objeto, que tenga los créditos, que tenga la herramienta en la mano, que esté lo bastante cerca del aviso de interacción, etcétera). El servidor responde con instantáneas (snapshots) y con el estado de cada jugador. La animación que solo muestra el estado (los cubos, las brocas, el robot y el ventilador de la línea de hielo) corre en cada cliente.
 
 #### Reglas puras y comprobables
 
 Las reglas de juego más importantes viven en módulos puros de Luau sin instancias de Roblox, por lo que se ejecutan sin cambios en Roblox y en Lune:
 
 - `Simulation.luau`: el día de misión (inicio del día, planeación, resultado del turno, fin del día) y los medidores en vivo durante un turno.
-- `BaseBuild.luau`: créditos, experiencia, nivel del jugador, costos y requisitos de construcción, habilidades, mascotas, equipo y taladros.
+- `BaseBuild.luau`: créditos, experiencia, nivel del jugador, costos y requisitos de construcción, habilidades, mascotas, equipo, taladros, el silo y el pago de la línea de hielo.
 - `Missions.luau` y `Quests.luau`: la lista de misiones y la línea de aventuras, como datos más pequeñas funciones auxiliares.
+- `ServerGuard.luau`: las reglas de seguridad del servidor (distancia a los avisos y repeticiones, recorrido del hielo y ritmo de perforación, el candado de sesión, revisión de la configuración).
+- `Worlds.luau`: quién puede entrar a un mundo y de quién es la base que muestra.
+- `Achievements.luau`, `Quiz.luau` y `Glossary.luau`: logros de aprendizaje, las preguntas de C.A.R.L. y el glosario con imágenes.
+- `IceLineView.luau`: lo que muestran los letreros, los avisos "+N" y C.A.R.L. sobre la línea de hielo.
+- `Daily.luau`: el calendario de la cápsula de suministros y los registros de la Bitácora lunar.
+- `Reading.luau`: los tiempos de lectura y la cola de mensajes.
+- `Feel.luau` y `WorldSafety.luau`: detección de celebraciones, fichas del reporte, sacudida de cámara, las salidas del cráter y el borde del mapa.
+- `CinematicShots.luau` y `AudioIds.luau`: las tomas de cámara del menú de inicio y la lista de 50 sonidos, como datos.
 - `Localization.luau` y `PetModels.luau`: textos y formas de las mascotas como datos simples.
 
 #### Una sola fuente de números
 
-Cada número que usa el juego vive en `src/shared/MissionData.luau`, agrupado en tablas como `REAL`, `WORLD`, `MISSION`, `POWER`, `METERS`, `WATER`, `SCIENCE`, `SUIT`, `STORM`, `BASE` y `EVENTS`. Cada valor está etiquetado como **REAL** (con la sección de `DATA_SOURCES.md` de la que proviene) o **GAME** (un valor de ajuste elegido para que el juego sea jugable). Dos ejemplos: la gravedad superficial de la Luna de 1.62 m/s² es REAL; el turno de 150 segundos es GAME. La gravedad predeterminada de Roblox de 196.2 studs/s² representa a la Tierra, así que la Luna usa 32.4 studs/s², lo que conserva la proporción real entre la Luna y la Tierra (GAME, derivado).
+Cada número que usa el juego vive en `src/shared/MissionData.luau`, agrupado en tablas como `REAL`, `WORLD`, `MISSION`, `POWER`, `METERS`, `WATER`, `SCIENCE`, `SUIT`, `STORM`, `BASE`, `EVENTS`, `ACHIEVEMENTS`, `GUARD`, `QUESTS`, `TYCOON_CLIENT`, `DAILY` y `LOGBOOK`. Cada valor está etiquetado como **REAL** (con la sección de `DATA_SOURCES.md` de la que proviene) o **GAME** (un valor de ajuste elegido para que el juego sea jugable). Dos ejemplos: la gravedad superficial de la Luna de 1.62 m/s² es REAL; el turno de 150 segundos es GAME. La gravedad predeterminada de Roblox de 196.2 studs/s² representa a la Tierra, así que la Luna usa 32.4 studs/s², lo que conserva la proporción real entre la Luna y la Tierra (GAME, derivado). Los tiempos técnicos de la interfaz (cuánto dura una frase en pantalla) no son números de juego y viven en `Reading.luau`.
 
 #### Texto e idiomas
 
@@ -784,7 +949,7 @@ Todo el texto que ve el jugador viaja como claves de localización y se traduce 
 
 #### Identidad visual "Lunar Sunrise"
 
-`Theme.luau` contiene la paleta (azul noche, cian, naranja, verde lima, magenta, crema, más rojo y dorado derivados) y los roles semánticos (`Theme.ROLE`, por ejemplo `accent`, `warning`, `danger`, `good`, `reward`). El código usa roles, no colores directos, para la interfaz, las luces y los acentos de la base. `Theme.FONT` define dos fuentes: Fredoka One para títulos y botones, y Gotham Bold para el texto principal. Los únicos recursos de imagen son 70 íconos blancos de Tabler (licencia MIT), listados en `Icons.luau` y teñidos dentro del juego con colores de Theme, además del mapa de la Tierra Blue Marble de la NASA, de dominio público. No hay emojis en ninguna parte de la interfaz.
+`Theme.luau` contiene la paleta (azul noche, cian, naranja, verde lima, magenta, crema, más rojo y dorado derivados) y los roles semánticos (`Theme.ROLE`, por ejemplo `accent`, `warning`, `danger`, `good`, `reward`). El código usa roles, no colores directos, para la interfaz, las luces y los acentos de la base, y el confeti, las franjas del traje y las lámparas de la línea de hielo usan la misma paleta. `Theme.FONT` define dos fuentes: Fredoka One para títulos y botones, y Gotham Bold para el texto principal. Los únicos recursos de imagen son 68 íconos blancos de Tabler (licencia MIT), listados en `Icons.luau` y teñidos dentro del juego con colores de Theme, además del mapa de la Tierra Blue Marble de la NASA, de dominio público, y una cara del cielo casi negra hecha por el equipo. No hay emojis en ninguna parte de la interfaz.
 
 #### Datos de clima espacial
 
@@ -796,32 +961,46 @@ Al iniciar el servidor, `SpaceWeatherService` consulta a NASA / CCMC DONKI las l
 
 | Módulo | Función |
 | :--- | :--- |
-| `BaseBuild` | Reglas puras de construir y crecer: créditos, XP, niveles, costos, requisitos del hábitat, habilidades, mascotas, equipo, taladros |
+| `Achievements` | Los 13 logros de aprendizaje: identificadores, íconos, textos, reglas de desbloqueo, registros guardados |
+| `AudioIds` | Los 50 sonidos: recurso, grupo (Música o Efectos), bucle, volumen, duración, tiempo de espera, si es un sonido del mundo |
+| `BaseBuild` | Reglas puras de construir y crecer: créditos, XP, niveles, costos, requisitos del hábitat, habilidades, mascotas, equipo, taladros, tamaño del silo, pago de la línea de hielo |
+| `CinematicShots` | Las ocho tomas de cámara del menú de inicio, como datos y matemáticas |
+| `Daily` | Calendario de la cápsula de suministros, datos de la carga, franjas del traje y registros e hitos de la Bitácora lunar |
+| `Feel` | Detección de celebraciones, las fichas de causa y efecto del reporte, disminución de la sacudida de cámara |
+| `Glossary` | Las nueve palabras del glosario con imágenes, con sus íconos y formas |
+| `IceLineView` | Lo que muestra la línea de hielo: textos de los letreros, luces de estado, avisos "+N", cuándo C.A.R.L. señala el silo |
 | `Icons` | ID de recurso de los íconos de Tabler y del mapa de la Tierra |
 | `Localization` | Cada texto que ve el jugador, en inglés y en español, consultado por clave |
 | `MissionData` | Cada número del juego, etiquetado como REAL o GAME |
 | `Missions` | Misiones de entrenamiento, tres capítulos de historia y juego libre, como datos |
 | `PetModels` | Datos de piezas de las cuatro mascotas, basados en los diseños de un integrante del equipo |
-| `Quests` | Aventuras principales y extra como datos, con funciones auxiliares puras |
+| `Quests` | Aventuras principales y extra como datos, con funciones auxiliares puras, migración de partidas guardadas y pistas de tesoros |
+| `Quiz` | El banco de preguntas de C.A.R.L. (una sola respuesta correcta cada una) y las reglas del registro de respuestas |
+| `Reading` | Cuánto dura una frase en pantalla y cuál frase en espera se salta primero |
+| `ServerGuard` | Revisiones puras del servidor: distancia a los avisos, límites del hielo, el candado de sesión, límites de la configuración, velocidades de los mensajes |
 | `Simulation` | Reglas puras de la misión para un día y los medidores en vivo |
 | `SpaceWeatherArchive` | Llamaradas reales de clase X guardadas de DONKI |
 | `Theme` | Paleta, roles y fuentes de "Lunar Sunrise" |
 | `Types` | Contrato de red: instantáneas, tipos de estado, acciones, nombres de los remotos |
 | `Version` | Identificador de compilación, usado para confirmar que la sincronización de Rojo llegó a Studio |
+| `Worlds` | Mundos privados: papeles de los servidores, quién puede entrar, de quién es la base que muestra un mundo |
+| `WorldSafety` | Las rampas de salida del cráter y sus distancias libres, las paredes del borde del mapa |
 
 #### Módulos del servidor (`src/server`)
 
 | Módulo | Función |
 | :--- | :--- |
 | `Main.server` | Punto de entrada: construye el mundo, crea los remotos, inicia los servicios y hace aparecer a los jugadores después de cargar una ranura de guardado |
-| `BaseService` | Construir y hacer crecer la base por pasos: plataformas de construcción, cajas de piezas, créditos, XP, habilidades, compras en el laboratorio, silo |
+| `AchievementService` | Desbloquea logros de aprendizaje a partir de eventos reales, los guarda en la partida y entrega insignias de Roblox |
+| `BaseService` | Construir y hacer crecer la base por pasos: plataformas de construcción, cajas de piezas, créditos, XP, habilidades, compras en el Laboratorio, la línea de hielo (silo, planta de agua, viajes del robot de carga, hielo mientras no estás) |
 | `Codes` | Códigos canjeables para cosméticos de eventos; solo en el servidor, para que los jugadores no puedan leerlos |
-| `CrewService` | Oxígeno del traje por jugador, zonas presurizadas, hielo transportado, rescate de C.A.R.L. hasta el módulo de aterrizaje |
+| `CrewService` | Oxígeno del traje por jugador, zonas presurizadas, hielo transportado, rescate al cuarto presurizado más cercano |
+| `DailyService` | La cápsula de suministros diaria, los hitos de la Bitácora lunar y las franjas del traje |
 | `ExploreService` | Escaneos de sitios de exploración con la tableta e impactos aleatorios de meteoritos |
 | `MissionService` | El ciclo de la misión: fases, reparto de energía, tareas del turno, tormentas, despacho de acciones |
 | `PetService` | Construye la mascota equipada y la mueve detrás de su astronauta |
-| `ProgressService` | Partidas guardadas: tres ranuras por jugador, registro meta, migraciones, guardado automático, "Guardar ahora", teletransporte a modo solo |
-| `QuestService` | Da seguimiento a las aventuras principales y extra a partir de eventos reales y paga cada recompensa una sola vez |
+| `ProgressService` | Partidas guardadas: tres ranuras por jugador, registro meta, candado de sesión, configuración, migraciones, guardado automático, "Guardar ahora", viajes a mundos privados |
+| `QuestService` | Da seguimiento a las aventuras principales y extra a partir de eventos reales, paga cada recompensa una sola vez, hace las preguntas de C.A.R.L. y da pistas de tesoros y avisos de descanso |
 | `SpaceWeatherService` | Consulta en vivo a DONKI con el archivo como respaldo, y elección de llamaradas para las tormentas |
 | `SuitService` | Casco de EVA y mochila de soporte vital soldados sobre el avatar del propio jugador, más los modelos del equipo |
 | `ToolModels` | Modelos de piezas de las herramientas: llave, taladro de hielo, cepillo, kit de reparación, tableta, charola de ensalada |
@@ -831,42 +1010,53 @@ Al iniciar el servidor, `SpaceWeatherService` consulta a NASA / CCMC DONKI las l
 | `WorldBuilder` | Construye la base del polo sur y su maquinaria de construcción; usa los módulos World* de abajo |
 | `WorldParts` | Anclas de distribución, paleta, estado compartido de construcción y funciones auxiliares de piezas |
 | `WorldSecrets` | Lugares ocultos, los cuatro coleccionables, la bandera del equipo y el observatorio sellado |
-| `WorldSites` | Modelos del laboratorio, el garaje, la plataforma de aterrizaje y la nave, cinco sitios de exploración, cráteres de meteoritos |
+| `WorldSites` | Modelos del Laboratorio, el garaje, la plataforma de aterrizaje y la nave, cinco sitios de exploración, cráteres de meteoritos |
 | `WorldSky` | Gravedad lunar, iluminación, cielo negro, la Tierra, Marte, estrellas, la trayectoria del Sol sobre el horizonte y los eclipses |
-| `WorldStructures` | Taladros de hielo, banda transportadora, silo, robot de carga, plataformas de construcción y hologramas, el módulo de aterrizaje, pasos de construcción, cajas |
+| `WorldStructures` | Taladros de hielo, bandas, silo, planta de agua, robot de carga, plataformas de construcción y hologramas, la nave de llegada, pasos de construcción, cajas |
 
 #### Módulos del cliente (`src/client`)
 
 | Módulo | Función |
 | :--- | :--- |
 | `Main.client` | Punto de entrada: construye la interfaz, escucha al servidor y muestra la pantalla correcta |
-| `BasePanel` | Panel del laboratorio: habilidades, equipo, mejoras de herramientas y mascotas; solo se abre en el laboratorio |
-| `CarlDrone` | C.A.R.L., el rover ayudante con orugas, con su haz de guía y su haz hacia el refugio |
-| `Collection` | Pantalla de coleccionables y la tarjeta de hallazgo de mito contra ciencia |
-| `DemoKeys` | Atajos con teclas F para pruebas y grabación, solo en Studio o para el dueño del lugar |
+| `AchievementsPanel` | El panel de Logros: páginas de mosaicos grandes con datos, pistas y avance |
+| `Audio` | Todos los sonidos: efectos sueltos reutilizables, bucles que se desvanecen, zumbidos en 3D, música según el estado del juego, la regla del casco |
+| `BasePanel` | Panel del Laboratorio: habilidades, equipo, mejoras de herramientas y mascotas; solo se abre en el Laboratorio |
+| `CameraFx` | La sacudida por meteoritos a través del suelo y el pulso naranja en los bordes durante las tormentas |
+| `CarlDrone` | C.A.R.L., el rover ayudante con orugas, con su haz de guía (que las paredes bloquean) y su haz hacia el refugio |
+| `Celebrate` | Confeti, destellos, títulos de nivel y destellos en las plataformas |
+| `Cinematic` | Reproduce las tomas de cámara del menú de inicio y el ajuste de color cinematográfico |
+| `Collection` | La Bitácora lunar (secretos, lugares, rocas espaciales, logros, datos, franjas) y la tarjeta de hallazgo de mito contra ciencia |
+| `DailyCapsule` | La llegada de la cápsula junto a la nave y la tarjeta del calendario de 7 días |
+| `DemoKeys` | Atajos con teclas F para pruebas y grabación, solo en Roblox Studio |
 | `ExploreCard` | Tarjeta que se muestra después de escanear un sitio o un cráter de meteorito |
 | `FunFacts` | Los datos curiosos breves y verdaderos de C.A.R.L., tomados de una bolsa mezclada sin repeticiones |
 | `Gear` | Botas de aire (doble salto) y mochila propulsora, sus teclas, botones táctiles y tanque de gas |
-| `Hud` | HUD del turno, panel de signos vitales siempre visible, cartera, hielo transportado y etiquetas (pills) |
+| `GlossaryCard` | La tarjeta con imagen "¿Qué significa?" de las palabras doradas |
+| `Hud` | HUD del turno, panel de signos vitales siempre visible, cartera con la etiqueta de las máquinas, hielo transportado y etiquetas (pills) |
+| `IncomePops` | Avisos "+N créditos" en el silo y en el puerto de suministros, y la tarjeta "Mientras no estabas" |
+| `MapEdge` | La franja naranja del borde del mapa y el aviso de C.A.R.L. |
 | `Markers` | Marcadores flotantes de tareas, que solo se muestran cuando importan |
-| `Messages` | Globo de diálogo de C.A.R.L. con colas de mensajes y consejos, e insignias de herramientas |
+| `Messages` | Globo de diálogo de C.A.R.L.: tiempos de lectura, frases juntadas y saltadas, insignias de herramientas, el historial |
 | `Meters` | Barras de aire, comida, radiación y agua en distribuciones de fila y de columna |
-| `MissionSelect` | La consola de misiones del hábitat: tarjetas de entrenamiento, historia y juego libre |
+| `MissionSelect` | La consola de misiones del hábitat: tarjetas de entrenamiento, historia y juego libre, y el botón Bitácora |
 | `Movement` | Tiempos más cortos para mantener presionados los avisos, según el nivel del taladro y la habilidad de constructor |
-| `Objectives` | Lista de verificación de los objetivos de la misión y el seguimiento de aventuras |
+| `Objectives` | Lista de verificación de los objetivos de la misión y el seguimiento de aventuras con barras de avance |
 | `Onboarding` | Consejos guiados y resaltados del tablero de energía que nunca bloquean el juego |
 | `PowerBoard` | Capa de planeación donde la tripulación reparte las celdas de energía entre los sistemas |
+| `ProductionLine` | Anima la línea de hielo (cubos, brocas, robot, ventilador, burbujas) y sus letreros en el mundo |
 | `Prompts` | Localiza los avisos y letreros del mundo a partir de sus atributos de clave |
-| `QuestToasts` | Tarjetas de "¡Nueva aventura!", "Listo" y "¡Aventura completa!" del lado derecho |
-| `Report` | Reporte de fin de misión con estrellas y una línea de tiempo día por día de las causas |
+| `QuestToasts` | Tarjetas de "¡Nueva aventura!", "Listo", "¡Aventura completa!" y la tarjeta dorada grande de aventura principal |
+| `QuizCard` | La tarjeta con imagen de la pregunta de C.A.R.L. y su resultado |
+| `Report` | Reporte de fin de misión con estrellas y una línea de tiempo día por día de causa y efecto |
 | `Rewards` | Recompensas de coleccionables del lado del cliente, como abrir la puerta del observatorio |
 | `SaveIndicator` | La etiqueta "Juego guardado" después de cada guardado |
-| `Settings` | Idioma, volumen, opciones de C.A.R.L., código canjeable, "Guardar ahora" |
+| `Settings` | Página Juego (idioma, volumen, opciones de C.A.R.L., código canjeable, "Guardar ahora") y página Ayudas |
 | `Sources` | Panel "Datos reales de la NASA": estado en vivo o de archivo, datos reales, créditos de las fuentes |
 | `Sprint` | Interruptor para correr, bonificaciones de velocidad y carrera automática |
-| `StartMenu` | Primera pantalla: Continuar, Juego nuevo, Cargar juego, Configuración, Créditos, y después Solo yo o Con amigos |
-| `Store` | Estado del cliente: última instantánea, progreso, estado de la base, ranuras, idioma, configuración |
-| `Ui` | Bloques compartidos de la interfaz: raíz escalada, paneles, etiquetas, botones, barras, íconos teñidos |
+| `StartMenu` | Primera pantalla: Continuar con su tarjeta, Juego nuevo o Mis mundos, Unirse a un amigo, Configuración, Créditos; la lista de mundos, Continuar o Empezar de nuevo, Solo yo o Con amigos, la pantalla de espera |
+| `Store` | Estado del cliente: última instantánea, progreso, estado de la base, ranuras, idioma, configuración y ayudas |
+| `Ui` | Bloques compartidos de la interfaz: raíz escalada con márgenes seguros, paneles, etiquetas con tamaño mínimo de texto, botones con sonido, barras, íconos teñidos |
 | `VehicleClient` | Controles de manejo, cámara de persecución y el panel del vehículo |
 | `Wardrobe` | Elegir casco, mochila, apariencia de C.A.R.L. y mascota |
 
@@ -877,45 +1067,54 @@ El servidor crea sus RemoteEvents en `ReplicatedStorage.Remotes`. Sus nombres se
 | Remoto | Dirección | Transporta |
 | :--- | :--- | :--- |
 | `Action` | del cliente al servidor | `Types.Action`, la única forma en que un cliente pide cualquier cosa |
-| `Snapshot` | del servidor a todos | El estado completo de la misión, enviado en cada cambio y a quienes se unen tarde |
+| `Snapshot` | del servidor a todos | El estado completo de la misión, enviado con cada cambio (como máximo uno cada 0.1 s después de las acciones) y a quienes se unen tarde |
 | `PlayerStats` | del servidor a uno | Los valores del traje y del terreno de ese jugador |
 | `AssistantMessage` | del servidor al cliente | Una frase de C.A.R.L. como clave de localización con parámetros |
 | `Progress` | del servidor a uno | Misiones completadas, coleccionables, cosméticos |
 | `Collected` | del servidor a uno | La recolección de un coleccionable, justo después de que ocurre |
-| `BaseState` | del servidor a uno | Créditos, XP, construcciones, habilidades, herramientas, equipo, mascotas, seguimiento de aventuras |
+| `BaseState` | del servidor a uno | Créditos, XP, construcciones, habilidades, herramientas, equipo, mascotas, seguimiento de aventuras, la pregunta pendiente, ingresos de las máquinas |
 | `Explore` | del servidor a uno | El resultado del escaneo de un sitio o de un meteorito |
-| `Slots` | del servidor a uno | Las tres ranuras de guardado para el menú de inicio |
+| `Slots` | del servidor a uno | Las tres ranuras de guardado para el menú de inicio, con la configuración guardada |
 | `Saved` | del servidor a uno | Un aviso después de cada guardado de la ranura de ese jugador |
+| `Worlds` | del servidor a uno | La lista de "Unirse a un amigo" |
+| `Achievements` | del servidor a uno | Los logros y contadores de ese jugador |
+| `IceLine` | del servidor a uno | Una entrega o recolección (créditos, producto, posición) para los avisos "+N", y el aviso de "mientras no estabas" |
+| `Daily` | del servidor a uno | El calendario de la cápsula, la Bitácora y las franjas |
 
 Las acciones se dividen en grupos:
 
 - **Misión:** `SetCells`, `StartMission`, `StartShift`, `Restart`.
-- **Configuración del jugador:** `SetLanguage`, `RedeemCode`.
-- **Partidas guardadas:** `ChooseSlot`, `RequestSlots`, `SaveNow` (gestionadas por `ProgressService`).
+- **Configuración del jugador:** `SetLanguage`, `SaveSettings`, `RedeemCode`.
+- **Partidas guardadas y mundos:** `ChooseSlot`, `RequestSlots`, `ListFriendWorlds`, `JoinWorld`, `SaveNow` (gestionadas por `ProgressService`).
 - **Base:** `Build`, `LearnSkill`, `Equip`, `BuyPet`, `ClaimSilo`, `UpgradeTool`, `BuyGear`, `ToggleGear` (validadas por `BaseService`).
-- **Depuración:** `DebugMeteor`, `DebugBuildNext`, `DebugForceEvent`, `DebugEndShift`, `DebugEclipse` y otras. Solo se aceptan en Studio o del dueño del lugar, y se usan para probar y grabar la demostración.
+- **Aprendizaje:** `OpenSources`, `AnswerQuiz`.
+- **Cápsula diaria y Bitácora:** `ClaimDaily`, `RequestDaily`, `ClaimLogbook`, `WearStripes`, `HeardFact` (validadas por `DailyService`).
+- **Depuración:** `DebugMeteor`, `DebugBuildNext`, `DebugForceEvent`, `DebugEndShift`, `DebugEclipse` y otras. Desde la etapa 11 solo se aceptan en Roblox Studio, nunca en un servidor en vivo, y se usan para probar y grabar.
 
-`MissionService` limita a cada jugador a 20 acciones por segundo. Las acciones de ranuras y de guardado tienen sus propios límites en `ProgressService` (una solicitud de la lista de ranuras y una solicitud de "Guardar ahora" por segundo), y un código canjeable puede intentarse una vez cada 2 segundos.
+`MissionService` limita a cada jugador a 20 acciones por segundo, y el vestíbulo público no acepta ninguna acción de juego. Las acciones de ranuras y de guardado tienen sus propios límites en `ProgressService` (una solicitud de la lista de ranuras y una solicitud de "Guardar ahora" por segundo), un código canjeable puede intentarse una vez cada 2 segundos, una respuesta a la pregunta de C.A.R.L. una vez por segundo, y la pantalla de Fuentes cuenta una vez cada 5 segundos.
 
 ### 4.7 El sistema de guardado
 
 `ProgressService` guarda el progreso de cada jugador en un DataStore de Roblox llamado `SBO_Progress_v1`.
 
-- **Tres ranuras.** Cada jugador tiene tres ranuras de guardado ("mundos"), con la clave `p_<userId>_s<slot>`. Una ranura contiene las misiones completadas, los coleccionables, los cosméticos y el registro de la base (créditos, XP, construcciones, habilidades, herramientas, equipo, mascotas, lo que viste el jugador, los sitios escaneados y el progreso de las aventuras).
-- **Registro meta.** `p_<userId>_meta` resume las ranuras para el menú de inicio (usada o vacía, nivel de base, nivel del jugador, créditos, hora del último guardado, solo o con amigos) y recuerda la última ranura. Los cosméticos de eventos aplican a toda la cuenta y viven aquí.
-- **Partidas guardadas antiguas.** La partida guardada de antes de las ranuras (`u_<userId>`) nunca se borra y se convierte en la ranura 1. Las partidas guardadas de etapas anteriores se migran al cargarse, para que nadie pierda su base.
+- **Tres ranuras.** Cada jugador tiene tres ranuras de guardado ("mundos"), con la clave `p_<userId>_s<slot>`. Una ranura contiene las misiones completadas, los coleccionables, los cosméticos y el registro de la base: créditos, XP, construcciones, habilidades, herramientas, equipo, mascotas, lo que viste el jugador, los sitios escaneados, el progreso de las aventuras y las respuestas a las preguntas, los logros, el calendario de la cápsula diaria y las franjas, y el silo (`base.silo = { ice, at }`).
+- **Registro meta.** `p_<userId>_meta` resume las ranuras para el menú de inicio (usada o vacía, nivel de base, nivel del jugador, créditos, hora del último guardado, solo o con amigos), recuerda la última ranura y guarda la configuración del jugador. Los cosméticos de eventos aplican a toda la cuenta y viven aquí.
+- **Mundos privados.** Cada mundo es la ranura de su dueño y corre en su propio servidor reservado, en los dos modos. Continuar, Juego nuevo, Solo yo o Con amigos reservan un servidor y teletransportan ahí al jugador; si el viaje falla, el jugador vuelve al menú con un mensaje. Un mapa de MemoryStore ("SBO_Worlds") lista los mundos con amigos abiertos (código de acceso, jugadores, nivel de base), se actualiza cada 30 segundos y desaparece a los 120. El vestíbulo y el servidor del mundo revisan los dos la amistad, que el mundo esté abierto y que tenga lugar.
+- **Candado de sesión.** Una ranura solo se carga después de que el servidor escribe en ella un candado (servidor, visita, hora). Un candado reciente de otro servidor hace que la carga espere hasta 20 segundos el último guardado de ese servidor y luego lo reemplaza; un candado de más de 3 minutos ya no cuenta. Cada guardado revisa y renueva el candado, y el último guardado al salir lo libera. Un servidor que perdió el candado ya no vuelve a escribir. Esto cierra el truco de cambiar de servidor para gastar créditos en un mundo y conservarlos en otro.
+- **Continuar nunca borra.** Solo un Empezar de nuevo explícito (Juego nuevo en un mundo usado) reemplaza una ranura.
+- **La configuración acompaña al jugador.** El idioma, los volúmenes, los datos curiosos, la guía y las cuatro ayudas se guardan con la acción `SaveSettings`, que el servidor revisa y acota, y regresan en la lista de ranuras, en los TeleportData del viaje y como atributos del jugador. El cliente envía un cambio 0.6 segundos después del último, así que arrastrar un control solo envía una vez.
+- **Partidas guardadas antiguas.** La partida guardada de antes de las ranuras (`u_<userId>`) nunca se borra y se convierte en la ranura 1. Las partidas guardadas de etapas anteriores se migran al cargarse, para que nadie pierda su base; el registro de aventuras tiene una versión (`v = 2`), así que las partidas de antes de la etapa 11 se saltan la nueva primera aventura.
 - **Sin personaje hasta que se carga una ranura.** El jugador aparece solo después de elegir una ranura, así que no se guarda nada de un jugador que todavía no ha elegido una.
-- **Solo y con amigos.** En un juego publicado, "Solo yo" lleva al jugador a un nuevo servidor reservado. Si el teletransporte falla, la ranura se carga en el servidor actual. "Con amigos" carga en el servidor actual.
-- **Guardado automático.** Una ranura modificada se guarda como máximo una vez cada 10 segundos. El registro meta se guarda como máximo cada 60 segundos. Una revisión de seguridad cada 60 segundos programa todo lo que siga sin guardarse.
-- **Fusión.** Un guardado solo agrega a lo que ya está almacenado, así que dos servidores que guardan la misma ranura no pierden progreso. Juego nuevo y el reinicio de depuración son las únicas escrituras que reemplazan.
-- **Al salir.** Un jugador que sale cuenta de inmediato como un guardado en curso, y `BindToClose` lo espera (hasta 25 segundos en un servidor en vivo).
+- **Guardado automático.** Una ranura modificada se guarda como máximo una vez cada 10 segundos, y los jugadores inactivos se vuelven a guardar en silencio más o menos cada minuto para mantener vigente el candado. El registro meta se guarda como máximo cada 60 segundos. El silo se escribe como máximo cada 30 segundos mientras cambia, y después de cada pago.
+- **Fusión.** Un guardado solo agrega a lo que ya está almacenado, así que el progreso nunca se pierde. Empezar de nuevo y el reinicio de depuración son las únicas escrituras que reemplazan.
+- **Al salir.** Un jugador que sale cuenta de inmediato como un guardado en curso, y `BindToClose` lo espera (hasta 25 segundos en un servidor en vivo). Primero se le devuelven a su partida los créditos de las obras que pagó y no terminó, porque un servidor de mundo se cierra cuando su dueño se va.
 - **"Guardar ahora".** El botón de Configuración envía `SaveNow`. El servidor escribe en cuanto el DataStore permite una escritura por clave (aproximadamente cada 6 segundos) y lo confirma por el remoto `Saved`. El cliente muestra "Juego guardado"; los avisos del guardado automático se muestran como máximo una vez cada 30 segundos.
-- **Comportamiento en Studio.** Si el lugar está publicado, Studio usa un almacén separado, `SBO_Progress_v1_Studio`, para que los créditos de depuración nunca lleguen a las partidas guardadas reales. Una sola lectura de prueba lo decide; si los DataStores no responden en 8 segundos, se usa la memoria. En un lugar no publicado, las partidas guardadas viven en memoria y se pierden cuando se detiene Play, y la etiqueta dice "Guardado solo para esta prueba". Un atributo del workspace, `SBO_StudioDataStores`, puede forzar la memoria (`false`) o el almacén real (`true`).
+- **Comportamiento en Studio.** Si el lugar está publicado, Studio usa un almacén separado, `SBO_Progress_v1_Studio`, para que los créditos de depuración nunca lleguen a las partidas guardadas reales. Una sola lectura de prueba lo decide; si los DataStores no responden en 8 segundos, se usa la memoria. En un lugar no publicado, las partidas guardadas viven en memoria y se pierden cuando se detiene Play, y la etiqueta dice "Guardado solo para esta prueba". Un atributo del workspace, `SBO_StudioDataStores`, puede forzar la memoria (`false`) o el almacén real (`true`). En Studio no existen los servidores reservados, así que ahí el primer jugador cuya ranura se carga es el dueño del mundo y los demás son invitados.
 - **Límites en los valores almacenados.** Los créditos y la XP leídos del almacenamiento se acotan, para que un registro dañado no pueda romper el juego.
 
 ### 4.8 El mundo construido por código
 
-`WorldBuilder.build` crea toda la base del polo sur a partir de Parts simples cuando se inicia el servidor: los elementos del terreno, el cráter con hielo, la cresta solar, el módulo de aterrizaje de llegada, las plataformas de construcción con hologramas, las zonas presurizadas, los sitios de exploración y los secretos. Nada se coloca a mano en Studio.
+`WorldBuilder.build` crea toda la base del polo sur a partir de Parts simples cuando se inicia el servidor: los elementos del terreno, el cráter con hielo y tres rampas de salida, la cresta solar, la nave de llegada, las plataformas de construcción con hologramas, la línea de hielo (bandas elevadoras, la tolva del borde, la banda abierta, el silo, la planta de agua y el puerto de suministros), las zonas presurizadas, los sitios de exploración, los secretos y paredes invisibles 12 studs antes del borde del terreno. Nada se coloca a mano en Studio.
 
 Roblox se niega a asignar el código fuente de un script cuando tiene más de 200,000 caracteres. Durante la Etapa 7, el constructor del mundo creció a unos 238,000 caracteres, y la sincronización en vivo de Rojo dejó de funcionar para él. Se dividió en módulos hermanos:
 
@@ -923,63 +1122,87 @@ Roblox se niega a asignar el código fuente de un script cuando tiene más de 20
 | :--- | :--- |
 | `WorldParts` | Anclas de distribución, paleta y funciones auxiliares de piezas compartidas por los demás |
 | `WorldSky` | Entorno: gravedad, iluminación, cielo, la Tierra, trayectoria del Sol, eclipses |
-| `WorldStructures` | Estructuras de construir y crecer, el módulo de aterrizaje y los pasos de construcción |
+| `WorldStructures` | Estructuras de construir y crecer, la línea de hielo, la nave de llegada y los pasos de construcción |
 | `WorldSecrets` | Lugares ocultos y coleccionables |
 | `WorldSites` | Laboratorio, garaje, plataforma de aterrizaje, nave, sitios de exploración, meteoritos |
 
-`WorldBuilder.luau` ahora tiene unos 142,000 caracteres, y el siguiente archivo más grande, `Localization.luau`, tiene unos 118,000. Ambos están por debajo del límite.
+`WorldBuilder.luau` ahora tiene unos 149,000 caracteres, y el archivo más grande, `Localization.luau`, tiene unos 155,000. Ambos están por debajo del límite.
 
-Algunos detalles del mundo siguen reglas científicas. El Sol sigue una trayectoria precalculada a lo largo del horizonte, como en el polo sur lunar real, porque el modelo de Sol propio de Roblox no gira alrededor del polo. El cielo se mantiene negro porque la Luna no tiene atmósfera. Los meteoritos caen con un destello y polvo, pero sin estela de fuego. El refugio es un montículo cubierto de regolito, porque lo que protege de la radiación es la masa, no la energía.
+Algunos detalles del mundo siguen reglas científicas. El Sol sigue una trayectoria precalculada a lo largo del horizonte, como en el polo sur lunar real, porque el modelo de Sol propio de Roblox no gira alrededor del polo. El cielo se mantiene negro porque la Luna no tiene atmósfera. Los meteoritos caen con un destello y polvo, pero sin estela de fuego. El refugio es un montículo cubierto de regolito, porque lo que protege de la radiación es la masa, no la energía. Las rampas del cráter las coloca `WorldSafety.exitAngles` lejos de los taladros, sus bandas, el nicho del queso, los nodos de hielo y las lámparas, y `tests/feel` revisa las 36 distribuciones posibles del cráter.
 
-### 4.9 Pruebas
+### 4.9 Proceso de audio
 
-Los cinco conjuntos de pruebas de Lune son puros: cargan directamente los módulos compartidos y no necesitan Roblox. Resultados actuales (todos aprueban, 0 fallas):
+- **Hecho por el equipo.** La música y la mayoría de los efectos los sintetizó el código propio del equipo (scripts de Python en `promo/audio/synth`, excluido por git, escritos con ayuda de IA; ningún modelo generativo de audio). Cinco efectos mezclan grabaciones CC0 editadas de Freesound, encontradas con Openverse (sección 6.2). Ningún sonido es CC BY, y no se usa audio de la Toolbox ni del Marketplace.
+- **Subidos y listados.** El equipo subió los 50 sonidos como audio de Roblox. Sus IDs de recurso, grupos, volúmenes, duraciones y tiempos de espera están en `src/shared/AudioIds.luau`; los archivos fuente y las revisiones de volumen están en `promo/audio/manifest.json`, excluido por git.
+- **Un solo módulo reproduce todo.** `src/client/Audio.luau` maneja todos los sonidos: efectos sueltos reutilizables con un pequeño cambio de tono, bucles que se desvanecen, sonidos 3D que solo se oyen de cerca (los taladros, la banda y el silo zumban a unos 75 studs) y remates que bajan la música. Reutiliza los grupos de sonido `SBO_Music` y `SBO_SFX` de `Settings.luau`, así que los dos controles de volumen controlan todo. Cada llamada corre dentro de `pcall`, y nada suena antes de elegir una ranura.
+- **La regla del casco en el código.** Los sonidos del mundo pasan por un subgrupo del grupo de efectos. Mientras el atributo del jugador `SBO_Inside` no sea verdadero, un ecualizador apaga ese grupo (medios -7 dB, agudos -22 dB) y su volumen baja. Los sonidos del radio, la tableta y C.A.R.L. no pasan por él. Los sonidos predeterminados de los personajes de Roblox están silenciados en todos los personajes.
+- **Música según el estado.** Cada cuarto de segundo el módulo elige una pista: menú, tormenta, misión, eclipse, construcción o base de día, con transiciones de 2.5 segundos; una pista pausada continúa donde se quedó.
+- **Ganchos.** Cada gancho de sonido en otro módulo es una línea corta marcada "Stage 11 audio" (botones y paneles en `Ui.luau`, la cartera, los avisos de aventuras, C.A.R.L., el equipo y el carrito); lo demás lo maneja el estado del juego dentro de `Audio.start`.
+
+### 4.10 Pruebas
+
+Los once conjuntos de pruebas de Lune son puros: cargan directamente los módulos compartidos y no necesitan Roblox. Resultados actuales (16 de noviembre de 2026, todos aprueban, 0 fallas):
 
 | Conjunto | Comando | Verificaciones | Qué demuestra |
 | :--- | :--- | :--- | :--- |
-| Localización | `lune run tests/localization` | 36091 | Cada clave existe en inglés y en español con los mismos marcadores de posición; límites de palabras; sin emojis ni símbolos fuera del texto latino; sin jerga técnica en los textos de juego; los datos curiosos no se repiten y solo usan números que aparecen en `DATA_SOURCES.md`; los archivos de código fuente solo usan claves conocidas |
-| Base | `lune run tests/base` | 1686 | Los datos de construcción están bien formados; la XP y los 15 niveles del jugador; costos, requisitos y requisitos del hábitat; las construcciones compartidas toman el nivel más alto; habilidades, mascotas, taladros, pasos, herramientas, equipo, migración de partidas guardadas, el árbol del hábitat y las aventuras |
-| Misiones | `lune run tests/missions` | 693 | Los identificadores, calendarios y objetivos de las misiones son válidos; una tripulación cuidadosa puede terminar cada capítulo de la historia; un día de entrenamiento nunca vacía un medidor; las construcciones necesarias existen y pueden pagarse con las recompensas de las misiones; las tareas llegan después de la construcción que desbloquea su herramienta |
-| Balance | `lune run tests/balance` | 671 | "Ninguna decisión es gratis": un jugador pasivo aun así llega al día 5; ningún plan fijo obtiene 3 estrellas; reaccionar a los eventos puede dar 3 estrellas; recortar el invernadero se nota después como menos comida; sin hielo, el aire baja más rápido; sin antena, la ciencia tiene que esperar |
-| Economía | `lune run tests/economy` | 221 | Un jugador infantil simulado alcanza cada nivel de base dentro de las metas de ritmo del equipo; los ingresos nunca aumentan más de 2.5 veces entre ventanas de 10 minutos; los taladros automáticos siguen siendo una ayuda, no una granja pasiva |
+| Localización | `lune run tests/localization` | 51496 | Cada clave existe en inglés y en español con los mismos marcadores de posición; límites de palabras; sin emojis ni símbolos fuera del texto latino; sin jerga técnica en los textos de juego; los datos curiosos no se repiten y solo usan números que aparecen en `DATA_SOURCES.md`; los pasos que se cuentan no llevan `{n}`; los textos de preguntas y del glosario no citan números; los archivos de código fuente solo usan claves conocidas |
+| Base | `lune run tests/base` | 2201 | Datos de construcción; la XP y los 15 niveles del jugador; costos, requisitos y requisitos del hábitat; habilidades, mascotas, taladros, pasos, herramientas, equipo, migración de partidas guardadas, el árbol del hábitat y las aventuras; la primera aventura, las felicitaciones y las pistas de tesoros; la línea de hielo (planta, energía, estados, pago de entregas, carga del robot, hielo mientras no estás, guardado del silo) y lo que muestran sus letreros |
+| Misiones | `lune run tests/missions` | 729 | Los identificadores, calendarios y objetivos de las misiones son válidos; una tripulación cuidadosa puede terminar cada capítulo de la historia; un día de entrenamiento nunca vacía un medidor; las construcciones necesarias existen y pueden pagarse; los límites del hielo contra cada velocidad permitida, el ritmo de perforación, los pagos del camión de hielo y el polvo del mundo abierto |
+| Balance | `lune run tests/balance` | 716 | "Ninguna decisión es gratis": un jugador pasivo aun así llega al día 5; ningún plan fijo obtiene 3 estrellas; reaccionar a los eventos puede dar 3 estrellas; recortar el invernadero se nota después como menos comida; la dosis de tormenta se cuenta por segundo, sube en vivo y nunca baja; las falsas alarmas no suman nada |
+| Economía | `lune run tests/economy` | 234 | Un jugador infantil simulado alcanza cada nivel de base dentro de las metas de ritmo; los ingresos nunca aumentan más de 2.5 veces entre ventanas de 10 minutos; desde el robot de carga hasta la nave, las máquinas ganan del 30 al 50% de lo que gana jugar; recuperación de la inversión en taladros; límite del hielo mientras no estás |
+| Cinemática | `lune run tests/cinematic` | 189 | Las tomas de cámara del menú de inicio: claves, curvas, tiempos y encuadre |
+| Mundos | `lune run tests/worlds` | 116 | Papeles de los servidores, revisión de TeleportData, solo entran amigos y nunca más de 4, el modo solo sigue privado, la base es del dueño, el candado de sesión (cambio de servidor, robo, candado viejo, liberación), configuración y ayudas guardadas |
+| Logros | `lune run tests/achievements` | 758 | Identificadores, íconos, textos en en y es, reglas de desbloqueo, partidas viejas y fusiones; todo el banco de preguntas (una sola respuesta correcta, respuestas científicas, reglas del registro) y el glosario |
+| Cápsula diaria | `lune run tests/daily` | 222 | Una cápsula por día UTC, el calendario fijo, el conteo comprensivo, una semana no paga más que tres escaneos de cráteres, franjas, registros e hitos de la Bitácora, datos de la carga sin números |
+| Sensaciones | `lune run tests/feel` | 323 | Detección de celebraciones, fichas del reporte (la dosis solo sube), disminución de la sacudida, el borde del mapa y las 36 distribuciones del cráter: dos salidas extra en cada una, todas las distancias libres, una rampa a menos de 90 studs de cualquier punto del fondo |
+| Lectura | `lune run tests/reading` | 102 | Tiempos de lectura, el mínimo y el máximo, los factores de Tiempo de mensajes, frases repetidas que se juntan y cuál frase en espera se salta primero |
 
-Además de los conjuntos de pruebas de Lune, el asistente de IA jugó cada etapa en Studio usando pulsaciones de teclas y acciones remotas reales, revisando la consola en busca de errores de script. Estas pruebas de juego se listan en `DEVELOPMENT.md`. Todavía faltan pruebas de juego con personas ajenas al equipo.
+Además de los conjuntos de pruebas de Lune, el asistente de IA jugó cada etapa en Studio usando pulsaciones de teclas y acciones remotas reales, revisando la consola en busca de errores de script. La etapa 11 pasó una prueba rápida en Studio: el menú de inicio sin Cargar juego, la lista de mundos, la aparición en la nave, el seguimiento de aventuras, la tarjeta de la cápsula diaria, la línea de hielo y ningún error en la consola. Estas pruebas de juego se listan en `DEVELOPMENT.md`. Todavía faltan pruebas de juego con personas ajenas al equipo.
 
-### 4.10 Notas de rendimiento y seguridad
+### 4.11 Notas de rendimiento y seguridad
 
-- **Actualizaciones de red pequeñas.** Durante un turno, la instantánea con los medidores en vivo se envía como máximo unas cuatro veces por segundo. Las mascotas solo mueven su pieza raíz unas 20 veces por segundo y giran sus articulaciones con `Motor6D`, así que se envían muy pocos datos.
-- **Efectos visuales económicos.** La carcasa del casco se crea una sola vez con CSG al iniciar el servidor, se guarda en caché y se clona para cada personaje (si CSG falla, se usan esferas simples). Las mascotas nunca colisionan, no bloquean rayos ni proyectan sombras. La Tierra es un disco giratorio de bajo costo. Los marcadores de tareas solo se muestran cuando el jugador está cerca, cuando C.A.R.L. los señala o cuando el objetivo actual los necesita.
+- **Actualizaciones de red pequeñas.** Durante un turno, la instantánea con los medidores en vivo se envía como máximo unas cuatro veces por segundo, y las instantáneas después de las acciones se agrupan en una cada 0.1 segundos. El servidor ya no mueve nada en la línea de hielo: publica el estado de la línea como atributos, y cada cliente anima localmente los cubos, las brocas, el robot y el ventilador, y se detiene cuando la cámara está lejos. Antes, el servidor enviaba las posiciones de los taladros, los cubos y el robot de 15 a 20 veces por segundo a cada jugador. Las mascotas solo mueven su pieza raíz unas 20 veces por segundo y giran sus articulaciones con `Motor6D`.
+- **Efectos visuales económicos.** La carcasa del casco se crea una sola vez con CSG al iniciar el servidor, se guarda en caché y se clona para cada personaje (si CSG falla, se usan esferas simples). Las mascotas nunca colisionan, no bloquean rayos ni proyectan sombras. La Tierra es un disco giratorio de bajo costo. Los marcadores de tareas solo se muestran cuando importan. El haz de C.A.R.L. revisa su camino con un rayo cuatro veces por segundo.
 - **Aislamiento de fallas.** Cada servicio posterior al núcleo se inicia dentro de `pcall`, así que una pieza averiada se reporta con una advertencia y nunca detiene el servidor.
-- **Clientes no confiables.** Cada acción se verifica en el servidor. Los códigos canjeables viven solo en el servidor. Las acciones de depuración solo funcionan en Studio o para el dueño del lugar. Las construcciones verifican nivel, créditos, requisitos, propiedad y distancia.
+- **Clientes no confiables (`ServerGuard`).** Cada acción se verifica en el servidor. Los avisos de tareas (paneles, hielo del cráter, la máquina de agua, la fuga, la antena, la consola, la comida del invernadero) revisan que el jugador esté junto al aviso e ignoran repeticiones más rápidas que 0.25 segundos. La perforación se limita a 15 núcleos por minuto por jugador, uno por segundo como máximo, y un núcleo solo se acepta en la máquina de agua cuando de verdad pudo haber viajado hasta ahí a 50 studs por segundo. Cada núcleo del camión de hielo le paga al jugador que lo cargó. Un cráter de meteorito recuerda por cuenta quién lo escaneó. Las acciones de misión necesitan una partida cargada, y el vestíbulo no acepta ninguna.
+- **Las acciones de depuración son solo de Studio.** Las teclas F del equipo (`DemoKeys`) y cada acción de depuración solo funcionan en Roblox Studio. El juego en vivo las rechaza, incluso para el dueño del lugar.
+- **Los códigos canjeables** viven solo en el servidor.
 - **Datos honestos.** La etiqueta de en vivo aparece solo cuando la consulta a DONKI de este servidor tuvo éxito. De lo contrario se usa el archivo y se etiqueta como tal.
-- **Movimiento controlado por el cliente.** Roblox le da al cliente el control de su propio personaje. Por eso, el doble salto, el empuje de la mochila propulsora, la velocidad de carrera y los tiempos más cortos para mantener presionados los avisos se aplican en el cliente, con valores que el servidor establece como atributos del jugador.
+- **Movimiento controlado por el cliente.** Roblox le da al cliente el control de su propio personaje. Por eso, el doble salto, el empuje de la mochila propulsora, la velocidad de carrera y los tiempos más cortos para mantener presionados los avisos se aplican en el cliente, con valores que el servidor establece como atributos del jugador. Las paredes del borde del mapa detienen al carrito y a la mochila propulsora en la orilla.
 
-### 4.11 Accesibilidad
+### 4.12 Accesibilidad
 
-- **Dos idiomas.** Los botones EN y ES del panel de Configuración (al que también se llega desde el menú de inicio) cambian entre inglés y español en cualquier momento. La elección se envía con `SetLanguage`, y los avisos y letreros del mundo se actualizan de inmediato.
-- **Palabras sencillas.** Los textos de juego son breves (como máximo 8 palabras) y evitan la jerga, y las pruebas lo hacen cumplir.
-- **Íconos además del color.** Los medidores muestran un ícono, una etiqueta y un ícono de zona además del color de la barra, y C.A.R.L. muestra el ícono de la herramienta que necesita una tarea.
-- **Distribución táctil.** En pantallas táctiles hay botones para correr, para la carrera automática y para el equipo (botas y mochila propulsora), colocados cerca del botón de salto. La etiqueta de guardado y las tarjetas de aventuras están colocadas de modo que no cubran los botones propios de Roblox.
+- **Dos idiomas.** Los botones EN y ES de la Configuración (a la que también se llega desde el menú de inicio) cambian entre inglés y español en cualquier momento. La elección se guarda, y los avisos y letreros del mundo se actualizan de inmediato.
+- **Palabras sencillas.** Los textos de juego son breves (como máximo 8 palabras) y evitan la jerga, y las pruebas lo hacen cumplir. Un glosario con imágenes explica nueve palabras clave.
+- **Página de Ayudas.** Texto grande (1.25 veces, al momento), Menos movimiento, mensajes más largos (1.5 o 2 veces) y un interruptor de Ayuda de colores. La Ayuda de colores se guarda y se envía al cliente; ninguna pantalla la usa todavía, porque las zonas de los medidores y los botones de encendido ya muestran formas.
+- **Tiempo para leer.** Las frases de C.A.R.L. y los avisos de aventuras duran lo suficiente para un niño de 7 años (unos 8 segundos para 8 palabras), el reloj se pausa mientras está el menú de inicio, y el historial vuelve a mostrar las últimas 10 frases.
+- **Íconos y palabras además del color.** Los medidores muestran un ícono, una etiqueta y un ícono de zona además del color de la barra; las luces de la línea de hielo siempre tienen palabras al lado; C.A.R.L. muestra el ícono de la herramienta que necesita una tarea.
+- **Teléfonos.** En pantallas táctiles, ningún texto de la interfaz del juego mide menos de 11 píxeles reales, los dispositivos solo táctiles usan una distribución para 560 unidades de alto (cerca de 1.3 veces más grande), y la interfaz se aleja del notch y de las esquinas redondeadas (`ScreenInsets.DeviceSafeInsets`). Los botones para correr, avanzar solo y el equipo están cerca del botón de salto.
 - **Interfaz escalada.** La interfaz está diseñada para una pantalla de 720 unidades de alto, y un `UIScale` la ajusta a la altura real de la pantalla, así que conserva sus proporciones en teléfonos y en pantallas grandes.
+- **Control de videojuegos.** Cada cuadro pone la selección en su botón seguro y la regresa después.
 - **Primera persona.** En primera persona, Roblox fija el mouse al centro de la pantalla. Un botón modal oculto lo libera cada vez que hay una tarjeta o un panel abierto.
-- **Guía tranquila.** Los consejos nunca bloquean el juego, y los datos curiosos y el haz de guía de C.A.R.L. pueden desactivarse en Configuración.
+- **Guía tranquila.** Los consejos nunca bloquean el juego, las celebraciones nunca bloquean un toque, y los datos curiosos y el haz de guía de C.A.R.L. pueden desactivarse en Configuración.
 
-### 4.12 Limitaciones técnicas conocidas
+### 4.13 Limitaciones técnicas conocidas
 
 - **Restricción de edad.** Las experiencias nuevas de Roblox solo están abiertas para cuentas con verificación de edad de 16 años o más, hasta que pasen la evaluación de Roblox. Los niños del rango de edad al que va dirigido el juego todavía no pueden jugar la versión pública.
+- **Roblox necesita una cuenta y una instalación.** No es un juego de navegador sin inicio de sesión; por eso el video y el archivo de lugar de Studio son importantes para el jurado.
 - **Teléfonos.** La distribución para teléfonos todavía no se ha revisado en un dispositivo real.
+- **Una base por servidor.** La gravedad y la iluminación son globales en Roblox, así que cada servidor de mundo tiene una sola base: la de su dueño.
+- **Los medidores usan unidades de juego.** El aire, la comida y la radiación van de 0 a 100 para que los niños puedan leerlos. Los valores reales se muestran aparte en el panel de Fuentes.
+- **El retraso de la señal desde la Luna es corto.** Con 1.3 segundos, el retraso en sí no es un problema en la Luna, así que el juego convierte el enlace de la antena en la decisión y lo compara con Marte, donde serían de 3 a 22 minutos.
 - **Sonido en el vacío.** En el espacio no hay sonido. Afuera, los sonidos del mundo son suaves y apagados, como sentidos a través del traje; los pitidos de radio se oyen claros. Dentro de los módulos los sonidos son normales. La música no es parte del mundo.
 - **Los datos en vivo necesitan HTTP.** Sin "Allow HTTP Requests", o si DONKI no responde en 15 segundos, el juego usa el archivo. Una llamarada solo se repite como falsa alarma cuando su estado de partículas ha tenido dos días para asentarse.
-- **Partidas guardadas en Studio.** En un lugar no publicado, las partidas guardadas viven en memoria y se pierden cuando se detiene Play. Los servidores reservados del modo "Solo yo" funcionan únicamente en el juego publicado.
+- **Partidas guardadas y mundos en Studio.** En un lugar no publicado, las partidas guardadas viven en memoria y se pierden cuando se detiene Play. Los servidores reservados y la lista de "Unirse a un amigo" funcionan únicamente en el juego publicado.
 - **Ritmo del DataStore.** Roblox permite aproximadamente una escritura por clave cada 6 segundos, así que un "Guardar ahora" puede tardar unos segundos.
-- **Construcciones compartidas.** Las construcciones de un servidor se muestran en el nivel más alto que haya construido cualquier jugador presente. Cuando ese jugador sale, las estructuras bajan al nivel de los jugadores que siguen ahí.
-- **Efectos solo locales.** Algunas recompensas, como la puerta abierta del observatorio y la apariencia de Tierra de C.A.R.L., existen solo en el cliente de ese jugador.
+- **Un mundo con amigos se cierra con su dueño.** Cuando el dueño se va, las partidas de los invitados se guardan y ellos vuelven al menú.
+- **Efectos solo locales.** Algunas recompensas, como la puerta abierta del observatorio y la apariencia de Tierra de C.A.R.L., y la llegada de la cápsula diaria existen solo en el cliente de ese jugador.
 - **Sin enlaces externos.** Roblox no permite enlaces que salgan de la experiencia, así que las fuentes se acreditan como texto (por ejemplo "NASA / CCMC DONKI").
 - **Tamaño de los scripts.** El límite de 200,000 caracteres de Roblox para el código fuente de un script significa que los módulos grandes deben mantenerse divididos.
 
 ## 5. Registro de desarrollo
 
-Cómo se construyó Space Base Odyssey durante NASA Space Apps 2026 (14–15 de noviembre, evento local de Querétaro). Registra qué se decidió, quién lo decidió, qué se probó y cómo se usó la IA. Las horas son locales (UTC−6).
+Cómo se construyó Space Base Odyssey durante NASA Space Apps 2026 (14–15 de noviembre, evento local de Querétaro), seguido de la publicación de la etapa 10 y de la actualización nocturna de la etapa 11 el 16 de noviembre. Registra qué se decidió, quién lo decidió, qué se probó y cómo se usó la IA. Las horas son locales (UTC−6).
 
 ### 5.1 Equipo y roles
 
@@ -1335,6 +1558,39 @@ Probado en Studio (dirigido por el asistente):
 - Caminar del núcleo al laboratorio y del domo A al domo B nunca contó como exterior.
 - Sin errores de script.
 
+#### Domingo 15 de noviembre, tarde y noche
+
+**Seguimientos de la etapa 10.** Las entradas completas están en `DEVELOPMENT.md`.
+- **Menú de inicio cinematográfico.** Ocho tomas de cámara en vivo se reproducen detrás del menú (`CinematicShots.luau`, `Cinematic.luau`, `tests/cinematic`), con una base de exhibición terminada mientras nadie en el servidor ha cargado una partida. Con las mismas tomas se editó el tráiler de 30 segundos, con música original sintetizada con código.
+- **Aire del traje al manejar.** Ir en un vehículo ahora usa el ritmo de descanso, no el de correr.
+- **Tormentas y radiación.** Unos amigos que jugaron la versión publicada en una tripulación de tres reportaron tormentas "muy, muy seguido" y una barra de radiación que casi no se movía. El Simulacro de tormenta ahora solo se repite después de una pausa de 45 segundos y como máximo 3 veces por turno, quedarse a salvo cuenta por jugador, y la dosis de la tormenta se cuenta segundo a segundo mientras hay partículas, así que el medidor sube para quien está afuera y no se mueve para una tripulación en el refugio.
+- **Mundos privados.** Un jugador presionó Juego nuevo y apareció en el mundo de un amigo. Ahora cada mundo corre en su propio servidor reservado, la base siempre es del dueño, y "Con amigos" admite hasta 3 amigos de Roblox mediante "Unirse a un amigo" (`Worlds.luau`, `tests/worlds`).
+- **Logros de aprendizaje.** 13 logros de ciencia ligados a eventos reales, de 10 XP cada uno, con un panel, avisos e insignias opcionales de Roblox (`Achievements.luau`, `tests/achievements`).
+- **Un archivo de documentación por idioma:** este archivo y `DOCUMENTATION.md`.
+
+#### Lunes 16 de noviembre
+
+**Publicación de la etapa 10.** Los mundos privados, las correcciones de tormentas y radiación y los logros de aprendizaje se probaron en Studio y se publicaron en la experiencia en vivo. El tamaño de servidor del lugar se fijó en 4.
+
+**00:03 – Teclas de depuración solo en Studio.** Las teclas F del equipo y cada acción de depuración ahora solo funcionan en Roblox Studio, nunca en el juego en vivo, ni siquiera para el dueño del lugar.
+
+**01:30 – Etapa 11, primera ola: servidor, datos y sonido.** Una auditoría del juego en vivo, una auditoría de experiencia de los primeros minutos e investigación sobre cómo aprenden los niños llevaron a una renovación durante la noche, construida por agentes de IA en paralelo con una revisión de cada parte.
+- **Servidor más seguro (`ServerGuard.luau`, `MissionData.GUARD`).** Los avisos de tareas revisan en el servidor que el jugador esté junto a ellos. La perforación se limita a 15 núcleos por minuto, y un núcleo solo cuenta en la máquina de agua cuando de verdad pudo haber viajado hasta ahí. El vestíbulo no acepta acciones de juego. Un candado de sesión evita el truco de cambiar de servidor para gastar créditos en un mundo y conservarlos en otro, y Continuar nunca borra una ranura. La configuración se guarda con el jugador. El polvo ahora también cae en un panel solar entre misiones, y un traje sin aire lleva al niño al cuarto presurizado más cercano.
+- **Aventuras que enseñan (`Quests.luau`, `Quiz.luau`, `Glossary.luau`).** Una primera aventura, "¡Hola, Luna!", da un premio en más o menos un minuto. Los pasos muestran su número una sola vez y usan las mismas palabras que las plataformas y el HUD. Maestro del hielo enseña que un taladro más grande saca más por sí solo. C.A.R.L. felicita la estrategia que funcionó, hace una pregunta con imagen después de 11 aventuras, da pistas de tesoros tipo adivinanza y sugiere un descanso después de 45 minutos.
+- **Sonido y música (`AudioIds.luau`, `Audio.luau`).** El juego no tenía sonido. Ahora tiene 50: 6 pistas de música, 3 remates y 41 efectos, sintetizados con el código propio del equipo más cinco mezclas CC0, con una regla honesta del casco para el sonido en el vacío.
+- **La línea de hielo es un tycoon de verdad.** Reporte del equipo: la línea de producción "no se ve y ni siquiera da dinero". Los taladros ahora sacan 2, 3 o 4 de hielo por minuto, los cubos viajan por una banda abierta hasta un silo más alto, una nueva planta de agua derrite el hielo, la construcción del robot de carga agrega una máquina de aire y el robot lleva agua o aire a un puerto de suministros, a la vista. El servidor publica el estado de la línea y cada cliente la anima. El silo se guarda, y los taladros siguen trabajando mientras el dueño no está (como máximo 8 horas). Desde el robot de carga hasta la nave, las máquinas ganan el 49% de lo que gana jugar.
+
+**02:06 – Etapa 11, segunda ola: lo que ve el jugador.**
+- **El tycoon en pantalla.** Avisos "+N créditos", la tarjeta "Mientras no estabas", letreros sobre el silo y la planta de agua, la etiqueta de las máquinas bajo la cartera, y el haz de C.A.R.L. ya no atraviesa paredes.
+- **Menú de inicio, configuración guardada y ayudas.** Sin "Cargar juego" (petición del equipo: sonaba a subir un archivo). Continuar con una tarjeta, Mis mundos con Continuar o Empezar de nuevo, "Volver al inicio" si la carga tarda, pantallas de teletransporte con el tema del juego, una configuración que sobrevive a los viajes y a volver a entrar, y una página de Ayudas (texto grande, menos movimiento, tiempo de mensajes, ayuda de colores).
+- **Interfaz fácil de leer.** Tiempos de lectura para un niño de 7 años, frases juntadas y saltadas, un historial con las últimas 10 frases de C.A.R.L., barras de avance en el seguimiento, una tarjeta dorada grande para las aventuras principales, logros por páginas, la tarjeta de la pregunta de C.A.R.L. y el glosario con imágenes (`Reading.luau`, `tests/reading`).
+- **Celebraciones, sensación de cámara, teléfonos y un mapa más seguro.** Confeti, destellos y títulos de nivel; estrellas una por una en el reporte y fichas de causa y efecto; una pequeña sacudida a través del suelo por los meteoritos cercanos y un pulso naranja en los bordes durante las tormentas; un tamaño mínimo de texto y márgenes seguros en los teléfonos; paredes en el borde del mapa; y dos rampas más para salir del cráter de hielo (`Feel.luau`, `WorldSafety.luau`, `tests/feel`).
+- **Cápsula de suministros diaria y Bitácora lunar.** Una cápsula por día real con un calendario fijo de 7 días y sin azar, un conteo comprensivo, datos de la carga sin números, franjas del traje y la Bitácora con 27 registros y tres hitos (`Daily.luau`, `DailyService.luau`, `tests/daily`).
+
+**02:10 – Correcciones de prueba de la etapa 11, versión 0.11.0.** El tamaño mínimo de texto ahora solo aplica en pantallas táctiles, la etiqueta del día 7 cabe en una línea, y los destellos usan la partícula suave predeterminada de Roblox, porque el ícono de estrella no tiene versión de textura 3D.
+
+Probado en Studio (prueba rápida): el menú de inicio sin Cargar juego, la lista de mundos, la aparición en la nave, el seguimiento de aventuras, la tarjeta de la cápsula diaria, la línea de hielo y ningún error en la consola. Los once conjuntos de pruebas de Lune pasan y el proyecto se compila con Rojo.
+
 ### 5.3 Decisiones
 
 | Decisión | Quién decidió | Por qué |
@@ -1364,19 +1620,35 @@ Probado en Studio (dirigido por el asistente):
 | Mundo abierto con aventuras principales; tres ranuras de guardado; el hábitat como nivel de base | Equipo | Progresar mientras se juega, conservar el progreso, crecimiento coherente. |
 | Economía con ritmo definido por un jugador simulado | Equipo, por recomendación de la IA | Evita que los jugadores desbloqueen todo en minutos. |
 | Roblox Studio como motor | Equipo | Habilidades del equipo; Roblox se usó en ediciones anteriores de Space Apps. |
+| Mundos privados: cada mundo en su propio servidor, la base es del dueño | Equipo | Un jugador apareció en el mundo de un amigo; los niños deben conservar su propia base. |
+| Teclas de depuración solo en Studio | Equipo | El juego en vivo no debe dar atajos a los jugadores. |
+| Sin "Cargar juego" en el menú de inicio | Equipo | Sonaba a subir un archivo; Continuar y Mis mundos son más claros. |
+| Una línea de hielo que se ve funcionar y que paga con un viaje real del robot | Equipo, por recomendación de la IA | Al equipo el tycoon le parecía invisible y sin pago; las máquinas siguen siendo una ayuda (del 30 al 50% de lo que gana jugar). |
+| Sonido honesto: apagado fuera del casco, sin sacudida por tormentas | Equipo, por recomendación de la IA | En el vacío no hay sonido y la radiación no empuja nada. |
+| Cápsula diaria con calendario fijo, sin azar y con conteo comprensivo | Equipo, por recomendación de la IA | Un motivo para volver sin cajas de botín ni presión; jugar da más que esperar. |
+| Felicitar la estrategia, preguntas cortas, un aviso de descanso | Equipo, por recomendación de la IA | Investigación sobre el aprendizaje en niños pequeños; nada se pierde por una respuesta equivocada. |
 
 ### 5.4 Evidencia de pruebas
 
 | Qué | Cómo | Resultado |
 | :--- | :--- | :--- |
-| Balance de las misiones | `lune run tests/balance` | 671 comprobaciones aprobadas. |
-| Ritmo de la economía | `lune run tests/economy` | 221 comprobaciones aprobadas (línea de tiempo de un niño simulado). |
-| Misiones y reglas de construir y crecer | `lune run tests/missions`, `lune run tests/base` | 693 y 1686 comprobaciones aprobadas. |
-| Longitud de los textos y traducciones | `lune run tests/localization` | 36091 comprobaciones aprobadas: todas las claves en en y es, con 8 palabras como máximo. |
+| Balance de las misiones | `lune run tests/balance` | 716 comprobaciones aprobadas. |
+| Ritmo de la economía | `lune run tests/economy` | 234 comprobaciones aprobadas (línea de tiempo de un niño simulado, máquinas al 49% de lo que gana jugar). |
+| Misiones y reglas de construir y crecer | `lune run tests/missions`, `lune run tests/base` | 729 y 2201 comprobaciones aprobadas. |
+| Tomas cinematográficas | `lune run tests/cinematic` | 189 comprobaciones aprobadas. |
+| Mundos privados y el candado de sesión | `lune run tests/worlds` | 116 comprobaciones aprobadas. |
+| Logros, preguntas y glosario | `lune run tests/achievements` | 758 comprobaciones aprobadas. |
+| Cápsula diaria y Bitácora lunar | `lune run tests/daily` | 222 comprobaciones aprobadas. |
+| Celebraciones, salidas del cráter, borde del mapa | `lune run tests/feel` | 323 comprobaciones aprobadas. |
+| Tiempos de lectura | `lune run tests/reading` | 102 comprobaciones aprobadas. |
+| Longitud de los textos y traducciones | `lune run tests/localization` | 51496 comprobaciones aprobadas: todas las claves en en y es, con 8 palabras como máximo. |
+| El lugar se compila | `rojo build default.project.json -o <temp>.rbxl` | Se compila. |
 | Misión completa en Roblox | Prueba de juego en Studio dirigida por el asistente | 7 días, se llegó al reporte, sin errores de script. |
 | Datos de la NASA en vivo | Prueba de juego en Studio | 13 llamaradas obtenidas; se muestra la hora de la consulta. |
 | Aviso de tormenta con antena | Prueba de juego en Studio, pulsación real de tecla | Aviso de 45 s, llamarada etiquetada como repetición con su fecha. |
-| Prueba de juego con personas ajenas al equipo | Planeada para el domingo por la mañana | — |
+| Radiación en vivo | Prueba de juego en Studio (publicación de la etapa 10) | Subió de 0.5 a 23.1 estando afuera durante la tormenta de entrenamiento. |
+| Prueba rápida de la etapa 11 | Prueba de juego en Studio | Menú de inicio sin Cargar juego, lista de mundos, aparición en la nave, seguimiento de aventuras, tarjeta de la cápsula diaria, línea de hielo, sin errores en la consola. |
+| Prueba de juego con personas ajenas al equipo | Pendiente | — |
 
 ### 5.5 Cómo se usó la IA
 
@@ -1389,6 +1661,7 @@ Las reglas la llaman "Super Intelligence (SI)".
 - Generación de código con agentes en paralelo, con revisiones de integración.
 - Pruebas automatizadas y pruebas de juego en Studio.
 - Borradores de textos.
+- Los scripts de síntesis de audio que el equipo usó para hacer la música y la mayoría de los efectos, y la auditoría e investigación detrás de la etapa 11.
 
 **Lo que hizo el equipo:**
 - El concepto y cada decisión de diseño.
@@ -1402,6 +1675,8 @@ Cada archivo de código hecho con ayuda de la IA empieza con una línea de decla
 
 - Las experiencias nuevas de Roblox solo se abren a cuentas de 16 años o más con edad verificada hasta que pasan la evaluación de Roblox. Los niños del rango de edad objetivo todavía no pueden jugar la versión pública.
 - El diseño para teléfono todavía no se ha revisado en un dispositivo real.
+- La etapa 11 pasó una prueba rápida en Studio, no una prueba de juego completa con niños; los sonidos, la cápsula diaria a lo largo de varios días reales y un mundo con amigos con la etapa 11 todavía necesitan una revisión en vivo.
+- La Ayuda de colores se guarda, pero ninguna pantalla la usa todavía (las zonas de los medidores y los botones de encendido ya muestran formas).
 
 ## 6. Fuentes, créditos y licencias
 
@@ -1823,7 +2098,7 @@ Space Base Odyssey se publica bajo la **Apache License, Version 2.0** (enero de 
 | Responsabilidad | Los colaboradores no son responsables de los daños derivados del uso de la obra, salvo que la ley lo exija o que lo hayan acordado por escrito. |
 | Soporte adicional | Un redistribuidor puede ofrecer soporte, garantía o responsabilidad a cambio de una tarifa, pero solo en su propio nombre. |
 
-La licencia Apache 2.0 cubre el código y los textos propios del equipo. El material de terceros conserva sus propios términos: los Tabler Icons están bajo la MIT License y la imagen de la Tierra es de dominio público (ver 6.2). Roblox Studio, Rojo y Lune son herramientas que se usaron para construir y probar el juego. No se redistribuyen con él.
+La licencia Apache 2.0 cubre el código y los textos propios del equipo. El material de terceros conserva sus propios términos: los Tabler Icons están bajo la MIT License, la imagen de la Tierra es de dominio público, y las cuatro grabaciones de Freesound que se mezclan en cinco efectos de sonido son CC0 1.0 (dominio público) (ver 6.2). La pantalla de Créditos lo dice como texto: "Sonidos: del equipo y clips CC0 de Freesound". Roblox Studio, Rojo y Lune son herramientas que se usaron para construir y probar el juego. No se redistribuyen con él.
 
 ### 6.4 Uso de Superinteligencia
 
@@ -1840,7 +2115,8 @@ Usamos **Claude, de Anthropic**, dentro de **Claude Code**, como asistente de IA
 - **Revisión del diseño.** Una auditoría de los primeros documentos de diseño del equipo, de los borradores del plan y críticas independientes de esos planes.
 - **Generación de código.** Claude escribió la mayor parte del código Luau y de las pruebas automatizadas a partir del diseño del equipo, usando agentes en paralelo seguidos de revisiones de integración.
 - **Pruebas.** Pruebas automatizadas que se ejecutan en Lune, y sesiones de prueba de juego en Roblox Studio dirigidas por el asistente.
-- **Borradores de texto.** Claude redactó los textos del juego en inglés y en español, el README, la bitácora de desarrollo y los textos de la entrega.
+- **Borradores de texto.** Claude redactó los textos del juego en inglés y en español, el README, la bitácora de desarrollo, esta documentación, el paquete para docentes y los textos de la entrega.
+- **Scripts de audio.** Claude ayudó a escribir los scripts de Python del equipo que sintetizan la música y la mayoría de los efectos de sonido. No se usó ningún modelo generativo de audio.
 
 #### Qué hizo el equipo
 
@@ -1852,4 +2128,4 @@ Usamos **Claude, de Anthropic**, dentro de **Claude Code**, como asistente de IA
 #### Declaración dentro del proyecto
 
 - Cada archivo de código hecho con ayuda de IA empieza con una línea de declaración: "SI disclosure: generated with AI assistance (Claude, Anthropic) and reviewed by the team." ("Declaración de SI: generado con ayuda de IA (Claude, Anthropic) y revisado por el equipo."). El archivo de datos archivados de clima espacial (`src/shared/SpaceWeatherArchive.luau`) dice "compiled" ("recopilado") en lugar de "generated" ("generado"), porque contiene datos recopilados y no lógica escrita.
-- En el juego no se usan imágenes ni video generados por IA. La música y los efectos de sonido se sintetizan con código propio del equipo (scripts escritos con ayuda de IA; ningún modelo generativo de audio), y cinco efectos mezclan grabaciones CC0 editadas (6.2). El mundo del juego se construye con piezas simples mediante código. Las únicas imágenes son los Tabler Icons y el mapa de la Tierra de la NASA, de dominio público, indicados en 6.2.
+- En el juego no se usan imágenes ni video generados por IA. La música y los efectos de sonido se sintetizan con código propio del equipo (scripts escritos con ayuda de IA; ningún modelo generativo de audio), y cinco efectos mezclan grabaciones CC0 editadas (6.2). El mundo del juego se construye con piezas simples mediante código. Las únicas imágenes son los Tabler Icons y el mapa de la Tierra de la NASA, de dominio público, indicados en 6.2, más una cara del cielo casi negra hecha por el equipo.
