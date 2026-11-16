@@ -521,6 +521,8 @@ Tested in Studio (assistant-driven):
 - **Suit stripes.** Six cosmetic looks: two bands in Theme.PALETTE colours welded around each upper arm by `DailyService` (Parts only, no assets), seen by everyone, rebuilt on every spawn. The first stripes earned are worn at once; the Logbook Stripes page wears or removes them (Action `WearStripes`).
 - **Moon Logbook.** `Collection.luau` is now a book with tabs: Secrets (the old collection and the observatory), Places (sites, with the real fact once scanned), Space rocks (the first 5 fresh craters scanned, counted by `DailyService` from `ExploreService.onScan`), Achievements (fact or hint), Facts (cargo facts of opened capsules and fun facts C.A.R.L. shared; Action `HeardFact`, never counted) and Stripes. Entries: 4 secrets + 5 sites + 5 craters + 13 achievements = 27. Milestones at 5, 12 and 20 entries give the gold star, secret pink and Moon explorer stripes (Action `ClaimLogbook`; the server counts the entries itself). C.A.R.L. says once when one becomes ready. It opens from the Mission Select "Logbook" button and from the capsule card.
 
+**Stage 11 release (16 November 2026, morning).** Version 0.11.0-stage11 was tested in Studio overnight (start menu without Load game, worlds list, lander spawn, quest tracker, daily capsule, ice line, no script errors) and published by the team from Studio. Server size stays 4.
+
 ## Decisions
 
 | Decision | Who decided | Why |
